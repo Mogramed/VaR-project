@@ -1,0 +1,17 @@
+base_currency: "EUR"
+
+symbols:
+  - "EURUSD"
+  - "USDJPY"
+
+data:
+  timeframe: "M5"          # M1, M5, M15, H1, D1...
+  history_days: 365        # fenêtre par défaut
+  storage_format: "csv"    # parquet plus tard
+  timezone: "Europe/Paris"
+
+mt5:
+  # Si terminal déjà ouvert/loggé, souvent pas besoin de login/password ici.
+  login: null
+  password: null
+  server: null
