@@ -4,10 +4,15 @@ symbols:
   - "EURUSD"
   - "USDJPY"
 
+portfolio:                                # positif = long, négatif = short
+  positions_eur:
+    EURUSD: 10000
+    USDJPY: 10000
+
 data:
-  timeframe: "M5"          # M1, M5, M15, H1, D1...
-  history_days: 365        # fenêtre par défaut
-  storage_format: "csv"    # parquet plus tard
+  timeframes: ["M5", "H1"]                # M1, M5, M15, H1, D1...
+  history_days_list: [30, 100, 365]       # fenêtre par défaut
+  storage_format: "csv"                   # parquet plus tard
   timezone: "Europe/Paris"
 
 mt5:
@@ -15,3 +20,5 @@ mt5:
   login: null
   password: null
   server: null
+
+

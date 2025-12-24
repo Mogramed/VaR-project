@@ -34,15 +34,18 @@ def main() -> None:
 
     try:
         out_dir = ROOT / "data" / "raw"
+        # boucle sur les éléments de la config (plusieurs timeframes et history days)
         for sym in cfg.symbols:
-            out = download_history(
-                mt5=mt5,
-                symbol=sym,
-                timeframe=cfg.data.timeframe,
-                history_days=cfg.data.history_days,
-                out_dir=out_dir,
-            )
-            print(f"[OK] Saved: {out}")
+            for tf in cfg.data.timeframes:
+                for days in cfg.data.history_days_list:
+                    out = download_history(
+                        mt5=mt5,
+                        symbol=sym,
+                        timeframe=tf,
+                        history_days=days,
+                        out_dir=out_dir,
+                    )
+                    print(f"[OK] Saved: {out}")
     finally:
         mt5.shutdown()
 

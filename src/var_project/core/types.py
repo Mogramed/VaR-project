@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
+from typing import List
 import pandas as pd
 
 
@@ -13,8 +14,8 @@ class MT5Config:
 
 @dataclass(frozen=True)
 class DataConfig:
-    timeframe: str
-    history_days: int
+    timeframes: List[str]
+    history_days_list: List[int]
     storage_format: str = "csv"  # paquets plus tard
     timezone: str = "UTC"
 
