@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict
 
 import pandas as pd
@@ -214,7 +214,7 @@ class MT5Connector:
             start_pos += got
             remaining -= got
 
-            # Si MT5 renvoie moins que demandé, on est probablement au bout de l'historique dispo
+            # Si MT5 renvoie moins que demandé, on est probablement au bout de l'historique disponible
             if got < used:
                 break
 
@@ -273,3 +273,38 @@ class MT5Connector:
 
         cols = ["time", "open", "high", "low", "close", "tick_volume", "spread", "real_volume"]
         return df[cols].sort_values("time").reset_index(drop=True)
+
+
+
+    def fetch_tick(self, symbol: str) -> dict:
+        """
+        Retourne le tick courant (bid/ask) + time UTC.
+        """
+        self._require_ready()
+        self.ensure_symbol(symbol)
+
+        t = self._mt5.symbol_info_tick(symbol)
+        if t is None:
+            raise MT5ConnectionError(f"symbol_info_tick(None) pour {symbol}: {self._mt5.last_error()}")
+
+        # time_msc est plus précis si dispo, sinon time (secondes)
+        ts = getattr(t, "time_msc", None)
+        if ts is not None:
+            dt = datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc)
+        else:
+            dt = datetime.fromtimestamp(t.time, tz=timezone.utc)
+
+        return {
+            "time": dt,
+            "bid": float(t.bid),
+            "ask": float(t.ask),
+            "last": float(getattr(t, "last", 0.0) or 0.0),
+        }
+
+    def mid_price(self, symbol: str) -> float:
+        tick = self.fetch_tick(symbol)
+        bid, ask = tick["bid"], tick["ask"]
+        if bid > 0 and ask > 0:
+            return 0.5 * (bid + ask)
+        # fallback
+        return bid if bid > 0 else ask

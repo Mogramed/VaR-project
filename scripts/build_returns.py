@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 import yaml
 import pandas as pd
@@ -23,15 +24,23 @@ def load_config(path: Path) -> AppConfig:
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--timeframe", type=str, default=None)
+    ap.add_argument("--days", type=int, default=None)
+    args = ap.parse_args()
+
     ROOT = Path(__file__).resolve().parents[1]
     cfg = load_config(ROOT / "config" / "settings.yaml")
 
+    timeframes = [args.timeframe] if args.timeframe else list(cfg.data.timeframes)
+    days_list = [int(args.days)] if args.days is not None else list(cfg.data.history_days_list)
+
     raw_dir = ROOT / "data" / "raw"
     out_dir = ROOT / "data" / "processed"
-    # boucle sur les éléments de la config (plusieurs timeframes et history days)
+
     for sym in cfg.symbols:
-        for tf in cfg.data.timeframes:
-            for days in cfg.data.history_days_list:
+        for tf in timeframes:
+            for days in days_list:
                 raw_path = raw_dir / f"{sym}_{tf}_{days}d.csv"
                 if not raw_path.exists():
                     print(f"[SKIP] Missing raw file: {raw_path}")

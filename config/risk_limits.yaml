@@ -1,0 +1,23 @@
+base_currency: EUR
+
+# Zones live basées sur ratio = (loss_positive / VaR)
+# - GREEN : marge confortable
+# - ORANGE : proche du VaR
+# - RED : dépassement du VaR
+live_zones:
+  green_max_ratio: 0.80
+  orange_max_ratio: 1.00
+
+# Limites “hard” (en EUR) par modèle
+model_limits_eur:
+  hist:  { var: 200.0, es: 260.0 }
+  param: { var: 220.0, es: 280.0 }
+  mc:    { var: 220.0, es: 280.0 }
+  ewma:  { var: 220.0, es: 280.0 }
+  fhs:   { var: 220.0, es: 280.0 }
+
+# Backtesting “traffic light” (standard 99% sur 250 jours)
+# 0-4 : GREEN, 5-9 : YELLOW, >=10 : RED
+backtest_traffic_light_99_250:
+  green_max: 4
+  yellow_max: 9

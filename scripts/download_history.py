@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 import yaml
 
@@ -13,7 +14,6 @@ def load_config(path: Path) -> AppConfig:
         raise FileNotFoundError(f"Config introuvable: {path}")
 
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-
     data = DataConfig(**raw["data"])
     mt5 = MT5Config(**(raw.get("mt5") or {}))
     return AppConfig(
@@ -25,24 +25,32 @@ def load_config(path: Path) -> AppConfig:
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--timeframe", type=str, default=None)
+    ap.add_argument("--days", type=int, default=None)
+    args = ap.parse_args()
+
     ROOT = Path(__file__).resolve().parents[1]
     cfg_path = ROOT / "config" / "settings.yaml"
     cfg = load_config(cfg_path)
+
+    # single timeframe / days if provided, else config
+    timeframes = [args.timeframe] if args.timeframe else list(cfg.data.timeframes)
+    days_list = [int(args.days)] if args.days is not None else list(cfg.data.history_days_list)
 
     mt5 = MT5Connector(cfg.mt5)
     mt5.init()
 
     try:
         out_dir = ROOT / "data" / "raw"
-        # boucle sur les éléments de la config (plusieurs timeframes et history days)
         for sym in cfg.symbols:
-            for tf in cfg.data.timeframes:
-                for days in cfg.data.history_days_list:
+            for tf in timeframes:
+                for days in days_list:
                     out = download_history(
                         mt5=mt5,
                         symbol=sym,
                         timeframe=tf,
-                        history_days=days,
+                        history_days=int(days),
                         out_dir=out_dir,
                     )
                     print(f"[OK] Saved: {out}")

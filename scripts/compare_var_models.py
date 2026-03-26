@@ -6,13 +6,16 @@ import yaml
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
+import json
+import re
+
 
 from var_project.market_data.store import load_csv
 from var_project.market_data.transforms import intraday_to_daily_log_returns
 from var_project.risk.var_models import historical_var, expected_shortfall, parametric_var
 from var_project.engine.monte_carlo import mc_var_es
-from var_project.risk.ewma import ewma_var_es
-from var_project.risk.fhs import fhs_var_es
+from src.var_project.risk.ewma import ewma_var_es
+from src.var_project.risk.fhs import fhs_var_es
 
 
 
@@ -25,6 +28,11 @@ def get_positions(cfg: dict, symbols: list[str]) -> dict[str, float]:
     if not positions:
         return {s: 10_000.0 for s in symbols}
     return {s: float(positions.get(s, 0.0)) for s in symbols}
+
+def slugify(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "_", s)
+    return s.strip("_") or "portfolio"
 
 
 def parametric_es(pnl: pd.Series, alpha: float) -> float:
@@ -112,6 +120,15 @@ def main():
     cfg = load_yaml(ROOT / "config" / "settings.yaml")
     symbols = cfg["symbols"]
     positions = get_positions(cfg, symbols)
+    base_currency = cfg.get("base_currency", "EUR")
+    portfolio_cfg = cfg.get("portfolio", {}) or {}
+    portfolio_name = portfolio_cfg.get("name") or f"{base_currency}_{'_'.join(symbols)}"
+    portfolio_slug = slugify(portfolio_name)
+
+    symbols_str = ",".join(symbols)
+    positions_json = json.dumps(positions, sort_keys=True)
+    gross_notional = float(sum(abs(v) for v in positions.values()))
+
     weights = np.array([positions[s] for s in symbols], dtype=float)
 
     # 1) Daily returns (par symbole) alignés
@@ -177,8 +194,23 @@ def main():
             alpha=args.alpha,
             lam=0.94,
         )
+        ret_today_map = {sym: float(daily_rets.loc[i, sym]) for sym in symbols}
+        pnl_today_map = {sym: float(positions.get(sym, 0.0)) * ret_today_map[sym] for sym in symbols}
 
         out_rows.append({
+            "portfolio": portfolio_name,
+            "base_currency": base_currency,
+
+            "symbols": symbols_str,
+            "positions_eur_json": positions_json,
+            "gross_notional": gross_notional,
+
+            "timeframe": args.timeframe,
+            "days": int(args.days),
+
+            "alpha": float(args.alpha),
+            "window": int(args.window),
+
             "date": daily_rets.loc[i, "date"],
             "pnl": pnl_today,
 
@@ -202,7 +234,11 @@ def main():
             "es_fhs": es_fhs,
             "exc_fhs": int((-pnl_today) > var_fhs),
 
+            **{f"ret_{sym}": ret_today_map[sym] for sym in symbols},
+            **{f"pnl_{sym}": pnl_today_map[sym] for sym in symbols},
+
         })
+
 
     df = pd.DataFrame(out_rows).sort_values("date").reset_index(drop=True)
 
@@ -218,7 +254,8 @@ def main():
     print(f"[MC] n_sims={args.n_sims} dist={args.dist} df_t={args.df_t} seed={args.seed}")
 
     out_path = ROOT / "reports" / "backtests" / (
-        f"compare_{args.timeframe}_{args.days}d_alpha{int(args.alpha * 100)}_mc{args.dist}_ewma_fhs.csv"
+        f"compare_{args.timeframe}_{args.days}d_alpha{int(args.alpha * 100)}"
+        f"_pf{portfolio_slug}_mc{args.dist}_ewma_fhs.csv"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_path, index=False)

@@ -6,10 +6,12 @@ build-backend = "setuptools.build_meta"
 name = "var-project"
 version = "0.1.0"
 dependencies = [
+  "numpy",
   "pandas",
   "PyYAML",
   "MetaTrader5",
-  "scipy"
+  "scipy",
+  "pytest"
 ]
 
 [tool.setuptools]

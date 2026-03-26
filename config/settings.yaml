@@ -5,15 +5,36 @@ symbols:
   - "USDJPY"
 
 portfolio:                                # positif = long, négatif = short
-  positions_eur:
+  name: "FX_EUR_20k"                 # <--- important pour les CSV/rapports
+  pnl_mode: "notional_return_approx" # approx pédagogique: pnl = notional_eur * return(price)
+  positions_eur:                     # positif = long, négatif = short
     EURUSD: 10000
     USDJPY: 10000
 
 data:
   timeframes: ["M5", "H1"]                # M1, M5, M15, H1, D1...
-  history_days_list: [365]                # fenêtre par défaut
+  history_days_list: [1095]               # fenêtre par défaut
   storage_format: "csv"                   # parquet plus tard
   timezone: "Europe/Paris"
+  min_coverage: 0.90                      # default pour intraday -> daily
+  daily_anchor: "D"                       # optionnel: jour calendaire
+
+risk:
+  alpha: 0.95
+  window: 250
+  ewma:
+    lambda: 0.94
+  fhs:
+    lambda: 0.94
+  mc:
+    n_sims: 20000
+    dist: "normal"                   # "normal" ou "t"
+    df_t: 6
+    seed: 42
+
+live:
+  interval_seconds: 30
+  n_update_bars: 1500
 
 mt5:
   # Si terminal déjà ouvert/loggé, souvent pas besoin de login/password ici.
