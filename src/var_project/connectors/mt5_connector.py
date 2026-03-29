@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional, Dict
+from typing import Any
 
 import pandas as pd
 
@@ -42,7 +41,15 @@ class MT5Connector:
 
         self._mt5 = mt5
 
-        ok = mt5.initialize()
+        initialize_kwargs: dict[str, Any] = {}
+        if self.config.path:
+            initialize_kwargs["path"] = str(self.config.path)
+        if self.config.timeout_ms is not None:
+            initialize_kwargs["timeout"] = int(self.config.timeout_ms)
+        if self.config.portable:
+            initialize_kwargs["portable"] = True
+
+        ok = mt5.initialize(**initialize_kwargs) if initialize_kwargs else mt5.initialize()
         if not ok:
             raise MT5ConnectionError(f"mt5.initialize() a échoué: {mt5.last_error()}")
 
@@ -66,6 +73,129 @@ class MT5Connector:
     def _require_ready(self) -> None:
         if not self._initialized or not self._mt5:
             raise MT5ConnectionError("MT5 non initialisé : appelle init() avant")
+
+    def _coerce_namedtuple(self, value: Any) -> Any:
+        if value is None:
+            return None
+        if hasattr(value, "_asdict"):
+            return {str(key): self._coerce_namedtuple(item) for key, item in value._asdict().items()}
+        if isinstance(value, dict):
+            return {str(key): self._coerce_namedtuple(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._coerce_namedtuple(item) for item in value]
+        return value
+
+    def terminal_info(self) -> dict[str, Any]:
+        self._require_ready()
+        info = self._mt5.terminal_info()
+        if info is None:
+            raise MT5ConnectionError(f"terminal_info() a echoue: {self._mt5.last_error()}")
+        return dict(self._coerce_namedtuple(info) or {})
+
+    def account_info(self) -> dict[str, Any]:
+        self._require_ready()
+        info = self._mt5.account_info()
+        if info is None:
+            raise MT5ConnectionError(f"account_info() a echoue: {self._mt5.last_error()}")
+        return dict(self._coerce_namedtuple(info) or {})
+
+    def symbol_info(self, symbol: str) -> dict[str, Any]:
+        self._require_ready()
+        self.ensure_symbol(symbol)
+        info = self._mt5.symbol_info(symbol)
+        if info is None:
+            raise MT5ConnectionError(f"symbol_info() a echoue pour {symbol}: {self._mt5.last_error()}")
+        return dict(self._coerce_namedtuple(info) or {})
+
+    def symbol_info_tick(self, symbol: str) -> dict[str, Any]:
+        self._require_ready()
+        self.ensure_symbol(symbol)
+        tick = self._mt5.symbol_info_tick(symbol)
+        if tick is None:
+            raise MT5ConnectionError(f"symbol_info_tick() a echoue pour {symbol}: {self._mt5.last_error()}")
+        payload = dict(self._coerce_namedtuple(tick) or {})
+        time_msc = payload.get("time_msc")
+        epoch = None
+        if time_msc is not None:
+            epoch = float(time_msc) / 1000.0
+        elif payload.get("time") is not None:
+            epoch = float(payload["time"])
+        payload["time_utc"] = None if epoch is None else datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+        return payload
+
+    def positions_get(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        self._require_ready()
+        if symbol:
+            self.ensure_symbol(symbol)
+            rows = self._mt5.positions_get(symbol=symbol)
+        else:
+            rows = self._mt5.positions_get()
+        if rows is None:
+            raise MT5ConnectionError(f"positions_get() a echoue: {self._mt5.last_error()}")
+        return [dict(self._coerce_namedtuple(row) or {}) for row in rows]
+
+    def orders_get(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        self._require_ready()
+        if symbol:
+            self.ensure_symbol(symbol)
+            rows = self._mt5.orders_get(symbol=symbol)
+        else:
+            rows = self._mt5.orders_get()
+        if rows is None:
+            raise MT5ConnectionError(f"orders_get() a echoue: {self._mt5.last_error()}")
+        return [dict(self._coerce_namedtuple(row) or {}) for row in rows]
+
+    def history_orders_get(
+        self,
+        date_from: datetime,
+        date_to: datetime,
+        *,
+        symbol: str | None = None,
+    ) -> list[dict[str, Any]]:
+        self._require_ready()
+        start = self._history_datetime(date_from)
+        end = self._history_datetime(date_to)
+        rows = self._mt5.history_orders_get(start, end)
+        if rows is None:
+            raise MT5ConnectionError(f"history_orders_get() a echoue: {self._mt5.last_error()}")
+        payload = [dict(self._coerce_namedtuple(row) or {}) for row in rows]
+        if symbol is None:
+            return payload
+        normalized = str(symbol).upper()
+        return [item for item in payload if str(item.get("symbol") or "").upper() == normalized]
+
+    def history_deals_get(
+        self,
+        date_from: datetime,
+        date_to: datetime,
+        *,
+        symbol: str | None = None,
+    ) -> list[dict[str, Any]]:
+        self._require_ready()
+        start = self._history_datetime(date_from)
+        end = self._history_datetime(date_to)
+        rows = self._mt5.history_deals_get(start, end)
+        if rows is None:
+            raise MT5ConnectionError(f"history_deals_get() a echoue: {self._mt5.last_error()}")
+        payload = [dict(self._coerce_namedtuple(row) or {}) for row in rows]
+        if symbol is None:
+            return payload
+        normalized = str(symbol).upper()
+        return [item for item in payload if str(item.get("symbol") or "").upper() == normalized]
+
+    def order_check(self, request: dict[str, Any]) -> dict[str, Any]:
+        self._require_ready()
+        result = self._mt5.order_check(dict(request))
+        if result is None:
+            raise MT5ConnectionError(f"order_check() a echoue: {self._mt5.last_error()}")
+        return dict(self._coerce_namedtuple(result) or {})
+
+    def order_send(self, request: dict[str, Any]) -> dict[str, Any]:
+        self._require_ready()
+        result = self._mt5.order_send(dict(request))
+        if result is None:
+            raise MT5ConnectionError(f"order_send() a echoue: {self._mt5.last_error()}")
+        return dict(self._coerce_namedtuple(result) or {})
 
     # -----------------------------
     # Symbol utilities
@@ -274,7 +404,10 @@ class MT5Connector:
         cols = ["time", "open", "high", "low", "close", "tick_volume", "spread", "real_volume"]
         return df[cols].sort_values("time").reset_index(drop=True)
 
-
+    def _history_datetime(self, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
     def fetch_tick(self, symbol: str) -> dict:
         """

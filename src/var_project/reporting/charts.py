@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+
+import matplotlib
 import pandas as pd
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from src.var_project.reporting.metrics import _infer_models, _count_exceptions
+
+from var_project.reporting.metrics import _infer_models, _count_exceptions
 
 
 def plot_compare(df: pd.DataFrame, out_png: Path) -> None:
@@ -22,7 +27,7 @@ def plot_compare(df: pd.DataFrame, out_png: Path) -> None:
     if "pnl" in d.columns:
         plt.plot(d["date"], d["pnl"], label="PnL")
 
-    for c in ["var_hist", "var_param", "var_mc", "var_ewma", "var_fhs"]:
+    for c in ["var_hist", "var_param", "var_mc", "var_ewma", "var_garch", "var_fhs"]:
         if c in d.columns:
             plt.plot(d["date"], -d[c], label=f"-{c}")  # show as pnl threshold
 

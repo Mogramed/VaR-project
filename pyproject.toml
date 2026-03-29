@@ -5,17 +5,32 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "var-project"
 version = "0.1.0"
+requires-python = ">=3.11"
 dependencies = [
+  "alembic",
   "numpy",
   "pandas",
   "PyYAML",
-  "MetaTrader5",
+  "MetaTrader5; platform_system == 'Windows'",
   "scipy",
-  "pytest"
+  "arch",
+  "matplotlib",
+  "fastapi",
+  "httpx",
+  "pydantic",
+  "psycopg[binary]",
+  "SQLAlchemy",
+  "uvicorn"
 ]
+
+[project.scripts]
+var-project = "var_project.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

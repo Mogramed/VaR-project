@@ -4,42 +4,73 @@ symbols:
   - "EURUSD"
   - "USDJPY"
 
-portfolio:                                # positif = long, négatif = short
-  name: "FX_EUR_20k"                 # <--- important pour les CSV/rapports
-  pnl_mode: "notional_return_approx" # approx pédagogique: pnl = notional_eur * return(price)
-  positions_eur:                     # positif = long, négatif = short
+portfolio:
+  name: "FX_EUR_20k"
+  mode: "hybrid"
+  pnl_mode: "notional_return_approx"
+  positions_eur:
     EURUSD: 10000
     USDJPY: 10000
 
 data:
-  timeframes: ["M5", "H1"]                # M1, M5, M15, H1, D1...
-  history_days_list: [1095]               # fenêtre par défaut
-  storage_format: "csv"                   # parquet plus tard
+  timeframes: ["H1"]
+  history_days_list: [60]
+  storage_format: "csv"
   timezone: "Europe/Paris"
-  min_coverage: 0.90                      # default pour intraday -> daily
-  daily_anchor: "D"                       # optionnel: jour calendaire
+  min_coverage: 0.90
+  daily_anchor: "D"
 
 risk:
   alpha: 0.95
-  window: 250
+  window: 20
   ewma:
     lambda: 0.94
   fhs:
     lambda: 0.94
   mc:
-    n_sims: 20000
-    dist: "normal"                   # "normal" ou "t"
+    n_sims: 5000
+    dist: "normal"
     df_t: 6
     seed: 42
+  garch:
+    enabled: true
+    p: 1
+    q: 1
+    dist: "t"
+    mean: "constant"
 
 live:
   interval_seconds: 30
   n_update_bars: 1500
 
 mt5:
-  # Si terminal déjà ouvert/loggé, souvent pas besoin de login/password ici.
   login: null
   password: null
   server: null
+  path: null
+  timeout_ms: 10000
+  portable: false
+  agent_base_url: null
+  agent_api_key: null
+  execution_enabled: true
+  magic: 420001
+  deviation_points: 20
+  comment_prefix: "var_risk_desk"
 
+storage:
+  database_path: "data/app/var_risk_desk.db"
+  analytics_dir: "reports/backtests"
+  reports_dir: "reports/daily"
+  snapshots_dir: "data/snapshots"
 
+jobs:
+  loop_sleep_seconds: 30
+  snapshot:
+    enabled: true
+    interval_seconds: 900
+  backtest:
+    enabled: true
+    interval_seconds: 3600
+  report:
+    enabled: true
+    interval_seconds: 3600

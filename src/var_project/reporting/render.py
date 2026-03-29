@@ -9,11 +9,12 @@ from typing import Optional, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import yaml
 
-from src.var_project.reporting.charts import _plot_exceptions, _plot_pnl_vs_var
-from src.var_project.reporting.metrics import _infer_models, _parse_alpha_from_name, _count_exceptions
+from var_project.alerts.engine import alerts_from_live_snapshot, alerts_from_validation_summary
+from var_project.reporting.charts import _plot_exceptions, _plot_pnl_vs_var
+from var_project.reporting.metrics import _infer_models, _parse_alpha_from_name, _count_exceptions
+from var_project.validation.model_validation import validate_compare_frame
 
 
 def _latest_file(dir_path: Path, pattern: str) -> Optional[Path]:
@@ -70,6 +71,7 @@ def render_daily_markdown(
     end = str(df["date"].iloc[-1]) if "date" in df.columns and n > 0 else "—"
 
     exceptions = {m: _count_exceptions(df, m) for m in models}
+    validation = validate_compare_frame(df, alpha if alpha is not None else 0.95)
 
     # limits
     limits = _load_limits(risk_limits_yaml) if risk_limits_yaml else {}
@@ -100,6 +102,9 @@ def render_daily_markdown(
     else:
         pnl_chart = None
 
+    validation_alerts = alerts_from_validation_summary(validation)
+    live_alerts = alerts_from_live_snapshot(snap, limits) if snap is not None else []
+
     # markdown
     md_path = out_dir / f"{compare_csv.stem}.md"
     lines: List[str] = []
@@ -127,11 +132,11 @@ def render_daily_markdown(
         lines.append(f"- live_pnl: **{_fmt_money(live_pnl)} EUR**")
         lines.append(f"- live_loss: **{_fmt_money(live_loss)} EUR**")
         lines.append("")
-        # positions
-        pos = snap.get("positions_eur", {}) or {}
+        # holdings / exposure
+        pos = snap.get("exposure_by_symbol", {}) or snap.get("positions_eur", {}) or {}
         if pos:
-            lines.append("### Positions (EUR notionals)")
-            lines.append("| Symbol | Notional (EUR) |")
+            lines.append("### Portfolio Exposure (Base Currency)")
+            lines.append("| Symbol | Exposure |")
             lines.append("|---|---:|")
             for k, v in pos.items():
                 lines.append(f"| {k} | {_fmt_money(v)} |")
@@ -174,6 +179,29 @@ def render_daily_markdown(
             else:
                 tl = "RED"
         lines.append(f"| {m} | {exc} | {tl} |")
+    lines.append("")
+
+    lines.append("## Model Validation")
+    lines.append("| Model | Score | Rate | Kupiec p | Ind p | CC p | Traffic light |")
+    lines.append("|---|---:|---:|---:|---:|---:|---|")
+    for model_name, result in validation.model_results.items():
+        tl = result.traffic_light or "—"
+        lines.append(
+            f"| {model_name} | {result.score:.2f} | {result.actual_rate:.4f} "
+            f"| {result.p_uc:.4f} | {result.p_ind:.4f} | {result.p_cc:.4f} | {tl} |"
+        )
+    if validation.best_model:
+        lines.append("")
+        lines.append(f"- Best model by score: **{validation.best_model}**")
+    lines.append("")
+
+    combined_alerts = validation_alerts + live_alerts
+    lines.append("## Alerts")
+    if not combined_alerts:
+        lines.append("_No active alerts from validation or latest live snapshot._")
+    else:
+        for alert in combined_alerts:
+            lines.append(f"- [{alert.severity}] {alert.code}: {alert.message}")
     lines.append("")
 
     if exc_chart:

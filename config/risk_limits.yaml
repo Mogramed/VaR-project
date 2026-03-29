@@ -14,6 +14,7 @@ model_limits_eur:
   param: { var: 220.0, es: 280.0 }
   mc:    { var: 220.0, es: 280.0 }
   ewma:  { var: 220.0, es: 280.0 }
+  garch: { var: 220.0, es: 280.0 }
   fhs:   { var: 220.0, es: 280.0 }
 
 # Backtesting “traffic light” (standard 99% sur 250 jours)
@@ -21,3 +22,26 @@ model_limits_eur:
 backtest_traffic_light_99_250:
   green_max: 4
   yellow_max: 9
+
+risk_budget:
+  utilisation_warn: 0.85
+  utilisation_breach: 1.00
+  target_buffer: 0.95
+  position_tolerance: 0.05
+  preferred_model: "best_validation"
+  symbol_weights:
+    EURUSD: 0.50
+    USDJPY: 0.50
+
+capital_management:
+  reserve_ratio: 0.10
+  rebalance_min_gap: 10.0
+  preferred_model: "best_validation"
+
+risk_decision:
+  decision_mode: "advisory"
+  reference_model: "best_validation"
+  warn_threshold: 0.85
+  breach_threshold: 1.00
+  min_fill_ratio: 0.25
+  allow_risk_reducing_override: true

@@ -1,0 +1,104 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${VAR_PROJECT_POSTGRES_DB:-var_risk_desk}
+      POSTGRES_USER: ${VAR_PROJECT_POSTGRES_USER:-var_user}
+      POSTGRES_PASSWORD: ${VAR_PROJECT_POSTGRES_PASSWORD:-var_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${VAR_PROJECT_POSTGRES_USER:-var_user} -d ${VAR_PROJECT_POSTGRES_DB:-var_risk_desk}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      VAR_PROJECT_ROOT: /app
+      VAR_PROJECT_DATABASE_URL: postgresql+psycopg://${VAR_PROJECT_POSTGRES_USER:-var_user}:${VAR_PROJECT_POSTGRES_PASSWORD:-var_password}@postgres:5432/${VAR_PROJECT_POSTGRES_DB:-var_risk_desk}
+      VAR_PROJECT_MT5_AGENT_BASE_URL: ${VAR_PROJECT_MT5_AGENT_BASE_URL:-http://host.docker.internal:8010}
+      VAR_PROJECT_MT5_AGENT_API_KEY: ${VAR_PROJECT_MT5_AGENT_API_KEY:-}
+    command: ["var-project", "api", "--host", "0.0.0.0", "--port", "8000"]
+    volumes:
+      - reports_data:/app/reports
+      - snapshots_data:/app/data/snapshots
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+
+  db-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    working_dir: /app
+    environment:
+      VAR_PROJECT_ROOT: /app
+      VAR_PROJECT_DATABASE_URL: postgresql+psycopg://${VAR_PROJECT_POSTGRES_USER:-var_user}:${VAR_PROJECT_POSTGRES_PASSWORD:-var_password}@postgres:5432/${VAR_PROJECT_POSTGRES_DB:-var_risk_desk}
+    command: ["var-project", "db", "upgrade"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      VAR_PROJECT_API_BASE_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "3000:3000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      VAR_PROJECT_ROOT: /app
+      VAR_PROJECT_DATABASE_URL: postgresql+psycopg://${VAR_PROJECT_POSTGRES_USER:-var_user}:${VAR_PROJECT_POSTGRES_PASSWORD:-var_password}@postgres:5432/${VAR_PROJECT_POSTGRES_DB:-var_risk_desk}
+    command: ["var-project", "worker"]
+    volumes:
+      - reports_data:/app/reports
+      - snapshots_data:/app/data/snapshots
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+
+  nginx:
+    build:
+      context: ./infra/nginx
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+      - frontend
+    ports:
+      - "8080:80"
+
+volumes:
+  postgres_data:
+  reports_data:
+  snapshots_data:

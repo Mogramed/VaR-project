@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pip install .
+      - name: Run backend tests
+        run: python -m pytest -q
+
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend tooling
+        working-directory: frontend
+        run: npm ci
+      - name: Install backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+      - name: Verify generated API types are up to date
+        run: |
+          python scripts/generate_frontend_api_types.py
+          git diff --exit-code -- frontend/src/lib/api/generated-schema.ts frontend/src/lib/api/types.ts
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: var_risk_desk
+          POSTGRES_USER: var_user
+          POSTGRES_PASSWORD: var_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U var_user -d var_risk_desk"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      VAR_PROJECT_DATABASE_URL: postgresql+psycopg://var_user:var_password@127.0.0.1:5432/var_risk_desk
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+      - name: Run migrations
+        run: var-project db upgrade
+
+  docker-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build stack images
+        run: docker compose build api worker frontend nginx

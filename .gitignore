@@ -10,6 +10,14 @@ __pycache__/
 # big data
 data/cache/
 data/snapshots/
+data/raw/
+data/app/*.db
+data/app/*.sqlite
+data/app/*.sqlite3
+reports/backtests/
+reports/daily/
+reports/logs/
+output/
 
 
 # Distribution / packaging
@@ -56,6 +64,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+playwright-report/
 
 # Translations
 *.mo
@@ -206,6 +215,13 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Next.js frontend
+frontend/node_modules/
+frontend/.next/
+frontend/install.log
+frontend/tsconfig.tsbuildinfo
+frontend/out/
 
 # Marimo
 marimo/_static/

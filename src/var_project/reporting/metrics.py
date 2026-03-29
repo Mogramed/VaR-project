@@ -5,6 +5,8 @@ import pandas as pd
 from typing import Optional, Dict, List
 import re
 
+from var_project.core.model_registry import infer_model_names_from_columns
+
 @dataclass(frozen=True)
 class CompareSummary:
     n: int
@@ -25,14 +27,7 @@ def _parse_alpha_from_name(stem: str) -> Optional[float]:
 
 
 def _infer_models(df: pd.DataFrame) -> List[str]:
-    models = []
-    for c in df.columns:
-        if c.startswith("var_"):
-            models.append(c.replace("var_", ""))
-    # stable ordering
-    preferred = ["hist", "param", "mc", "ewma", "fhs"]
-    models = sorted(set(models), key=lambda x: (preferred.index(x) if x in preferred else 999, x))
-    return models
+    return infer_model_names_from_columns(df.columns)
 
 
 def _count_exceptions(df: pd.DataFrame, model: str) -> int:

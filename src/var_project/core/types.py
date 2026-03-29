@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional, List
-import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -11,6 +10,15 @@ class MT5Config:
     login: Optional[int] = None
     password: Optional[str] = None
     server: Optional[str] = None
+    path: Optional[str] = None
+    timeout_ms: Optional[int] = None
+    portable: bool = False
+    agent_base_url: Optional[str] = None
+    agent_api_key: Optional[str] = None
+    execution_enabled: bool = True
+    magic: int = 420001
+    deviation_points: int = 20
+    comment_prefix: str = "var_risk_desk"
 
 
 @dataclass(frozen=True)
@@ -31,7 +39,7 @@ class DataConfig:
     def timeframe(self) -> str:
         if not self.timeframes:
             raise ValueError("config.data.timeframes is empty")
-        return str(self.timeframes[1])
+        return str(self.timeframes[0])
 
     @property
     def history_days(self) -> int:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable, Tuple
+from typing import Dict
 
 import numpy as np
 import pandas as pd
@@ -30,13 +30,13 @@ def align_returns(returns_by_symbol: Dict[str, pd.DataFrame], time_col: str = "t
     return wide
 
 
-def portfolio_pnl_from_returns(returns_wide: pd.DataFrame, positions_eur: Dict[str, float]) -> pd.Series:
+def portfolio_pnl_from_returns(returns_wide: pd.DataFrame, exposure_by_symbol: Dict[str, float]) -> pd.Series:
     """
-    Simple PnL approximation: pnl_t = sum_i notional_i * return_i,t
-    (works when notional is in EUR exposure notionnel)
+    Simple PnL approximation: pnl_t = sum_i exposure_i * return_i,t
+    (works when exposure is expressed in the portfolio base currency)
     """
-    cols = [c for c in returns_wide.columns if c in positions_eur]
-    w = np.array([positions_eur[c] for c in cols], dtype=float)
+    cols = [c for c in returns_wide.columns if c in exposure_by_symbol]
+    w = np.array([exposure_by_symbol[c] for c in cols], dtype=float)
     mat = returns_wide[cols].to_numpy(dtype=float)
     pnl = mat @ w
     return pd.Series(pnl, index=returns_wide.index, name="pnl")

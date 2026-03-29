@@ -1,0 +1,100 @@
+import { PageHeader } from "@/components/app-shell/page-header";
+import { ChartSurface } from "@/components/charts/chart-surface";
+import { InstrumentUniverseTable } from "@/components/data/risk-tables";
+import { MetricBlock } from "@/components/ui/metric-block";
+import { StatusBadge } from "@/components/ui/primitives";
+import { api } from "@/lib/api/client";
+import { makeBarOption } from "@/lib/chart-options";
+import { buildInstrumentClassCounts } from "@/lib/view-models";
+
+export default async function DeskUniversePage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const query = await searchParams;
+  const portfolioSlug =
+    typeof query.portfolio === "string" ? query.portfolio : undefined;
+  const resolvedPortfolio = portfolioSlug ?? (await api.health()).portfolio_slug;
+
+  const [instruments, marketStatus] = await Promise.all([
+    api.instruments(resolvedPortfolio).catch(() => []),
+    api.marketDataStatus(resolvedPortfolio).catch(() => null),
+  ]);
+
+  const classCounts = buildInstrumentClassCounts(instruments);
+  const missingSymbols = marketStatus?.missing_symbols ?? [];
+  const missingBars = marketStatus?.missing_bars ?? [];
+  const trackedSymbols = marketStatus?.symbols ?? [];
+  const syncedSymbols = instruments.length - missingSymbols.length;
+
+  return (
+    <div className="desk-page space-y-8">
+      <PageHeader
+        eyebrow="Universe"
+        title="Instrument definitions and tradability constraints from MT5."
+        description="The desk now exposes contract size, trading mode and lot granularity as first-class product data, instead of burying them inside the execution bridge."
+        aside={
+          <StatusBadge
+            label={marketStatus?.status ?? "unknown"}
+            tone={marketStatus?.status === "ok" ? "success" : "warning"}
+          />
+        }
+      />
+
+      <section className="grid gap-4 xl:grid-cols-4">
+        <MetricBlock
+          label="Tracked symbols"
+          value={String(trackedSymbols.length || instruments.length)}
+          hint={`${instruments.length} cached definitions`}
+          tone="accent"
+        />
+        <MetricBlock
+          label="Synced"
+          value={String(syncedSymbols)}
+          hint={`${missingSymbols.length} missing`}
+          tone={syncedSymbols > 0 ? "success" : "warning"}
+        />
+        <MetricBlock
+          label="Asset classes"
+          value={String(classCounts.length)}
+          hint="Derived from MT5 metadata"
+        />
+        <MetricBlock
+          label="Missing bars"
+          value={String(missingBars.length)}
+          hint="Current default timeframe"
+          tone={missingBars.length > 0 ? "warning" : "success"}
+        />
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+        <ChartSurface
+          option={makeBarOption(classCounts, {
+            color: "#d89b49",
+            negativeColor: "#5fd4a6",
+            mode: classCounts.length <= 3 ? "sparse" : "comparison",
+          })}
+          mode={classCounts.length <= 3 ? "sparse" : "comparison"}
+          dataCount={classCounts.length}
+          eyebrow="Coverage"
+          title="Instrument mix by asset class"
+          description="Universe onboarding is now visible as a desk concern, not just a connector implementation detail."
+          meta={marketStatus?.latest_sync_at ?? "Awaiting MT5 sync"}
+          emptyState={
+            <div className="rounded-[1.3rem] border border-white/8 bg-black/16 px-4 py-4 text-sm text-[var(--color-text-muted)]">
+              No instrument definitions have been synchronized yet.
+            </div>
+          }
+        />
+
+        <div className="space-y-3">
+          <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
+            Instrument registry
+          </div>
+          <InstrumentUniverseTable rows={instruments} />
+        </div>
+      </section>
+    </div>
+  );
+}
