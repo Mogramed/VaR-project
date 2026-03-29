@@ -6,12 +6,159 @@ from typing import Any
 from var_project.alerts.engine import alerts_from_execution_result
 from var_project.api.services.runtime import DeskServiceRuntime
 from var_project.core.exceptions import MT5ConnectionError
+from var_project.execution.mt5_bridge import build_empty_live_state, collect_live_state_from_connector
 from var_project.execution.mt5_live import ExecutionPreview, ExecutionResult, MT5TerminalStatus
 
 
 class DeskMt5Service:
     def __init__(self, runtime: DeskServiceRuntime):
         self.runtime = runtime
+
+    def _normalize_live_state(self, raw_state: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(raw_state)
+        payload["sequence"] = int(payload.get("sequence") or 0)
+        payload["status"] = str(payload.get("status") or "ok")
+        payload["connected"] = bool(payload.get("connected", True))
+        payload["degraded"] = bool(payload.get("degraded", False))
+        payload["stale"] = bool(payload.get("stale", False))
+        payload["poll_interval_seconds"] = float(
+            payload.get("poll_interval_seconds") or self.runtime.mt5_config.live_poll_seconds
+        )
+        payload["history_poll_interval_seconds"] = float(
+            payload.get("history_poll_interval_seconds") or self.runtime.mt5_config.live_history_poll_seconds
+        )
+        payload["history_lookback_minutes"] = int(
+            payload.get("history_lookback_minutes") or self.runtime.mt5_config.live_history_lookback_minutes
+        )
+        payload["generated_at"] = str(payload.get("generated_at") or datetime.now(timezone.utc).isoformat())
+        payload["last_success_at"] = payload.get("last_success_at") or payload["generated_at"]
+        payload["source"] = str(payload.get("source") or "mt5_agent_bridge")
+        return payload
+
+    def _build_live_state_direct(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        connector = self.runtime._build_mt5_connector()
+        try:
+            connector.init()
+            raw_state = collect_live_state_from_connector(
+                connector,
+                config=self.runtime.mt5_config,
+                base_currency=str(portfolio["base_currency"]),
+                seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
+                history_lookback_minutes=int(self.runtime.mt5_config.live_history_lookback_minutes),
+            )
+        finally:
+            connector.shutdown()
+        return self._normalize_live_state(raw_state)
+
+    def _enrich_live_state(self, raw_state: dict[str, Any], *, portfolio_slug: str | None = None) -> dict[str, Any]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        exposure = self.runtime.market_data.exposure_from_holdings(
+            list(raw_state.get("holdings") or []),
+            portfolio_slug=portfolio["slug"],
+        )
+        reconciliation = self.runtime.market_data.reconciliation_summary_from_live_state(
+            raw_state,
+            portfolio_slug=portfolio["slug"],
+        )
+        return {
+            **dict(raw_state),
+            "portfolio_slug": portfolio["slug"],
+            "portfolio_mode": portfolio.get("mode"),
+            "exposure": exposure,
+            "reconciliation": reconciliation,
+        }
+
+    def live_state(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        connector = self.runtime._build_mt5_connector()
+        try:
+            connector.init()
+            if hasattr(connector, "live_state"):
+                raw_state = self._normalize_live_state(dict(connector.live_state()))
+            else:
+                raw_state = self._normalize_live_state(
+                    collect_live_state_from_connector(
+                        connector,
+                        config=self.runtime.mt5_config,
+                        base_currency=str(portfolio["base_currency"]),
+                        seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
+                        history_lookback_minutes=int(self.runtime.mt5_config.live_history_lookback_minutes),
+                    )
+                )
+        except Exception as exc:
+            raw_state = build_empty_live_state(
+                config=self.runtime.mt5_config,
+                seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
+                status="degraded",
+                connected=False,
+                degraded=True,
+                stale=True,
+                last_error=str(exc),
+            )
+        finally:
+            connector.shutdown()
+        return self._enrich_live_state(raw_state, portfolio_slug=portfolio["slug"])
+
+    def live_events(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        after: int = 0,
+        limit: int = 100,
+        wait_seconds: float = 15.0,
+    ) -> list[dict[str, Any]]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        connector = self.runtime._build_mt5_connector()
+        try:
+            connector.init()
+            if hasattr(connector, "live_events"):
+                events = connector.live_events(after=after, limit=limit, wait_seconds=wait_seconds)
+            else:
+                events = [
+                    {
+                        "sequence": int(after) + 1,
+                        "kind": "snapshot",
+                        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                        "change_summary": {},
+                        "state": collect_live_state_from_connector(
+                            connector,
+                            config=self.runtime.mt5_config,
+                            base_currency=str(portfolio["base_currency"]),
+                            seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
+                            history_lookback_minutes=int(self.runtime.mt5_config.live_history_lookback_minutes),
+                        ),
+                    }
+                ]
+        except Exception as exc:
+            events = [
+                {
+                    "sequence": int(after) + 1,
+                    "kind": "connection_error",
+                    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                    "change_summary": {},
+                    "state": build_empty_live_state(
+                        config=self.runtime.mt5_config,
+                        seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
+                        status="degraded",
+                        connected=False,
+                        degraded=True,
+                        stale=True,
+                        last_error=str(exc),
+                    ),
+                }
+            ]
+        finally:
+            connector.shutdown()
+        enriched = []
+        for event in events[: max(int(limit), 1)]:
+            payload = dict(event)
+            payload["state"] = self._enrich_live_state(
+                self._normalize_live_state(dict(event.get("state") or {})),
+                portfolio_slug=portfolio["slug"],
+            )
+            enriched.append(payload)
+        return enriched
 
     def mt5_status(self) -> dict[str, Any]:
         try:

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from var_project.connectors.mt5_connector import MT5Connector
 from var_project.core.exceptions import MT5ConnectionError
 from var_project.core.settings import find_repo_root, get_mt5_config, load_settings
+from var_project.execution.mt5_bridge import MT5EventBridge
 
 
 class MT5AgentRequest(BaseModel):
@@ -57,12 +58,21 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
     raw_config = load_settings(root)
     mt5_config = get_mt5_config(raw_config)
     runtime = MT5AgentRuntime(config=mt5_config, connector_factory=connector_factory or MT5Connector)
+    live_bridge = MT5EventBridge(
+        runtime=runtime,
+        config=mt5_config,
+        base_currency=str(raw_config.get("base_currency", "EUR")),
+        seed_symbols=raw_config.get("symbols") or [],
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         try:
+            live_bridge.start()
+            live_bridge.prime()
             yield
         finally:
+            live_bridge.stop()
             runtime.close()
 
     app = FastAPI(
@@ -73,6 +83,7 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
     )
     app.state.mt5_config = mt5_config
     app.state.mt5_runtime = runtime
+    app.state.mt5_live_bridge = live_bridge
 
     def authorize(x_mt5_agent_key: str | None = Header(default=None)) -> None:
         expected = app.state.mt5_config.agent_api_key
@@ -81,10 +92,14 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
 
     @app.get("/health")
     def health() -> dict[str, Any]:
+        live_state = app.state.mt5_live_bridge.current_state()
         return {
             "status": "ok",
             "execution_enabled": bool(app.state.mt5_config.execution_enabled),
             "agent_mode": "windows_mt5_bridge",
+            "live_bridge_enabled": bool(app.state.mt5_config.live_enabled),
+            "live_bridge_status": live_state.get("status"),
+            "live_sequence": live_state.get("sequence"),
         }
 
     @app.get("/terminal-info")
@@ -172,6 +187,19 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
             )
         except MT5ConnectionError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/live/state")
+    def live_state(_: None = Depends(authorize)) -> dict[str, Any]:
+        return app.state.mt5_live_bridge.current_state()
+
+    @app.get("/live/events")
+    def live_events(
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+        wait_seconds: float = Query(default=15.0, ge=0.0, le=60.0),
+        _: None = Depends(authorize),
+    ) -> list[dict[str, Any]]:
+        return app.state.mt5_live_bridge.events_after(after, limit=limit, wait_seconds=wait_seconds)
 
     @app.post("/order-check")
     def order_check(payload: MT5AgentRequest, _: None = Depends(authorize)) -> dict[str, Any]:

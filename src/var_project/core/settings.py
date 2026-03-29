@@ -113,6 +113,24 @@ def get_mt5_config(raw_cfg: Mapping[str, Any]) -> MT5Config:
     deviation_points = os.getenv("VAR_PROJECT_MT5_DEVIATION_POINTS", mt5_cfg.get("deviation_points"))
     comment_prefix = os.getenv("VAR_PROJECT_MT5_COMMENT_PREFIX", mt5_cfg.get("comment_prefix"))
     portable = os.getenv("VAR_PROJECT_MT5_PORTABLE", mt5_cfg.get("portable"))
+    live_enabled = os.getenv("VAR_PROJECT_MT5_LIVE_ENABLED", mt5_cfg.get("live_enabled"))
+    live_poll_seconds = os.getenv("VAR_PROJECT_MT5_LIVE_POLL_SECONDS", mt5_cfg.get("live_poll_seconds"))
+    live_history_poll_seconds = os.getenv(
+        "VAR_PROJECT_MT5_LIVE_HISTORY_POLL_SECONDS",
+        mt5_cfg.get("live_history_poll_seconds"),
+    )
+    live_history_lookback_minutes = os.getenv(
+        "VAR_PROJECT_MT5_LIVE_HISTORY_LOOKBACK_MINUTES",
+        mt5_cfg.get("live_history_lookback_minutes"),
+    )
+    live_event_buffer_size = os.getenv(
+        "VAR_PROJECT_MT5_LIVE_EVENT_BUFFER_SIZE",
+        mt5_cfg.get("live_event_buffer_size"),
+    )
+    live_stale_after_seconds = os.getenv(
+        "VAR_PROJECT_MT5_LIVE_STALE_AFTER_SECONDS",
+        mt5_cfg.get("live_stale_after_seconds"),
+    )
 
     return MT5Config(
         login=None if login in {None, "", "null"} else int(login),
@@ -127,6 +145,20 @@ def get_mt5_config(raw_cfg: Mapping[str, Any]) -> MT5Config:
         magic=420001 if magic in {None, "", "null"} else int(magic),
         deviation_points=20 if deviation_points in {None, "", "null"} else int(deviation_points),
         comment_prefix="var_risk_desk" if comment_prefix in {None, "", "null"} else str(comment_prefix),
+        live_enabled=True if live_enabled in {None, "", "null"} else str(live_enabled).lower() in {"1", "true", "yes", "on"},
+        live_poll_seconds=2.0 if live_poll_seconds in {None, "", "null"} else float(live_poll_seconds),
+        live_history_poll_seconds=30.0
+        if live_history_poll_seconds in {None, "", "null"}
+        else float(live_history_poll_seconds),
+        live_history_lookback_minutes=180
+        if live_history_lookback_minutes in {None, "", "null"}
+        else int(live_history_lookback_minutes),
+        live_event_buffer_size=500
+        if live_event_buffer_size in {None, "", "null"}
+        else int(live_event_buffer_size),
+        live_stale_after_seconds=6.0
+        if live_stale_after_seconds in {None, "", "null"}
+        else float(live_stale_after_seconds),
     )
 
 

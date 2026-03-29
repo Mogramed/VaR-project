@@ -60,36 +60,43 @@ class DeskMarketDataService:
         with self.runtime._mt5_gateway() as live:
             return [item.to_dict() for item in live.holdings(symbols=None)]
 
-    def live_exposure(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
+    def exposure_from_holdings(
+        self,
+        holdings: list[Mapping[str, Any]] | list[dict[str, Any]],
+        *,
+        portfolio_slug: str | None = None,
+    ) -> dict[str, Any]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
-        holdings = self.live_holdings(portfolio_slug=portfolio["slug"])
         normalized = normalize_holdings(holdings, base_currency=str(portfolio["base_currency"]))
         exposure_by_symbol = aggregate_exposure_by_symbol(normalized, base_currency=str(portfolio["base_currency"]))
         gross_exposure = gross_exposure_base_ccy(normalized, base_currency=str(portfolio["base_currency"]))
         items = []
-        for holding in normalized:
-            exposure = float(exposure_by_symbol.get(holding.symbol, 0.0))
+        for symbol in sorted(exposure_by_symbol):
+            matching = next((holding for holding in normalized if holding.symbol == symbol), None)
+            exposure = float(exposure_by_symbol.get(symbol, 0.0))
             share = None if gross_exposure <= 1e-9 else abs(exposure) / gross_exposure
             items.append(
                 {
-                    "symbol": holding.symbol,
-                    "asset_class": holding.asset_class,
+                    "symbol": symbol,
+                    "asset_class": None if matching is None else matching.asset_class,
                     "exposure_base_ccy": exposure,
                     "signed_position_eur": exposure,
                     "gross_exposure_share": share,
                 }
             )
-        deduped: dict[str, dict[str, Any]] = {}
-        for item in items:
-            deduped[item["symbol"]] = item
         return {
             "generated_at": _utcnow().isoformat(),
             "portfolio_slug": portfolio["slug"],
             "portfolio_mode": portfolio.get("mode"),
             "base_currency": str(portfolio["base_currency"]),
             "gross_exposure_base_ccy": gross_exposure,
-            "items": list(deduped.values()),
+            "items": items,
         }
+
+    def live_exposure(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        holdings = self.live_holdings(portfolio_slug=portfolio["slug"])
+        return self.exposure_from_holdings(holdings, portfolio_slug=portfolio["slug"])
 
     def list_instruments(self, *, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
@@ -361,15 +368,21 @@ class DeskMarketDataService:
         self.sync_market_data(portfolio_slug=portfolio["slug"])
         return self.runtime.storage.recent_mt5_deal_history(limit=limit, portfolio_slug=portfolio["slug"])
 
-    def reconciliation_summary(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
-        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
-        status = self.market_data_status(portfolio_slug=portfolio["slug"])
-        holdings = self.live_holdings(portfolio_slug=portfolio["slug"])
-        pending_orders: list[dict[str, Any]] = list(status.get("pending_orders") or [])
-        if self.should_use_mt5_market_data(portfolio):
-            with self.runtime._mt5_gateway() as live:
-                pending_orders = [item.to_dict() for item in live.pending_orders(symbols=None)]
-
+    def _build_reconciliation_summary(
+        self,
+        *,
+        portfolio: Mapping[str, Any],
+        market_status: Mapping[str, Any],
+        holdings: list[dict[str, Any]],
+        pending_orders: list[dict[str, Any]],
+        order_history: list[dict[str, Any]],
+        deal_history: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        exposure_payload = self.exposure_from_holdings(holdings, portfolio_slug=portfolio["slug"])
+        live_exposure = {
+            str(item["symbol"]).upper(): float(item["exposure_base_ccy"])
+            for item in list(exposure_payload.get("items") or [])
+        }
         latest_snapshot = (
             self.runtime.storage.latest_snapshot(source="mt5_live", portfolio_slug=portfolio["slug"])
             or self.runtime.storage.latest_snapshot(source="historical", portfolio_slug=portfolio["slug"])
@@ -381,24 +394,11 @@ class DeskMarketDataService:
             or snapshot_payload.get("positions_eur")
             or aggregate_exposure_by_symbol(desk_holdings, base_currency=str(portfolio["base_currency"]))
         )
-        live_exposure = aggregate_exposure_by_symbol(holdings, base_currency=str(portfolio["base_currency"]))
 
         executions = self.runtime.storage.recent_execution_results(limit=50, portfolio_slug=portfolio["slug"])
         fills = self.runtime.storage.recent_execution_fills(limit=200, portfolio_slug=portfolio["slug"])
-        order_history = self.mt5_order_history(portfolio_slug=portfolio["slug"], limit=200)
-        deal_history = self.mt5_deal_history(portfolio_slug=portfolio["slug"], limit=200)
         seen_order_tickets = {int(item["ticket"]) for item in order_history if item.get("ticket") is not None}
         seen_deal_tickets = {int(item["ticket"]) for item in deal_history if item.get("ticket") is not None}
-        deal_by_ticket = {
-            int(item["ticket"]): item
-            for item in deal_history
-            if item.get("ticket") is not None
-        }
-        order_by_ticket = {
-            int(item["ticket"]): item
-            for item in order_history
-            if item.get("ticket") is not None
-        }
         manual_events = sum(1 for item in order_history if item.get("is_manual")) + sum(
             1 for item in deal_history if item.get("is_manual")
         )
@@ -496,8 +496,8 @@ class DeskMarketDataService:
             "generated_at": _utcnow().isoformat(),
             "portfolio_slug": portfolio["slug"],
             "portfolio_mode": portfolio.get("mode"),
-            "market_data_status": str(status.get("status") or "unknown"),
-            "latest_sync_at": status.get("latest_sync_at"),
+            "market_data_status": str(market_status.get("status") or "unknown"),
+            "latest_sync_at": market_status.get("latest_sync_at"),
             "open_positions_count": len(holdings),
             "pending_orders_count": len(pending_orders),
             "manual_event_count": int(manual_events),
@@ -508,3 +508,43 @@ class DeskMarketDataService:
             "recent_execution_attempts": executions[:10],
             "recent_fills": fills[:20],
         }
+
+    def reconciliation_summary_from_live_state(
+        self,
+        live_state: Mapping[str, Any],
+        *,
+        portfolio_slug: str | None = None,
+    ) -> dict[str, Any]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        market_status = self.market_data_status(portfolio_slug=portfolio["slug"])
+        market_status = {
+            **market_status,
+            "status": str(live_state.get("status") or market_status.get("status") or "unknown"),
+        }
+        return self._build_reconciliation_summary(
+            portfolio=portfolio,
+            market_status=market_status,
+            holdings=list(live_state.get("holdings") or []),
+            pending_orders=list(live_state.get("pending_orders") or []),
+            order_history=list(live_state.get("order_history") or []),
+            deal_history=list(live_state.get("deal_history") or []),
+        )
+
+    def reconciliation_summary(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        status = self.market_data_status(portfolio_slug=portfolio["slug"])
+        holdings = self.live_holdings(portfolio_slug=portfolio["slug"])
+        pending_orders: list[dict[str, Any]] = list(status.get("pending_orders") or [])
+        if self.should_use_mt5_market_data(portfolio):
+            with self.runtime._mt5_gateway() as live:
+                pending_orders = [item.to_dict() for item in live.pending_orders(symbols=None)]
+        order_history = self.mt5_order_history(portfolio_slug=portfolio["slug"], limit=200)
+        deal_history = self.mt5_deal_history(portfolio_slug=portfolio["slug"], limit=200)
+        return self._build_reconciliation_summary(
+            portfolio=portfolio,
+            market_status=status,
+            holdings=holdings,
+            pending_orders=pending_orders,
+            order_history=order_history,
+            deal_history=deal_history,
+        )

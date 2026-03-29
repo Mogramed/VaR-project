@@ -19,6 +19,12 @@ class MT5Config:
     magic: int = 420001
     deviation_points: int = 20
     comment_prefix: str = "var_risk_desk"
+    live_enabled: bool = True
+    live_poll_seconds: float = 2.0
+    live_history_poll_seconds: float = 30.0
+    live_history_lookback_minutes: int = 180
+    live_event_buffer_size: int = 500
+    live_stale_after_seconds: float = 6.0
 
 
 @dataclass(frozen=True)

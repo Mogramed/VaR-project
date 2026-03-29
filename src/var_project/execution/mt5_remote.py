@@ -118,6 +118,28 @@ class RemoteMT5Connector:
     def order_send(self, request: dict[str, Any]) -> dict[str, Any]:
         return dict(self._request("POST", "/order-send", json={"request": dict(request)}))
 
+    def live_state(self) -> dict[str, Any]:
+        return dict(self._request("GET", "/live/state"))
+
+    def live_events(
+        self,
+        *,
+        after: int = 0,
+        limit: int = 100,
+        wait_seconds: float = 15.0,
+    ) -> list[dict[str, Any]]:
+        payload = self._request(
+            "GET",
+            "/live/events",
+            params={
+                "after": int(after),
+                "limit": int(limit),
+                "wait_seconds": float(wait_seconds),
+            },
+            timeout=max(float(wait_seconds) + 5.0, 10.0),
+        )
+        return [dict(item) for item in payload]
+
     def ensure_symbol(self, symbol: str) -> None:
         self.symbol_info(symbol)
 
@@ -128,11 +150,12 @@ class RemoteMT5Connector:
         *,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> Any:
         if not self._initialized or self._client is None:
             raise MT5ConnectionError("Remote MT5 connector not initialized.")
         try:
-            response = self._client.request(method, path, params=params, json=json)
+            response = self._client.request(method, path, params=params, json=json, timeout=timeout)
         except httpx.HTTPError as exc:
             raise MT5ConnectionError(f"MT5 agent request failed: {exc}") from exc
 

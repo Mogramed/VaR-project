@@ -419,6 +419,17 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     assert orders.status_code == 200
     assert orders.json() == []
 
+    live_state = client.get("/mt5/live/state")
+    assert live_state.status_code == 200
+    live_state_body = live_state.json()
+    assert live_state_body["connected"] is True
+    assert live_state_body["holdings"]
+    assert live_state_body["reconciliation"]["mismatches"]
+
+    live_events = client.get("/mt5/live/events", params={"after": 0, "limit": 5, "wait_seconds": 0.1})
+    assert live_events.status_code == 200
+    assert live_events.json()
+
     preview = client.post(
         "/execution/preview",
         json={"symbol": "EURUSD", "delta_position_eur": 1_000.0, "note": "demo preview"},

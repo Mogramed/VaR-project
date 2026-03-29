@@ -674,6 +674,59 @@ class ReconciliationSummaryResponse(BaseModel):
     recent_fills: list[ExecutionFillResponse] = Field(default_factory=list)
 
 
+class MT5TickResponse(BaseModel):
+    symbol: str
+    bid: float | None = None
+    ask: float | None = None
+    last: float | None = None
+    time_utc: str | None = None
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class MT5LiveEventChangeSummaryResponse(BaseModel):
+    symbols_added: list[str] = Field(default_factory=list)
+    symbols_removed: list[str] = Field(default_factory=list)
+    open_positions: int = 0
+    pending_orders: int = 0
+    order_history: int = 0
+    deal_history: int = 0
+
+
+class MT5LiveStateResponse(BaseModel):
+    sequence: int
+    source: str | None = None
+    status: str
+    connected: bool
+    degraded: bool
+    stale: bool
+    generated_at: str
+    last_success_at: str | None = None
+    last_error: str | None = None
+    poll_interval_seconds: float
+    history_poll_interval_seconds: float
+    history_lookback_minutes: int
+    portfolio_slug: str | None = None
+    portfolio_mode: str | None = None
+    symbols: list[str] = Field(default_factory=list)
+    terminal_status: MT5TerminalStatusResponse | None = None
+    account: MT5AccountSnapshotResponse | None = None
+    ticks: dict[str, MT5TickResponse] = Field(default_factory=dict)
+    holdings: list[HoldingSnapshotResponse] = Field(default_factory=list)
+    pending_orders: list[MT5PendingOrderResponse] = Field(default_factory=list)
+    order_history: list[OrderHistoryEntryResponse] = Field(default_factory=list)
+    deal_history: list[DealHistoryEntryResponse] = Field(default_factory=list)
+    exposure: PortfolioExposureResponse | None = None
+    reconciliation: ReconciliationSummaryResponse | None = None
+
+
+class MT5LiveEventResponse(BaseModel):
+    sequence: int
+    kind: str
+    timestamp_utc: str
+    change_summary: MT5LiveEventChangeSummaryResponse = Field(default_factory=MT5LiveEventChangeSummaryResponse)
+    state: MT5LiveStateResponse
+
+
 class ExecutionGuardDecisionResponse(BaseModel):
     decision: str
     risk_decision: str

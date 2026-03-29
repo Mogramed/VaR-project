@@ -10,21 +10,39 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
   const target = `${getBackendBaseUrl()}/${path.join("/")}${request.nextUrl.search}`;
   const body =
     request.method === "GET" || request.method === "HEAD" ? undefined : await request.text();
+  const headers = new Headers();
+  const contentType = request.headers.get("content-type");
+  const accept = request.headers.get("accept");
+  if (contentType && body !== undefined) {
+    headers.set("Content-Type", contentType);
+  }
+  if (accept) {
+    headers.set("Accept", accept);
+  }
 
   const response = await fetch(target, {
     method: request.method,
-    headers: {
-      "Content-Type": request.headers.get("content-type") ?? "application/json",
-    },
+    headers,
     body,
     cache: "no-store",
   });
 
-  return new NextResponse(await response.text(), {
+  const responseHeaders = new Headers();
+  const responseContentType = response.headers.get("content-type");
+  const cacheControl = response.headers.get("cache-control");
+  if (responseContentType) {
+    responseHeaders.set("Content-Type", responseContentType);
+  }
+  if (cacheControl) {
+    responseHeaders.set("Cache-Control", cacheControl);
+  }
+  if ((responseContentType ?? "").includes("text/event-stream")) {
+    responseHeaders.set("Connection", "keep-alive");
+  }
+
+  return new NextResponse(response.body, {
     status: response.status,
-    headers: {
-      "Content-Type": response.headers.get("content-type") ?? "application/json",
-    },
+    headers: responseHeaders,
   });
 }
 

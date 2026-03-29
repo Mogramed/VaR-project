@@ -42,6 +42,17 @@ def test_mt5_agent_endpoints_with_api_key(tmp_path: Path, monkeypatch) -> None:
     assert positions.status_code == 200
     assert len(positions.json()) == 2
 
+    live_state = client.get("/live/state", headers=headers)
+    assert live_state.status_code == 200
+    live_state_body = live_state.json()
+    assert live_state_body["status"] in {"ok", "degraded"}
+    assert live_state_body["holdings"]
+    assert "EURUSD" in live_state_body["symbols"]
+
+    live_events = client.get("/live/events", headers=headers, params={"after": 0, "limit": 10, "wait_seconds": 0.1})
+    assert live_events.status_code == 200
+    assert live_events.json()
+
     history_orders = client.get(
         "/history/orders",
         headers=headers,
@@ -107,6 +118,64 @@ def test_remote_mt5_connector_uses_agent_contract(tmp_path: Path, monkeypatch) -
             return httpx.Response(200, json=[])
         if path == "/orders":
             return httpx.Response(200, json=[])
+        if path == "/live/state":
+            return httpx.Response(
+                200,
+                json={
+                    "sequence": 3,
+                    "status": "ok",
+                    "connected": True,
+                    "degraded": False,
+                    "stale": False,
+                    "generated_at": "2026-03-29T09:00:00+00:00",
+                    "last_success_at": "2026-03-29T09:00:00+00:00",
+                    "last_error": None,
+                    "poll_interval_seconds": 2.0,
+                    "history_poll_interval_seconds": 30.0,
+                    "history_lookback_minutes": 180,
+                    "symbols": ["EURUSD"],
+                    "terminal_status": {"connected": True, "ready": True, "execution_enabled": True, "message": "ok", "raw": {}},
+                    "account": {"currency": "EUR", "equity": 100_000.0, "balance": 100_000.0, "profit": 0.0, "margin": 0.0, "margin_free": 100_000.0, "raw": {}},
+                    "ticks": {"EURUSD": {"symbol": "EURUSD", "bid": 1.0898, "ask": 1.09, "last": 1.0899, "time_utc": "2026-03-29T09:00:00+00:00", "raw": {}}},
+                    "holdings": [],
+                    "pending_orders": [],
+                    "order_history": [],
+                    "deal_history": [],
+                },
+            )
+        if path == "/live/events":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "sequence": 3,
+                        "kind": "snapshot",
+                        "timestamp_utc": "2026-03-29T09:00:00+00:00",
+                        "change_summary": {"symbols_added": ["EURUSD"]},
+                        "state": {
+                            "sequence": 3,
+                            "status": "ok",
+                            "connected": True,
+                            "degraded": False,
+                            "stale": False,
+                            "generated_at": "2026-03-29T09:00:00+00:00",
+                            "last_success_at": "2026-03-29T09:00:00+00:00",
+                            "last_error": None,
+                            "poll_interval_seconds": 2.0,
+                            "history_poll_interval_seconds": 30.0,
+                            "history_lookback_minutes": 180,
+                            "symbols": ["EURUSD"],
+                            "terminal_status": {"connected": True, "ready": True, "execution_enabled": True, "message": "ok", "raw": {}},
+                            "account": {"currency": "EUR", "equity": 100_000.0, "balance": 100_000.0, "profit": 0.0, "margin": 0.0, "margin_free": 100_000.0, "raw": {}},
+                            "ticks": {"EURUSD": {"symbol": "EURUSD", "bid": 1.0898, "ask": 1.09, "last": 1.0899, "time_utc": "2026-03-29T09:00:00+00:00", "raw": {}}},
+                            "holdings": [],
+                            "pending_orders": [],
+                            "order_history": [],
+                            "deal_history": [],
+                        },
+                    }
+                ],
+            )
         if path == "/history/orders":
             return httpx.Response(
                 200,
@@ -166,6 +235,8 @@ def test_remote_mt5_connector_uses_agent_contract(tmp_path: Path, monkeypatch) -
     try:
         assert connector.account_info()["currency"] == "EUR"
         assert connector.symbol_info("EURUSD")["currency_base"] == "EUR"
+        assert connector.live_state()["status"] == "ok"
+        assert connector.live_events(after=0, limit=5, wait_seconds=0.1)[0]["kind"] == "snapshot"
         assert connector.history_orders_get(datetime.fromisoformat("2026-03-28T00:00:00+00:00"), datetime.fromisoformat("2026-03-29T00:00:00+00:00"))[0]["ticket"] == 901
         assert connector.history_deals_get(datetime.fromisoformat("2026-03-28T00:00:00+00:00"), datetime.fromisoformat("2026-03-29T00:00:00+00:00"))[0]["ticket"] == 801
         assert connector.order_check({"symbol": "EURUSD", "volume": 0.05})["retcode"] == 0

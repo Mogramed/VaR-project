@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from var_project.api.dependencies import get_service
 from var_project.api.schemas import (
@@ -10,6 +13,8 @@ from var_project.api.schemas import (
     MarketDataSyncRequest,
     MarketDataSyncStatusResponse,
     MT5AccountSnapshotResponse,
+    MT5LiveEventResponse,
+    MT5LiveStateResponse,
     MT5PendingOrderResponse,
     MT5PositionResponse,
     MT5TerminalStatusResponse,
@@ -64,6 +69,67 @@ def mt5_orders(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return [MT5PendingOrderResponse.model_validate(item) for item in payload]
+
+
+@router.get("/mt5/live/state", response_model=MT5LiveStateResponse)
+def mt5_live_state(
+    portfolio_slug: str | None = Query(default=None),
+    service: DeskApiService = Depends(get_service),
+) -> MT5LiveStateResponse:
+    payload = service.mt5_live_state(portfolio_slug=portfolio_slug)
+    return MT5LiveStateResponse.model_validate(payload)
+
+
+@router.get("/mt5/live/events", response_model=list[MT5LiveEventResponse])
+def mt5_live_events(
+    portfolio_slug: str | None = Query(default=None),
+    after: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
+    wait_seconds: float = Query(default=15.0, ge=0.0, le=60.0),
+    service: DeskApiService = Depends(get_service),
+) -> list[MT5LiveEventResponse]:
+    payload = service.mt5_live_events(
+        portfolio_slug=portfolio_slug,
+        after=after,
+        limit=limit,
+        wait_seconds=wait_seconds,
+    )
+    return [MT5LiveEventResponse.model_validate(item) for item in payload]
+
+
+@router.get("/mt5/live/stream")
+def mt5_live_stream(
+    portfolio_slug: str | None = Query(default=None),
+    service: DeskApiService = Depends(get_service),
+) -> StreamingResponse:
+    def event_iter():
+        sequence = 0
+        while True:
+            events = service.mt5_live_events(
+                portfolio_slug=portfolio_slug,
+                after=sequence,
+                limit=100,
+                wait_seconds=15.0,
+            )
+            if not events:
+                yield ": keep-alive\n\n"
+                continue
+            for event in events:
+                sequence = max(sequence, int(event.get("sequence") or 0))
+                yield (
+                    f"id: {sequence}\n"
+                    f"event: {event.get('kind') or 'snapshot'}\n"
+                    f"data: {json.dumps(event)}\n\n"
+                )
+
+    return StreamingResponse(
+        event_iter(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.get("/mt5/history/orders", response_model=list[OrderHistoryEntryResponse])

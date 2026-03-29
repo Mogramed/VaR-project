@@ -136,6 +136,24 @@ class DeskApiService:
     def mt5_orders(self, *, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
         return self.mt5.mt5_orders(portfolio_slug=portfolio_slug)
 
+    def mt5_live_state(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
+        return self.mt5.live_state(portfolio_slug=portfolio_slug)
+
+    def mt5_live_events(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        after: int = 0,
+        limit: int = 100,
+        wait_seconds: float = 15.0,
+    ) -> list[dict[str, Any]]:
+        return self.mt5.live_events(
+            portfolio_slug=portfolio_slug,
+            after=after,
+            limit=limit,
+            wait_seconds=wait_seconds,
+        )
+
     def mt5_history_orders(
         self,
         *,

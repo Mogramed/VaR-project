@@ -264,11 +264,17 @@ class HoldingSnapshot:
     side: str
     volume_lots: float
     signed_position_eur: float
+    signed_units: float | None
     contract_size: float | None
     base_currency: str | None
     profit_currency: str | None
+    margin_currency: str | None
     mark_price: float | None
+    market_value_base_ccy: float | None
+    exposure_base_ccy: float | None
+    unrealized_pnl_base_ccy: float | None
     profit: float
+    source: str | None
     comment: str | None
     time_utc: str | None
     raw: dict[str, Any]
@@ -280,11 +286,17 @@ class HoldingSnapshot:
             "side": self.side,
             "volume_lots": self.volume_lots,
             "signed_position_eur": self.signed_position_eur,
+            "signed_units": self.signed_units,
             "contract_size": self.contract_size,
             "base_currency": self.base_currency,
             "profit_currency": self.profit_currency,
+            "margin_currency": self.margin_currency,
             "mark_price": self.mark_price,
+            "market_value_base_ccy": self.market_value_base_ccy,
+            "exposure_base_ccy": self.exposure_base_ccy,
+            "unrealized_pnl_base_ccy": self.unrealized_pnl_base_ccy,
             "profit": self.profit,
+            "source": self.source,
             "comment": self.comment,
             "time_utc": self.time_utc,
             "raw": dict(self.raw),
@@ -643,6 +655,8 @@ class MT5LiveGateway:
             info = self.instrument_definition(symbol)
             tick = self._tick(symbol)
             mark_price = _coerce_float(tick.get("bid")) if side == "BUY" else _coerce_float(tick.get("ask"))
+            signed_units = _signed_from_side(side) * _coerce_float(row.get("volume")) * _coerce_float(info.contract_size, 0.0)
+            exposure_base_ccy = _signed_from_side(side) * _coerce_float(row.get("volume")) * self.notional_eur_per_lot(symbol)
             holdings.append(
                 HoldingSnapshot(
                     symbol=symbol,
@@ -650,11 +664,17 @@ class MT5LiveGateway:
                     side=side,
                     volume_lots=_coerce_float(row.get("volume")),
                     signed_position_eur=_signed_from_side(side) * _coerce_float(row.get("volume")) * self.notional_eur_per_lot(symbol),
+                    signed_units=None if abs(signed_units) <= 1e-9 else signed_units,
                     contract_size=info.contract_size,
                     base_currency=info.base_currency,
                     profit_currency=info.profit_currency,
+                    margin_currency=info.margin_currency,
                     mark_price=None if mark_price <= 0 else mark_price,
+                    market_value_base_ccy=None if mark_price <= 0 or abs(signed_units) <= 1e-9 else signed_units * mark_price,
+                    exposure_base_ccy=exposure_base_ccy,
+                    unrealized_pnl_base_ccy=_coerce_float(row.get("profit")),
                     profit=_coerce_float(row.get("profit")),
+                    source="mt5_live",
                     comment=None if row.get("comment") is None else str(row.get("comment")),
                     time_utc=_normalize_timestamp(row.get("time_update") or row.get("time")),
                     raw=dict(row),
