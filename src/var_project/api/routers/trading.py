@@ -10,6 +10,8 @@ from var_project.api.schemas import (
     ExecutionPreviewResponse,
     ExecutionRequest,
     ExecutionResultResponse,
+    ReconciliationAcknowledgeRequest,
+    ReconciliationAcknowledgeResponse,
     RiskDecisionResponse,
     TradeProposalRequest,
 )
@@ -98,6 +100,20 @@ def recent_execution_fills(
         ExecutionFillResponse.model_validate(item)
         for item in service.recent_execution_fills(limit=limit, portfolio_slug=portfolio_slug)
     ]
+
+
+@router.post("/reconciliation/acknowledge", response_model=ReconciliationAcknowledgeResponse)
+def acknowledge_reconciliation(
+    payload: ReconciliationAcknowledgeRequest,
+    service: DeskApiService = Depends(get_service),
+) -> ReconciliationAcknowledgeResponse:
+    result = service.acknowledge_reconciliation_mismatch(
+        portfolio_slug=payload.portfolio_slug,
+        symbol=payload.symbol,
+        reason=payload.reason,
+        operator_note=payload.operator_note,
+    )
+    return ReconciliationAcknowledgeResponse.model_validate(result)
 
 
 @router.get("/audit/recent", response_model=list[AuditEventResponse])

@@ -1,7 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
 import {
   DealHistoryTable,
   ExecutionHistoryTable,
@@ -10,106 +8,24 @@ import {
   OrderHistoryTable,
   ReconciliationTable,
 } from "@/components/data/risk-tables";
+import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
-import type { MT5LiveEventResponse, MT5LiveStateResponse } from "@/lib/api/types";
+import type { MT5LiveStateResponse } from "@/lib/api/types";
+import { useMt5LiveState } from "@/lib/use-mt5-live-state";
 import { formatCurrency, formatTimestamp } from "@/lib/utils";
-
-function buildStateUrl(portfolioSlug?: string) {
-  return portfolioSlug
-    ? `/api/proxy/mt5/live/state?portfolio_slug=${encodeURIComponent(portfolioSlug)}`
-    : "/api/proxy/mt5/live/state";
-}
-
-function buildStreamUrl(portfolioSlug?: string) {
-  return portfolioSlug
-    ? `/api/proxy/mt5/live/stream?portfolio_slug=${encodeURIComponent(portfolioSlug)}`
-    : "/api/proxy/mt5/live/stream";
-}
 
 export function Mt5LiveOpsFeed({
   initialState,
 }: {
   initialState: MT5LiveStateResponse;
 }) {
-  const [liveState, setLiveState] = useState(initialState);
-  const [transport, setTransport] = useState<"stream" | "polling" | "connecting">("connecting");
-
-  useEffect(() => {
-    const portfolioSlug = liveState.portfolio_slug ?? undefined;
-    const stateUrl = buildStateUrl(portfolioSlug);
-    const streamUrl = buildStreamUrl(portfolioSlug);
-    let eventSource: EventSource | null = null;
-    let pollTimer: number | null = null;
-    let cancelled = false;
-
-    const refreshState = async () => {
-      try {
-        const response = await fetch(stateUrl, { cache: "no-store" });
-        if (!response.ok) {
-          return;
-        }
-        const payload = (await response.json()) as MT5LiveStateResponse;
-        if (!cancelled) {
-          setLiveState(payload);
-        }
-      } catch {
-        // Keep the previous state on transient fetch failures.
-      }
-    };
-
-    const startPolling = () => {
-      setTransport("polling");
-      if (pollTimer != null) {
-        window.clearInterval(pollTimer);
-      }
-      pollTimer = window.setInterval(() => {
-        void refreshState();
-      }, 5000);
-      void refreshState();
-    };
-
-    try {
-      eventSource = new EventSource(streamUrl);
-      eventSource.onopen = () => {
-        if (!cancelled) {
-          setTransport("stream");
-        }
-      };
-      eventSource.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data) as MT5LiveEventResponse;
-          if (!cancelled) {
-            setLiveState(payload.state);
-            setTransport("stream");
-          }
-        } catch {
-          // Ignore malformed keep-alive payloads.
-        }
-      };
-      eventSource.onerror = () => {
-        if (eventSource) {
-          eventSource.close();
-        }
-        if (!cancelled) {
-          startPolling();
-        }
-      };
-    } catch {
-      startPolling();
-    }
-
-    return () => {
-      cancelled = true;
-      if (eventSource) {
-        eventSource.close();
-      }
-      if (pollTimer != null) {
-        window.clearInterval(pollTimer);
-      }
-    };
-  }, [liveState.portfolio_slug]);
+  const { liveState: maybeLiveState, transport } = useMt5LiveState(
+    initialState.portfolio_slug ?? undefined,
+    initialState,
+  );
+  const liveState = maybeLiveState ?? initialState;
 
   const reconciliation = liveState.reconciliation;
   const holdings = liveState.holdings ?? [];
@@ -118,7 +34,7 @@ export function Mt5LiveOpsFeed({
   const dealHistory = liveState.deal_history ?? [];
   const liveExposure =
     liveState.exposure?.gross_exposure_base_ccy ??
-    holdings.reduce((sum, item) => sum + Math.abs(item.signed_position_eur), 0);
+    holdings.reduce((sum, item) => sum + Math.abs(item.signed_exposure_base_ccy), 0);
   const transportTone =
     transport === "stream" ? "success" : transport === "polling" ? "warning" : "neutral";
   const bridgeTone = liveState.status === "ok" ? "success" : liveState.degraded ? "warning" : "neutral";
@@ -148,6 +64,12 @@ export function Mt5LiveOpsFeed({
           {liveState.last_error}
         </div>
       ) : null}
+
+      <LiveOperatorAlerts
+        alerts={liveState.operator_alerts ?? []}
+        title="Ops watchlist"
+        copy="Bridge health, manual MT5 activity, pending broker actions and reconciliation drift are derived directly from the live feed."
+      />
 
       <section className="grid gap-4 xl:grid-cols-4">
         <MetricBlock

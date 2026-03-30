@@ -13,12 +13,16 @@ class DeskTradingService:
         self,
         *,
         symbol: str,
-        delta_position_eur: float,
+        exposure_change: float | None = None,
+        delta_position_eur: float | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
     ) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        normalized_exposure_change = (
+            float(exposure_change) if exposure_change is not None else float(delta_position_eur or 0.0)
+        )
         selected_timeframe = self.runtime._default_timeframe()
         selected_days = int(self.runtime._default_days())
         selected_window = int(self.runtime.risk_defaults["window"])
@@ -34,7 +38,7 @@ class DeskTradingService:
         return self.runtime._evaluate_trade_decision_from_bundle(
             bundle=bundle,
             symbol=symbol,
-            delta_position_eur=delta_position_eur,
+            exposure_change=normalized_exposure_change,
             note=note,
             persist=True,
             audit_action="decision.evaluate",

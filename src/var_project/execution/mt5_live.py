@@ -83,7 +83,19 @@ def _trading_mode_name(value: Any) -> str | None:
     return mapping.get(key, str(key))
 
 
-def _manual_event(comment: str | None, *, prefix: str) -> bool:
+def _manual_event(
+    comment: str | None,
+    *,
+    prefix: str,
+    magic: Any = None,
+    expected_magic: int | None = None,
+) -> bool:
+    if expected_magic is not None:
+        try:
+            if magic is not None and int(magic) == int(expected_magic):
+                return False
+        except (TypeError, ValueError):
+            pass
     if comment is None:
         return True
     normalized = str(comment).strip().lower()
@@ -690,7 +702,8 @@ class MT5LiveGateway:
         symbols: Iterable[str] | None = None,
     ) -> list[OrderHistoryEntry]:
         allowed = {str(symbol).upper() for symbol in symbols or []}
-        prefix = str(self.config.comment_prefix or "")
+        prefix = self._normalized_comment_prefix()
+        expected_magic = int(self.config.magic)
         rows = self.connector.history_orders_get(date_from, date_to)
         entries: list[OrderHistoryEntry] = []
         for row in rows:
@@ -711,7 +724,12 @@ class MT5LiveGateway:
                     price_open=None if row.get("price_open") is None else _coerce_float(row.get("price_open")),
                     price_current=None if row.get("price_current") is None else _coerce_float(row.get("price_current")),
                     comment=None if row.get("comment") is None else str(row.get("comment")),
-                    is_manual=_manual_event(None if row.get("comment") is None else str(row.get("comment")), prefix=prefix),
+                    is_manual=_manual_event(
+                        None if row.get("comment") is None else str(row.get("comment")),
+                        prefix=prefix,
+                        magic=row.get("magic"),
+                        expected_magic=expected_magic,
+                    ),
                     time_setup_utc=_normalize_timestamp(row.get("time_setup") or row.get("time_setup_msc")),
                     time_done_utc=_normalize_timestamp(row.get("time_done") or row.get("time_done_msc")),
                     raw=dict(row),
@@ -727,7 +745,8 @@ class MT5LiveGateway:
         symbols: Iterable[str] | None = None,
     ) -> list[DealHistoryEntry]:
         allowed = {str(symbol).upper() for symbol in symbols or []}
-        prefix = str(self.config.comment_prefix or "")
+        prefix = self._normalized_comment_prefix()
+        expected_magic = int(self.config.magic)
         rows = self.connector.history_deals_get(date_from, date_to)
         entries: list[DealHistoryEntry] = []
         for row in rows:
@@ -751,7 +770,12 @@ class MT5LiveGateway:
                     fee=None if row.get("fee") is None else _coerce_float(row.get("fee")),
                     reason=None if row.get("reason") is None else str(row.get("reason")),
                     comment=None if row.get("comment") is None else str(row.get("comment")),
-                    is_manual=_manual_event(None if row.get("comment") is None else str(row.get("comment")), prefix=prefix),
+                    is_manual=_manual_event(
+                        None if row.get("comment") is None else str(row.get("comment")),
+                        prefix=prefix,
+                        magic=row.get("magic"),
+                        expected_magic=expected_magic,
+                    ),
                     time_utc=_normalize_timestamp(row.get("time") or row.get("time_msc")),
                     raw=dict(row),
                 )
@@ -802,7 +826,6 @@ class MT5LiveGateway:
             "price": price,
             "deviation": int(self.config.deviation_points),
             "magic": int(self.config.magic),
-            "comment": self._comment(note),
             "type_time": getattr(mt5, "ORDER_TIME_GTC"),
             "type_filling": fill_mode,
         }
@@ -933,7 +956,22 @@ class MT5LiveGateway:
             unique.append(candidate)
         return unique or [order_return]
 
+    def _normalized_comment_prefix(self) -> str:
+        raw_prefix = str(self.config.comment_prefix or "var_risk_desk").strip() or "var_risk_desk"
+        normalized = "".join(ch.lower() for ch in raw_prefix if ch.isascii() and ch.isalnum())
+        return (normalized or "varriskdesk")[:16]
+
     def _comment(self, note: str | None) -> str:
-        prefix = str(self.config.comment_prefix or "var_risk_desk").strip() or "var_risk_desk"
-        suffix = "" if note is None else f" {str(note).strip()}"
-        return f"{prefix}{suffix}"[:31]
+        prefix = self._normalized_comment_prefix()
+        if note is None:
+            return prefix
+        sanitized_note = "".join(
+            ch if ch.isascii() and ch.isalnum() else "-"
+            for ch in str(note).strip().lower()
+        )
+        while "--" in sanitized_note:
+            sanitized_note = sanitized_note.replace("--", "-")
+        sanitized_note = sanitized_note.strip("-")
+        if not sanitized_note:
+            return prefix
+        return f"{prefix}-{sanitized_note}"[:31]

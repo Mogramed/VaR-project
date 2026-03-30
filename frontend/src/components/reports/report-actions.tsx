@@ -4,12 +4,24 @@ import { useMutation } from "@tanstack/react-query";
 import { FileDown, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api/client";
+import type { ReportRunResponse } from "@/lib/api/types";
 
-export function ReportActions({ portfolioSlug }: { portfolioSlug?: string }) {
+export function ReportActions({
+  portfolioSlug,
+  onGenerated,
+}: {
+  portfolioSlug?: string;
+  onGenerated?: (result: ReportRunResponse) => void | Promise<void>;
+}) {
   const router = useRouter();
   const mutation = useMutation({
     mutationFn: async () => api.runReport(undefined, portfolioSlug),
-    onSuccess: () => router.refresh(),
+    onSuccess: (result) => {
+      onGenerated?.(result);
+      if (!onGenerated) {
+        router.refresh();
+      }
+    },
   });
   const pdfUrl = portfolioSlug
     ? `/api/reports/pdf?portfolio=${encodeURIComponent(portfolioSlug)}`

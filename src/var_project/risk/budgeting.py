@@ -9,7 +9,7 @@ from var_project.core.model_registry import ordered_model_names
 @dataclass(frozen=True)
 class PositionRiskBudget:
     symbol: str
-    position_eur: float
+    current_exposure: float
     weight: float
     target_var_budget: float
     target_es_budget: float
@@ -21,16 +21,28 @@ class PositionRiskBudget:
     utilization_es: float | None
     headroom_var: float
     headroom_es: float
-    max_position_eur: float | None
-    recommended_position_eur: float | None
+    max_exposure: float | None
+    recommended_exposure: float | None
     action: str
     status: str
+
+    @property
+    def position_eur(self) -> float:
+        return self.current_exposure
+
+    @property
+    def max_position_eur(self) -> float | None:
+        return self.max_exposure
+
+    @property
+    def recommended_position_eur(self) -> float | None:
+        return self.recommended_exposure
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "PositionRiskBudget":
         return cls(
             symbol=str(payload.get("symbol", "")),
-            position_eur=float(payload.get("position_eur", 0.0)),
+            current_exposure=float(payload.get("current_exposure", payload.get("exposure_base_ccy", payload.get("position_eur", 0.0)))),
             weight=float(payload.get("weight", 0.0)),
             target_var_budget=float(payload.get("target_var_budget", 0.0)),
             target_es_budget=float(payload.get("target_es_budget", 0.0)),
@@ -42,10 +54,12 @@ class PositionRiskBudget:
             utilization_es=None if payload.get("utilization_es") is None else float(payload.get("utilization_es")),
             headroom_var=float(payload.get("headroom_var", 0.0)),
             headroom_es=float(payload.get("headroom_es", 0.0)),
-            max_position_eur=None if payload.get("max_position_eur") is None else float(payload.get("max_position_eur")),
-            recommended_position_eur=None
-            if payload.get("recommended_position_eur") is None
-            else float(payload.get("recommended_position_eur")),
+            max_exposure=None
+            if payload.get("max_exposure", payload.get("max_position_eur")) is None
+            else float(payload.get("max_exposure", payload.get("max_position_eur"))),
+            recommended_exposure=None
+            if payload.get("recommended_exposure", payload.get("recommended_position_eur")) is None
+            else float(payload.get("recommended_exposure", payload.get("recommended_position_eur"))),
             action=str(payload.get("action", "HOLD")),
             status=str(payload.get("status", "OK")),
         )
@@ -53,6 +67,8 @@ class PositionRiskBudget:
     def to_dict(self) -> dict[str, Any]:
         return {
             "symbol": self.symbol,
+            "current_exposure": self.current_exposure,
+            "exposure_base_ccy": self.current_exposure,
             "position_eur": self.position_eur,
             "weight": self.weight,
             "target_var_budget": self.target_var_budget,
@@ -65,6 +81,8 @@ class PositionRiskBudget:
             "utilization_es": self.utilization_es,
             "headroom_var": self.headroom_var,
             "headroom_es": self.headroom_es,
+            "max_exposure": self.max_exposure,
+            "recommended_exposure": self.recommended_exposure,
             "max_position_eur": self.max_position_eur,
             "recommended_position_eur": self.recommended_position_eur,
             "action": self.action,
@@ -198,8 +216,8 @@ def _status_from_utilization(utilization_var: float | None, utilization_es: floa
     return "OK"
 
 
-def _recommended_position(
-    position_eur: float,
+def _recommended_exposure(
+    current_exposure: float,
     *,
     target_var_budget: float,
     target_es_budget: float,
@@ -207,7 +225,7 @@ def _recommended_position(
     utilized_es: float,
     target_buffer: float,
 ) -> tuple[float | None, float | None]:
-    current_abs = abs(float(position_eur))
+    current_abs = abs(float(current_exposure))
     if current_abs <= 1e-9:
         return None, None
 
@@ -221,26 +239,26 @@ def _recommended_position(
 
     max_position_abs = min(max_candidates)
     recommended_abs = max_position_abs * float(target_buffer)
-    sign = -1.0 if float(position_eur) < 0.0 else 1.0
+    sign = -1.0 if float(current_exposure) < 0.0 else 1.0
     return float(max_position_abs), float(sign * recommended_abs)
 
 
 def _action_from_budget(
-    position_eur: float,
+    current_exposure: float,
     *,
     component_var: float,
-    recommended_position_eur: float | None,
+    recommended_exposure: float | None,
     tolerance: float,
     utilization_var: float | None,
     warn: float,
 ) -> str:
-    current_abs = abs(float(position_eur))
+    current_abs = abs(float(current_exposure))
     if component_var < 0.0 and (utilization_var or 0.0) < warn:
         return "HEDGE"
-    if recommended_position_eur is None:
+    if recommended_exposure is None:
         return "HOLD"
 
-    target_abs = abs(float(recommended_position_eur))
+    target_abs = abs(float(recommended_exposure))
     if current_abs > target_abs * (1.0 + tolerance):
         return "REDUCE"
     if current_abs < target_abs * (1.0 - tolerance):
@@ -297,19 +315,24 @@ def build_risk_budget_snapshot(
         configured_model=budget_cfg.get("preferred_model"),
     )
 
-    inferred_positions: dict[str, float] = {}
+    inferred_exposure: dict[str, float] = {}
     selected_exposure = exposure_by_symbol if exposure_by_symbol is not None else positions_eur
     if selected_exposure is not None:
-        inferred_positions = {str(symbol): float(value) for symbol, value in selected_exposure.items()}
+        inferred_exposure = {str(symbol): float(value) for symbol, value in selected_exposure.items()}
     elif model_names:
         first_positions = dict((dict(models_payload.get(model_names[0]) or {})).get("positions") or {})
-        inferred_positions = {
-            str(symbol): float((dict(item or {})).get("position_eur", 0.0))
+        inferred_exposure = {
+            str(symbol): float(
+                (dict(item or {})).get(
+                    "exposure_base_ccy",
+                    (dict(item or {})).get("position_eur", 0.0),
+                )
+            )
             for symbol, item in first_positions.items()
         }
-    symbols = list(inferred_positions.keys())
-    weights = _normalize_budget_weights(symbols, inferred_positions, configured=budget_cfg.get("symbol_weights"))
-    current_gross_notional = float(sum(abs(value) for value in inferred_positions.values()))
+    symbols = list(inferred_exposure.keys())
+    weights = _normalize_budget_weights(symbols, inferred_exposure, configured=budget_cfg.get("symbol_weights"))
+    current_gross_notional = float(sum(abs(value) for value in inferred_exposure.values()))
 
     budget_models: dict[str, ModelRiskBudget] = {}
     for model_name in model_names:
@@ -334,7 +357,15 @@ def build_risk_budget_snapshot(
         position_budgets: dict[str, PositionRiskBudget] = {}
         for symbol in symbols:
             position_payload = dict(positions_payload.get(symbol) or {})
-            position_eur = float(position_payload.get("position_eur", inferred_positions.get(symbol, 0.0)))
+            current_exposure = float(
+                position_payload.get(
+                    "current_exposure",
+                    position_payload.get(
+                        "exposure_base_ccy",
+                        position_payload.get("position_eur", inferred_exposure.get(symbol, 0.0)),
+                    ),
+                )
+            )
             component_var = float(position_payload.get("component_var", 0.0))
             component_es = float(position_payload.get("component_es", 0.0))
             utilized_var = abs(component_var)
@@ -344,8 +375,8 @@ def build_risk_budget_snapshot(
             target_es_budget = float(total_es_budget * weight)
             pos_utilization_var = None if target_var_budget <= 0.0 else float(utilized_var / target_var_budget)
             pos_utilization_es = None if target_es_budget <= 0.0 else float(utilized_es / target_es_budget)
-            max_position_eur, recommended_position_eur = _recommended_position(
-                position_eur,
+            max_exposure, recommended_exposure = _recommended_exposure(
+                current_exposure,
                 target_var_budget=target_var_budget,
                 target_es_budget=target_es_budget,
                 utilized_var=utilized_var,
@@ -354,9 +385,9 @@ def build_risk_budget_snapshot(
             )
             status = _status_from_utilization(pos_utilization_var, pos_utilization_es, warn=warn, breach=breach)
             action = _action_from_budget(
-                position_eur,
+                current_exposure,
                 component_var=component_var,
-                recommended_position_eur=recommended_position_eur,
+                recommended_exposure=recommended_exposure,
                 tolerance=tolerance,
                 utilization_var=pos_utilization_var,
                 warn=warn,
@@ -364,7 +395,7 @@ def build_risk_budget_snapshot(
 
             position_budgets[symbol] = PositionRiskBudget(
                 symbol=symbol,
-                position_eur=position_eur,
+                current_exposure=current_exposure,
                 weight=weight,
                 target_var_budget=target_var_budget,
                 target_es_budget=target_es_budget,
@@ -376,8 +407,8 @@ def build_risk_budget_snapshot(
                 utilization_es=pos_utilization_es,
                 headroom_var=float(target_var_budget - utilized_var),
                 headroom_es=float(target_es_budget - utilized_es),
-                max_position_eur=max_position_eur,
-                recommended_position_eur=recommended_position_eur,
+                max_exposure=max_exposure,
+                recommended_exposure=recommended_exposure,
                 action=action,
                 status=status,
             )

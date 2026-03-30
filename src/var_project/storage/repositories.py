@@ -23,6 +23,7 @@ from var_project.storage.mappers import (
     mt5_deal_history_to_dict,
     mt5_order_history_to_dict,
     portfolio_to_dict,
+    reconciliation_acknowledgement_to_dict,
     snapshot_to_dict,
     validation_to_dict,
 )
@@ -41,6 +42,7 @@ from var_project.storage.models import (
     MarketBarRecord,
     MarketDataSyncRecord,
     PortfolioRecord,
+    ReconciliationAcknowledgementRecord,
     SnapshotRecord,
     ValidationRunRecord,
 )
@@ -418,6 +420,45 @@ class StorageWriteRepository:
             session.refresh(record)
             return int(record.id)
 
+    def upsert_reconciliation_acknowledgement(
+        self,
+        *,
+        portfolio_id: int | None,
+        symbol: str,
+        reason: str = "",
+        operator_note: str = "",
+        mismatch_status: str | None = None,
+        payload: Mapping[str, Any] | None = None,
+    ) -> int:
+        normalized_symbol = str(symbol or "").upper().strip()
+        if not normalized_symbol:
+            raise ValueError("A reconciliation acknowledgement requires a symbol.")
+
+        with self.session_factory() as session:
+            stmt = select(ReconciliationAcknowledgementRecord).where(
+                ReconciliationAcknowledgementRecord.symbol == normalized_symbol
+            )
+            if portfolio_id is None:
+                stmt = stmt.where(ReconciliationAcknowledgementRecord.portfolio_id.is_(None))
+            else:
+                stmt = stmt.where(ReconciliationAcknowledgementRecord.portfolio_id == int(portfolio_id))
+            record = session.scalar(stmt)
+            if record is None:
+                record = ReconciliationAcknowledgementRecord(
+                    portfolio_id=portfolio_id,
+                    symbol=normalized_symbol,
+                )
+                session.add(record)
+            record.reason = reason or None
+            record.operator_note = operator_note or None
+            record.mismatch_status = None if mismatch_status is None else str(mismatch_status)
+            record.payload_json = jsonable(dict(payload or {}))
+            record.acknowledged_at = utcnow()
+            record.updated_at = utcnow()
+            session.commit()
+            session.refresh(record)
+            return int(record.id)
+
     def upsert_instrument(
         self,
         payload: Mapping[str, Any],
@@ -698,9 +739,17 @@ class StorageReadRepository:
             record = session.scalars(stmt.order_by(CapitalSnapshotRecord.created_at.desc(), CapitalSnapshotRecord.id.desc())).first()
             return None if record is None else capital_snapshot_to_dict(record)
 
-    def capital_history(self, *, limit: int = 25, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
+    def capital_history(
+        self,
+        *,
+        limit: int = 25,
+        source: str | None = None,
+        portfolio_slug: str | None = None,
+    ) -> list[dict[str, Any]]:
         with self.session_factory() as session:
             stmt = select(CapitalSnapshotRecord)
+            if source:
+                stmt = stmt.where(CapitalSnapshotRecord.source == source)
             if portfolio_slug:
                 portfolio_id = self._portfolio_id(session, portfolio_slug)
                 if portfolio_id is None:
@@ -754,6 +803,22 @@ class StorageReadRepository:
                 stmt = stmt.where(AuditRecord.portfolio_id == portfolio_id)
             records = session.scalars(stmt.order_by(AuditRecord.created_at.desc(), AuditRecord.id.desc()).limit(int(limit))).all()
             return [audit_to_dict(record) for record in records]
+
+    def reconciliation_acknowledgements(self, *, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
+        with self.session_factory() as session:
+            stmt = select(ReconciliationAcknowledgementRecord)
+            if portfolio_slug:
+                portfolio_id = self._portfolio_id(session, portfolio_slug)
+                if portfolio_id is None:
+                    return []
+                stmt = stmt.where(ReconciliationAcknowledgementRecord.portfolio_id == portfolio_id)
+            records = session.scalars(
+                stmt.order_by(
+                    ReconciliationAcknowledgementRecord.acknowledged_at.desc(),
+                    ReconciliationAcknowledgementRecord.id.desc(),
+                )
+            ).all()
+            return [reconciliation_acknowledgement_to_dict(record) for record in records]
 
     def list_portfolios(self) -> list[dict[str, Any]]:
         with self.session_factory() as session:

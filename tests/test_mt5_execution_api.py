@@ -425,6 +425,17 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     assert live_state_body["connected"] is True
     assert live_state_body["holdings"]
     assert live_state_body["reconciliation"]["mismatches"]
+    assert live_state_body["risk_summary"]["reference_model"] in {"hist", "param", "mc", "ewma", "garch", "fhs"}
+    assert live_state_body["capital_usage"]["snapshot_source"] == "mt5_live_bridge"
+    assert live_state_body["operator_alerts"]
+    assert {item["code"] for item in live_state_body["operator_alerts"]} & {
+        "MT5_MANUAL_EVENTS",
+        "DESK_BROKER_DRIFT",
+    }
+    persisted_live_snapshot = client.get("/snapshots/latest", params={"source": "mt5_live_bridge"})
+    assert persisted_live_snapshot.status_code == 200
+    assert persisted_live_snapshot.json()["source"] == "mt5_live_bridge"
+    assert persisted_live_snapshot.json()["payload"]["metadata"]["live_sequence"] == live_state_body["sequence"]
 
     live_events = client.get("/mt5/live/events", params={"after": 0, "limit": 5, "wait_seconds": 0.1})
     assert live_events.status_code == 200
@@ -432,7 +443,7 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
 
     preview = client.post(
         "/execution/preview",
-        json={"symbol": "EURUSD", "delta_position_eur": 1_000.0, "note": "demo preview"},
+        json={"symbol": "EURUSD", "exposure_change": 1_000.0, "note": "demo preview"},
     )
     assert preview.status_code == 200
     preview_body = preview.json()
@@ -442,12 +453,12 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
 
     submit = client.post(
         "/execution/submit",
-        json={"symbol": "EURUSD", "delta_position_eur": 1_000.0, "note": "demo execution"},
+        json={"symbol": "EURUSD", "exposure_change": 1_000.0, "note": "demo execution"},
     )
     assert submit.status_code == 200
     submit_body = submit.json()
     assert submit_body["status"] in {"EXECUTED", "PLACED"}
-    assert submit_body["executed_delta_position_eur"] > 0.0
+    assert submit_body["executed_exposure_change"] > 0.0
     assert submit_body["mt5_result"]["retcode"] == 10009
     assert submit_body["fill_ratio"] is not None
     assert submit_body["broker_status"] in {"filled", "placed"}
@@ -465,7 +476,7 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     positions_after = client.get("/mt5/positions")
     assert positions_after.status_code == 200
     eurusd_after = next(item for item in positions_after.json() if item["symbol"] == "EURUSD")
-    assert eurusd_after["signed_position_eur"] > preview_body["live_positions"][0]["signed_position_eur"]
+    assert eurusd_after["signed_exposure_base_ccy"] > preview_body["live_positions"][0]["signed_exposure_base_ccy"]
 
     latest_live_snapshot = client.get("/snapshots/latest", params={"source": "mt5_live"})
     assert latest_live_snapshot.status_code == 200
@@ -488,7 +499,7 @@ def test_mt5_execution_guard_blocks_on_margin_reject(tmp_path: Path):
 
     preview = client.post(
         "/execution/preview",
-        json={"symbol": "EURUSD", "delta_position_eur": 1_000.0, "note": "blocked"},
+        json={"symbol": "EURUSD", "exposure_change": 1_000.0, "note": "blocked"},
     )
     assert preview.status_code == 200
     preview_body = preview.json()
@@ -497,12 +508,12 @@ def test_mt5_execution_guard_blocks_on_margin_reject(tmp_path: Path):
 
     submit = client.post(
         "/execution/submit",
-        json={"symbol": "EURUSD", "delta_position_eur": 1_000.0, "note": "blocked"},
+        json={"symbol": "EURUSD", "exposure_change": 1_000.0, "note": "blocked"},
     )
     assert submit.status_code == 200
     submit_body = submit.json()
     assert submit_body["status"] in {"BLOCKED", "REJECTED"}
-    assert submit_body["executed_delta_position_eur"] == 0.0
+    assert submit_body["executed_exposure_change"] == 0.0
 
 
 class FillingModeFallbackConnector(FakeMT5Connector):
@@ -529,7 +540,7 @@ def test_mt5_execution_preview_recovers_with_fill_mode_fallback(tmp_path: Path):
 
     preview = client.post(
         "/execution/preview",
-        json={"symbol": "EURUSD", "delta_position_eur": -5_001.0, "note": "fill fallback"},
+        json={"symbol": "EURUSD", "exposure_change": -5_001.0, "note": "fill fallback"},
     )
     assert preview.status_code == 200
     payload = preview.json()

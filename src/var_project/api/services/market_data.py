@@ -21,16 +21,28 @@ def _utcnow() -> datetime:
 class DeskMarketDataService:
     def __init__(self, runtime: "DeskServiceRuntime"):
         self.runtime = runtime
+        self._direct_mt5_probe_ok: bool | None = None
 
     def mt5_configured(self) -> bool:
         config = self.runtime.mt5_config
-        return bool(
+        explicit = bool(
             self.runtime._has_custom_mt5_factory
             or config.agent_base_url
             or config.path
             or config.login
             or config.server
         )
+        if explicit:
+            return True
+        if self._direct_mt5_probe_ok is not None:
+            return self._direct_mt5_probe_ok
+        try:
+            with self.runtime._mt5_gateway() as live:
+                status = live.terminal_status()
+            self._direct_mt5_probe_ok = bool(status.connected)
+        except Exception:
+            self._direct_mt5_probe_ok = False
+        return self._direct_mt5_probe_ok
 
     def should_use_mt5_market_data(self, portfolio: Mapping[str, Any]) -> bool:
         mode = str(portfolio.get("mode") or "offline_fixture").lower()
@@ -397,6 +409,10 @@ class DeskMarketDataService:
 
         executions = self.runtime.storage.recent_execution_results(limit=50, portfolio_slug=portfolio["slug"])
         fills = self.runtime.storage.recent_execution_fills(limit=200, portfolio_slug=portfolio["slug"])
+        acknowledgement_map = {
+            str(item.get("symbol") or "").upper(): item
+            for item in self.runtime.storage.reconciliation_acknowledgements(portfolio_slug=portfolio["slug"])
+        }
         seen_order_tickets = {int(item["ticket"]) for item in order_history if item.get("ticket") is not None}
         seen_deal_tickets = {int(item["ticket"]) for item in deal_history if item.get("ticket") is not None}
         manual_events = sum(1 for item in order_history if item.get("is_manual")) + sum(
@@ -475,6 +491,7 @@ class DeskMarketDataService:
                 mismatch_status = "desk_vs_broker_drift"
                 reason = "Desk exposure and broker live exposure diverge."
             status_counts[mismatch_status] = int(status_counts.get(mismatch_status, 0) + 1)
+            acknowledgement = None if mismatch_status == "match" else acknowledgement_map.get(symbol)
             mismatches.append(
                 {
                     "symbol": symbol,
@@ -489,6 +506,10 @@ class DeskMarketDataService:
                     "position_id": None if deal is None else deal.get("position_id"),
                     "reason": reason,
                     "status": mismatch_status,
+                    "acknowledged": acknowledgement is not None,
+                    "acknowledged_at": None if acknowledgement is None else acknowledgement.get("acknowledged_at"),
+                    "acknowledged_reason": None if acknowledgement is None else acknowledgement.get("reason"),
+                    "acknowledged_note": None if acknowledgement is None else acknowledgement.get("operator_note"),
                 }
             )
 

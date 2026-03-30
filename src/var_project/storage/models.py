@@ -183,6 +183,23 @@ class ExecutionFillRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
+class ReconciliationAcknowledgementRecord(Base):
+    __tablename__ = "reconciliation_acknowledgements"
+    __table_args__ = (
+        UniqueConstraint("portfolio_id", "symbol", name="uq_reconciliation_ack_portfolio_symbol"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    portfolio_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    symbol: Mapped[str] = mapped_column(String(64), index=True)
+    reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    operator_note: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    mismatch_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    acknowledged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class AuditRecord(Base):
     __tablename__ = "audit_events"
 

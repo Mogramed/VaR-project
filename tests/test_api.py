@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from var_project.api import create_app
 from var_project.api.service import DeskApiService
+from var_project.risk.expected_shortfall import historical_var_es
 from test_mt5_execution_api import FakeMT5Connector
 
 
@@ -122,6 +123,7 @@ def test_api_runs_snapshot_backtest_and_report(tmp_path: Path):
     assert health.status_code == 200
     assert health.json()["status"] == "ok"
     assert health.json()["dependencies"]["database"]["schema_ready"] is True
+    assert "mt5_live" in health.json()["dependencies"]
 
     jobs_status = client.get("/jobs/status")
     assert jobs_status.status_code == 200
@@ -250,6 +252,8 @@ def test_api_runs_snapshot_backtest_and_report(tmp_path: Path):
     assert latest_report_payload.status_code == 200
     assert latest_report_payload.json()["portfolio_slug"] == "fx_eur_20k"
     assert latest_report_payload.json()["content"].startswith("# Risk Report")
+    assert "Preferred snapshot source: **historical**" in latest_report_payload.json()["content"]
+    assert "## Portfolio Snapshot" in latest_report_payload.json()["content"]
     assert "## Decision History" in latest_report_payload.json()["content"]
     assert "## Capital History" in latest_report_payload.json()["content"]
     assert "## Audit Trail" in latest_report_payload.json()["content"]
@@ -336,6 +340,7 @@ def test_api_exposes_mt5_market_sync_and_reconciliation(tmp_path: Path):
     assert status.status_code == 200
     assert status.json()["portfolio_mode"] == "live_mt5"
     assert status.json()["symbols"] == ["EURUSD", "USDJPY"]
+    assert status.json()["live_bridge_status"] in {"ok", "degraded"}
 
     instruments = client.get("/instruments")
     assert instruments.status_code == 200
@@ -348,6 +353,18 @@ def test_api_exposes_mt5_market_sync_and_reconciliation(tmp_path: Path):
     live_exposure = client.get("/portfolio/live-exposure")
     assert live_exposure.status_code == 200
     assert live_exposure.json()["items"]
+
+    live_state = client.get("/mt5/live/state")
+    assert live_state.status_code == 200
+    assert live_state.json()["risk_summary"]["source"] == "mt5_live_bridge"
+    assert live_state.json()["capital_usage"]["snapshot_source"] == "mt5_live_bridge"
+    persisted_live_snapshot = client.get("/snapshots/latest", params={"source": "mt5_live_bridge"})
+    assert persisted_live_snapshot.status_code == 200
+    assert persisted_live_snapshot.json()["payload"]["metadata"]["live_sequence"] == live_state.json()["sequence"]
+
+    # Force a broker-side drift after the live snapshot has been persisted so reconciliation
+    # compares the current MT5 state against a stale desk snapshot.
+    FakeMT5Connector.positions_lots["EURUSD"] = 0.25
 
     history_orders = client.get("/mt5/history/orders", params={"limit": 20})
     assert history_orders.status_code == 200
@@ -364,9 +381,109 @@ def test_api_exposes_mt5_market_sync_and_reconciliation(tmp_path: Path):
     assert reconciliation_body["manual_event_count"] >= 1
     assert len(reconciliation_body["mismatches"]) == 2
     assert reconciliation_body["status_counts"]
+    mismatch_row = next(item for item in reconciliation_body["mismatches"] if item["status"] != "match")
+    mismatch_symbol = mismatch_row["symbol"]
+    assert mismatch_row["acknowledged"] is False
+
+    acknowledge = client.post(
+        "/reconciliation/acknowledge",
+        json={
+            "symbol": mismatch_symbol,
+            "reason": "operator_reviewed",
+            "operator_note": "known broker drift",
+        },
+    )
+    assert acknowledge.status_code == 200
+    acknowledge_body = acknowledge.json()
+    assert acknowledge_body["acknowledged"] is True
+    assert acknowledge_body["symbol"] == mismatch_symbol
+    assert acknowledge_body["acknowledgement"]["reason"] == "operator_reviewed"
+
+    reconciliation_after_ack = client.get("/reconciliation/summary")
+    assert reconciliation_after_ack.status_code == 200
+    acknowledged_row = next(
+        item for item in reconciliation_after_ack.json()["mismatches"] if item["symbol"] == mismatch_symbol
+    )
+    assert acknowledged_row["acknowledged"] is True
+    assert acknowledged_row["acknowledged_reason"] == "operator_reviewed"
+    assert acknowledged_row["acknowledged_note"] == "known broker drift"
 
     snapshot = client.post("/snapshots/run", json={})
     assert snapshot.status_code == 200
     latest_snapshot = client.get("/snapshots/latest", params={"source": "historical"})
     assert latest_snapshot.status_code == 200
     assert latest_snapshot.json()["source"] == "historical"
+
+    backtest = client.post("/backtests/run", json={})
+    assert backtest.status_code == 200
+
+    latest_capital = client.get("/capital/latest")
+    assert latest_capital.status_code == 200
+    assert latest_capital.json()["snapshot_source"] == "mt5_live_bridge"
+
+    live_capital_history = client.get(
+        "/capital/history",
+        params={"limit": 5, "source": "mt5_live_bridge"},
+    )
+    assert live_capital_history.status_code == 200
+    assert live_capital_history.json()
+    assert all(item["snapshot_source"] == "mt5_live_bridge" for item in live_capital_history.json())
+
+    live_report_capital_history = client.get(
+        "/reports/capital-history",
+        params={"limit": 5, "source": "mt5_live_bridge"},
+    )
+    assert live_report_capital_history.status_code == 200
+    assert live_report_capital_history.json()
+    assert all(item["snapshot_source"] == "mt5_live_bridge" for item in live_report_capital_history.json())
+
+    refreshed_live_state = client.get("/mt5/live/state")
+    assert refreshed_live_state.status_code == 200
+    live_report = client.get("/reports/latest")
+    assert live_report.status_code == 200
+    assert "Preferred snapshot source: **mt5_live_bridge**" in live_report.json()["content"]
+    assert "## Portfolio Snapshot" in live_report.json()["content"]
+    latest_live_report_artifact = client.get("/artifacts/latest/daily_report")
+    assert latest_live_report_artifact.status_code == 200
+    assert latest_live_report_artifact.json()["details"]["auto_generated"] is True
+
+
+def test_live_stress_uses_mt5_holdings(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+    FakeMT5Connector.reset()
+    FakeMT5Connector.positions_lots = {"EURUSD": 0.01, "USDJPY": 0.01}
+
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True))
+    stress = client.post(
+        "/snapshots/stress",
+        json={
+            "scenarios": [
+                {"name": "Small shock", "vol_multiplier": 1.2, "shock_pnl": -5.0},
+            ]
+        },
+    )
+    assert stress.status_code == 200
+    stress_body = stress.json()
+
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+    portfolio = service.runtime._resolve_portfolio_context(None)
+    with service.runtime._mt5_gateway() as live:
+        holdings = [item.to_dict() for item in live.holdings(symbols=None)]
+    bundle = service.runtime._compute_portfolio_state_for_holdings(
+        portfolio=portfolio,
+        holdings=holdings,
+        timeframe=service.runtime._default_timeframe(),
+        days=service.runtime._default_days(),
+        min_coverage=float(service.runtime.data_defaults["min_coverage"]),
+        config=service.runtime._build_risk_model_config(None, None, None, None, None),
+        window=int(service.runtime.risk_defaults["window"]),
+        snapshot_source="mt5_live_bridge",
+    )
+    expected = historical_var_es(bundle["sample"]["pnl"], 0.95)
+
+    assert stress_body["portfolio_slug"] == "fx_eur_20k"
+    assert stress_body["baseline_var"] == expected.var
+    assert stress_body["baseline_es"] == expected.es

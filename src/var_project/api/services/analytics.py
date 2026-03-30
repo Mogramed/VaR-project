@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from var_project.alerts.engine import alerts_from_capital_snapshot, alerts_from_risk_budget
+from var_project.api.services.mt5 import DeskMt5Service
 from var_project.api.services.runtime import DeskServiceRuntime
 from var_project.engine.risk_engine import RiskEngine
 from var_project.reporting.render import render_daily_markdown
@@ -14,6 +15,28 @@ from var_project.validation.workflows import persist_validation_summary
 class DeskAnalyticsService:
     def __init__(self, runtime: DeskServiceRuntime):
         self.runtime = runtime
+
+    def _resolve_report_snapshot(self, *, portfolio_slug: str) -> tuple[dict[str, Any] | None, str]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        preferred_sources: list[str] = []
+        if self.runtime.market_data.should_use_mt5_market_data(portfolio):
+            try:
+                live_state = DeskMt5Service(self.runtime).live_state(portfolio_slug=portfolio["slug"])
+            except Exception:
+                live_state = None
+            if live_state is not None and (live_state.get("risk_summary") or {}).get("source") == "mt5_live_bridge":
+                preferred_sources.append("mt5_live_bridge")
+        preferred_sources.extend(["historical", "live"])
+
+        seen: set[str] = set()
+        for source in preferred_sources:
+            if source in seen:
+                continue
+            seen.add(source)
+            snapshot = self.runtime.storage.latest_snapshot(source=source, portfolio_slug=portfolio["slug"])
+            if snapshot is not None:
+                return snapshot, source
+        return None, "historical"
 
     def run_snapshot(
         self,
@@ -297,26 +320,37 @@ class DeskAnalyticsService:
 
     def run_report(self, *, compare_path: str | None = None, portfolio_slug: str | None = None) -> dict[str, Any]:
         self.runtime.require_storage_ready()
-        compare_csv = self.runtime._resolve_compare_path(compare_path, portfolio_slug=portfolio_slug)
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        compare_csv = self.runtime._resolve_compare_path(compare_path, portfolio_slug=portfolio["slug"])
         if compare_csv is None or not compare_csv.exists():
             raise FileNotFoundError("No compare CSV available to generate report.")
 
         out_dir = self.runtime.storage.settings.reports_dir
+        report_snapshot, report_snapshot_source = self._resolve_report_snapshot(portfolio_slug=portfolio["slug"])
+        snapshot_id = None if report_snapshot is None else report_snapshot.get("id")
+        portfolio_id = self.runtime._resolve_portfolio_id(portfolio["slug"])
         md_path = render_daily_markdown(
             compare_csv=compare_csv,
             out_dir=out_dir,
-            snapshot_dir=self.runtime.storage.settings.snapshots_dir,
+            snapshot=report_snapshot,
             risk_limits_yaml=self.runtime.root / "config" / "risk_limits.yaml",
+            report_label=portfolio["name"],
         )
-        self.runtime._append_governance_sections(md_path)
+        self.runtime._append_governance_sections(
+            md_path,
+            portfolio_slug=portfolio["slug"],
+            capital_source=report_snapshot_source,
+        )
         compare_artifact = self.runtime.storage.register_artifact(compare_csv, artifact_type="backtest_compare")
         self.runtime.storage.register_artifact(
             md_path,
             artifact_type="daily_report",
             details={
-                "portfolio_slug": portfolio_slug or self.runtime.portfolio["slug"],
+                "portfolio_slug": portfolio["slug"],
                 "compare_csv": str(compare_csv.resolve()),
                 "source_artifact_id": compare_artifact,
+                "snapshot_source": report_snapshot_source,
+                "snapshot_id": snapshot_id,
             },
         )
 
@@ -330,17 +364,107 @@ class DeskAnalyticsService:
                 self.runtime.storage.register_artifact(
                     chart_path,
                     artifact_type="report_chart",
-                    details={"report_markdown": str(md_path.resolve())},
+                    details={
+                        "report_markdown": str(md_path.resolve()),
+                        "portfolio_slug": portfolio["slug"],
+                        "snapshot_source": report_snapshot_source,
+                    },
                 )
 
         self.runtime.storage.record_audit_event(
             actor="api",
             action_type="report.run",
             object_type="daily_report",
-            payload={"report_markdown": str(md_path.resolve()), "compare_csv": str(compare_csv.resolve())},
-            portfolio_id=None if portfolio_slug is None else self.runtime._resolve_portfolio_id(portfolio_slug),
+            payload={
+                "portfolio_slug": portfolio["slug"],
+                "report_markdown": str(md_path.resolve()),
+                "compare_csv": str(compare_csv.resolve()),
+                "snapshot_source": report_snapshot_source,
+                "snapshot_id": snapshot_id,
+            },
+            portfolio_id=portfolio_id,
         )
         return {
             "report_markdown": str(md_path.resolve()),
             "chart_paths": chart_paths,
+        }
+
+    def run_stress_test(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        scenarios: list[dict[str, Any]] | None = None,
+        alpha: float | None = None,
+    ) -> dict[str, Any]:
+        from var_project.risk.stress import StressScenario, stress_report
+        from var_project.risk.expected_shortfall import historical_var_es
+
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        config = self.runtime._build_risk_model_config(alpha, None, None, None, None)
+        if self.runtime.market_data.should_use_mt5_market_data(portfolio):
+            self.runtime.market_data.sync_market_data(
+                portfolio_slug=portfolio["slug"],
+                days=int(self.runtime._default_days()),
+                timeframes=[str(self.runtime._default_timeframe())],
+            )
+            live_state = DeskMt5Service(self.runtime).live_state(portfolio_slug=portfolio["slug"])
+            live_holdings = list(live_state.get("holdings") or [])
+            if live_holdings:
+                bundle = self.runtime._compute_portfolio_state_for_holdings(
+                    portfolio=portfolio,
+                    holdings=live_holdings,
+                    timeframe=self.runtime._default_timeframe(),
+                    days=self.runtime._default_days(),
+                    min_coverage=float(self.runtime.data_defaults["min_coverage"]),
+                    config=config,
+                    window=int(self.runtime.risk_defaults["window"]),
+                    snapshot_source="mt5_live_bridge",
+                    snapshot_timestamp=str(live_state.get("generated_at") or datetime.now(timezone.utc).isoformat()),
+                )
+            else:
+                bundle = self.runtime._compute_portfolio_state(
+                    portfolio_slug=portfolio["slug"],
+                    config=config,
+                )
+        else:
+            bundle = self.runtime._compute_portfolio_state(
+                portfolio_slug=portfolio["slug"],
+                config=config,
+            )
+        pnl = bundle["sample"]["pnl"]
+
+        baseline = historical_var_es(pnl, config.alpha)
+
+        if not scenarios:
+            scenarios = [
+                {"name": "2008 Crisis", "vol_multiplier": 3.0, "shock_pnl": 0.0},
+                {"name": "COVID March 2020", "vol_multiplier": 4.0, "shock_pnl": -0.05 * float(pnl.std())},
+                {"name": "ECB Rate Shock", "vol_multiplier": 2.0, "shock_pnl": -0.02 * float(pnl.std())},
+            ]
+
+        stress_scenarios = [
+            StressScenario(
+                name=s["name"],
+                vol_multiplier=float(s.get("vol_multiplier", 1.0)),
+                shock_pnl=float(s.get("shock_pnl", 0.0)),
+            )
+            for s in scenarios
+        ]
+        results = stress_report(pnl, config.alpha, stress_scenarios)
+
+        return {
+            "portfolio_slug": portfolio["slug"],
+            "alpha": config.alpha,
+            "baseline_var": baseline.var,
+            "baseline_es": baseline.es,
+            "scenarios": [
+                {
+                    "name": sc.name,
+                    "vol_multiplier": sc.vol_multiplier,
+                    "shock_pnl": sc.shock_pnl,
+                    "var": results[sc.name].var,
+                    "es": results[sc.name].es,
+                }
+                for sc in stress_scenarios
+            ],
         }

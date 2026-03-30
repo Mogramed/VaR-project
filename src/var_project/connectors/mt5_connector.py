@@ -74,6 +74,33 @@ class MT5Connector:
         if not self._initialized or not self._mt5:
             raise MT5ConnectionError("MT5 non initialisé : appelle init() avant")
 
+    def _last_error(self) -> Any:
+        if not self._mt5:
+            return None
+        try:
+            return self._mt5.last_error()
+        except Exception:
+            return None
+
+    def _should_retry_after_error(self, error: Any) -> bool:
+        if not isinstance(error, tuple) or not error:
+            return False
+        try:
+            return int(error[0]) < 0
+        except (TypeError, ValueError):
+            return False
+
+    def _call_with_reconnect(self, func, *args, **kwargs):
+        self._require_ready()
+        result = func(*args, **kwargs)
+        if result is not None:
+            return result
+        if not self._should_retry_after_error(self._last_error()):
+            return None
+        self.shutdown()
+        self.init()
+        return func(*args, **kwargs)
+
     def _coerce_namedtuple(self, value: Any) -> Any:
         if value is None:
             return None
@@ -86,31 +113,27 @@ class MT5Connector:
         return value
 
     def terminal_info(self) -> dict[str, Any]:
-        self._require_ready()
-        info = self._mt5.terminal_info()
+        info = self._call_with_reconnect(self._mt5.terminal_info)
         if info is None:
             raise MT5ConnectionError(f"terminal_info() a echoue: {self._mt5.last_error()}")
         return dict(self._coerce_namedtuple(info) or {})
 
     def account_info(self) -> dict[str, Any]:
-        self._require_ready()
-        info = self._mt5.account_info()
+        info = self._call_with_reconnect(self._mt5.account_info)
         if info is None:
             raise MT5ConnectionError(f"account_info() a echoue: {self._mt5.last_error()}")
         return dict(self._coerce_namedtuple(info) or {})
 
     def symbol_info(self, symbol: str) -> dict[str, Any]:
-        self._require_ready()
         self.ensure_symbol(symbol)
-        info = self._mt5.symbol_info(symbol)
+        info = self._call_with_reconnect(self._mt5.symbol_info, symbol)
         if info is None:
             raise MT5ConnectionError(f"symbol_info() a echoue pour {symbol}: {self._mt5.last_error()}")
         return dict(self._coerce_namedtuple(info) or {})
 
     def symbol_info_tick(self, symbol: str) -> dict[str, Any]:
-        self._require_ready()
         self.ensure_symbol(symbol)
-        tick = self._mt5.symbol_info_tick(symbol)
+        tick = self._call_with_reconnect(self._mt5.symbol_info_tick, symbol)
         if tick is None:
             raise MT5ConnectionError(f"symbol_info_tick() a echoue pour {symbol}: {self._mt5.last_error()}")
         payload = dict(self._coerce_namedtuple(tick) or {})
@@ -124,23 +147,21 @@ class MT5Connector:
         return payload
 
     def positions_get(self, symbol: str | None = None) -> list[dict[str, Any]]:
-        self._require_ready()
         if symbol:
             self.ensure_symbol(symbol)
-            rows = self._mt5.positions_get(symbol=symbol)
+            rows = self._call_with_reconnect(self._mt5.positions_get, symbol=symbol)
         else:
-            rows = self._mt5.positions_get()
+            rows = self._call_with_reconnect(self._mt5.positions_get)
         if rows is None:
             raise MT5ConnectionError(f"positions_get() a echoue: {self._mt5.last_error()}")
         return [dict(self._coerce_namedtuple(row) or {}) for row in rows]
 
     def orders_get(self, symbol: str | None = None) -> list[dict[str, Any]]:
-        self._require_ready()
         if symbol:
             self.ensure_symbol(symbol)
-            rows = self._mt5.orders_get(symbol=symbol)
+            rows = self._call_with_reconnect(self._mt5.orders_get, symbol=symbol)
         else:
-            rows = self._mt5.orders_get()
+            rows = self._call_with_reconnect(self._mt5.orders_get)
         if rows is None:
             raise MT5ConnectionError(f"orders_get() a echoue: {self._mt5.last_error()}")
         return [dict(self._coerce_namedtuple(row) or {}) for row in rows]
@@ -152,10 +173,9 @@ class MT5Connector:
         *,
         symbol: str | None = None,
     ) -> list[dict[str, Any]]:
-        self._require_ready()
         start = self._history_datetime(date_from)
         end = self._history_datetime(date_to)
-        rows = self._mt5.history_orders_get(start, end)
+        rows = self._call_with_reconnect(self._mt5.history_orders_get, start, end)
         if rows is None:
             raise MT5ConnectionError(f"history_orders_get() a echoue: {self._mt5.last_error()}")
         payload = [dict(self._coerce_namedtuple(row) or {}) for row in rows]
@@ -171,10 +191,9 @@ class MT5Connector:
         *,
         symbol: str | None = None,
     ) -> list[dict[str, Any]]:
-        self._require_ready()
         start = self._history_datetime(date_from)
         end = self._history_datetime(date_to)
-        rows = self._mt5.history_deals_get(start, end)
+        rows = self._call_with_reconnect(self._mt5.history_deals_get, start, end)
         if rows is None:
             raise MT5ConnectionError(f"history_deals_get() a echoue: {self._mt5.last_error()}")
         payload = [dict(self._coerce_namedtuple(row) or {}) for row in rows]
@@ -185,14 +204,24 @@ class MT5Connector:
 
     def order_check(self, request: dict[str, Any]) -> dict[str, Any]:
         self._require_ready()
-        result = self._mt5.order_check(dict(request))
+        payload = dict(request)
+        result = self._mt5.order_check(payload)
+        if result is None and self._should_retry_after_error(self._last_error()):
+            self.shutdown()
+            self.init()
+            result = self._mt5.order_check(dict(request))
         if result is None:
             raise MT5ConnectionError(f"order_check() a echoue: {self._mt5.last_error()}")
         return dict(self._coerce_namedtuple(result) or {})
 
     def order_send(self, request: dict[str, Any]) -> dict[str, Any]:
         self._require_ready()
-        result = self._mt5.order_send(dict(request))
+        payload = dict(request)
+        result = self._mt5.order_send(payload)
+        if result is None and self._should_retry_after_error(self._last_error()):
+            self.shutdown()
+            self.init()
+            result = self._mt5.order_send(dict(request))
         if result is None:
             raise MT5ConnectionError(f"order_send() a echoue: {self._mt5.last_error()}")
         return dict(self._coerce_namedtuple(result) or {})
@@ -206,7 +235,7 @@ class MT5Connector:
         """
         self._require_ready()
 
-        info = self._mt5.symbol_info(symbol)
+        info = self._call_with_reconnect(self._mt5.symbol_info, symbol)
         if info is None:
             raise MT5ConnectionError(
                 f"Symbole inconnu dans MT5: '{symbol}'. "

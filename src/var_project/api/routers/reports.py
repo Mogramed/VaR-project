@@ -53,10 +53,11 @@ def report_decision_history(
 @router.get("/reports/capital-history", response_model=list[CapitalUsageSnapshotResponse])
 def report_capital_history(
     limit: int = Query(default=25, ge=1, le=200),
+    source: str | None = Query(default=None),
     portfolio_slug: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> list[CapitalUsageSnapshotResponse]:
     return [
         CapitalUsageSnapshotResponse.model_validate(item)
-        for item in service.report_capital_history(limit=limit, portfolio_slug=portfolio_slug)
+        for item in service.report_capital_history(limit=limit, source=source, portfolio_slug=portfolio_slug)
     ]

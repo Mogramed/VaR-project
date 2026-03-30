@@ -70,7 +70,7 @@ class RiskSnapshot:
 @dataclass(frozen=True)
 class PositionRiskAttribution:
     symbol: str
-    position_eur: float
+    exposure_base_ccy: float
     standalone_var: float
     standalone_es: float
     incremental_var: float
@@ -82,9 +82,14 @@ class PositionRiskAttribution:
     contribution_pct_var: float | None
     contribution_pct_es: float | None
 
+    @property
+    def position_eur(self) -> float:
+        return self.exposure_base_ccy
+
     def to_dict(self) -> Dict[str, float | str | None]:
         return {
             "symbol": self.symbol,
+            "exposure_base_ccy": self.exposure_base_ccy,
             "position_eur": self.position_eur,
             "standalone_var": self.standalone_var,
             "standalone_es": self.standalone_es,
@@ -313,7 +318,7 @@ class RiskEngine:
                 component_es = position * marginal_es
                 model_payloads[model_name][symbol] = PositionRiskAttribution(
                     symbol=symbol,
-                    position_eur=position,
+                    exposure_base_ccy=position,
                     standalone_var=float(standalone.var),
                     standalone_es=float(standalone.es),
                     incremental_var=float(result.var - reduced.var),

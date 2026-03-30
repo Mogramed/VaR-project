@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { api } from "@/lib/api/client";
@@ -21,8 +22,10 @@ const decisionPresets = ["500000", "1000000", "2500000", "5000000"];
 
 export function TradeDecisionPanel({
   portfolioSlug,
+  onEvaluated,
 }: {
   portfolioSlug: string;
+  onEvaluated?: (result: RiskDecisionResponse) => void;
 }) {
   const router = useRouter();
   const [symbol, setSymbol] = useState("EURUSD");
@@ -35,19 +38,24 @@ export function TradeDecisionPanel({
       api.evaluateDecision({
         portfolio_slug: portfolioSlug,
         symbol,
-        delta_position_eur: (side === "buy" ? 1 : -1) * Number(notional),
+        exposure_change: (side === "buy" ? 1 : -1) * Number(notional),
         note,
       }),
-    onSuccess: () => router.refresh(),
+    onSuccess: (result) => {
+      onEvaluated?.(result);
+      if (!onEvaluated) {
+        router.refresh();
+      }
+    },
   });
 
   const result = mutation.data;
   const fillRatio = useMemo(() => {
-    if (!result || result.requested_delta_position_eur === 0) {
+    if (!result || result.requested_exposure_change === 0) {
       return null;
     }
     return Math.abs(
-      result.approved_delta_position_eur / result.requested_delta_position_eur,
+      result.approved_exposure_change / result.requested_exposure_change,
     );
   }, [result]);
   const signedDelta =
@@ -90,7 +98,7 @@ export function TradeDecisionPanel({
             tone="accent"
           />
           <FormMetaTile
-            label="Signed delta"
+            label="Signed exposure"
             value={formatSignedCurrency(signedDelta)}
             hint={side === "buy" ? "Risk-increasing direction" : "Risk-reducing direction"}
             tone={side === "buy" ? "warning" : "success"}
@@ -123,10 +131,10 @@ export function TradeDecisionPanel({
               <option value="buy">Buy</option>
               <option value="sell">Sell</option>
             </FieldSelect>
-            <FieldHint>The sign of the delta updates automatically from the side.</FieldHint>
+            <FieldHint>The sign of the exposure change updates automatically from the side.</FieldHint>
           </div>
           <div>
-            <FieldLabel htmlFor="decision-notional">Notional EUR</FieldLabel>
+            <FieldLabel htmlFor="decision-notional">Target exposure change</FieldLabel>
             <FieldInput
               id="decision-notional"
               type="number"
@@ -244,11 +252,11 @@ function DecisionResult({
         </div>
       </div>
 
-      <div className="mt-6 grid gap-4 sm:grid-cols-4">
+        <div className="mt-6 grid gap-4 sm:grid-cols-4">
         {[
-          ["Requested delta", formatCurrency(result.requested_delta_position_eur)],
-          ["Approved delta", formatCurrency(result.approved_delta_position_eur)],
-          ["Resulting position", formatCurrency(result.resulting_position_eur)],
+          ["Requested exposure", formatCurrency(result.requested_exposure_change)],
+          ["Approved exposure", formatCurrency(result.approved_exposure_change)],
+          ["Resulting exposure", formatCurrency(result.resulting_exposure)],
           ["Fill ratio", fillRatio == null ? "n/a" : formatPercent(fillRatio, 0)],
         ].map(([label, value]) => (
           <div
@@ -263,10 +271,10 @@ function DecisionResult({
         ))}
       </div>
 
-      {result.suggested_delta_position_eur != null &&
-      result.suggested_delta_position_eur !== result.approved_delta_position_eur ? (
+      {result.suggested_exposure_change != null &&
+      result.suggested_exposure_change !== result.approved_exposure_change ? (
         <div className="mt-4 rounded-[1.35rem] border border-amber-300/16 bg-amber-300/8 px-4 py-4 text-sm text-[var(--color-text-soft)]">
-          Suggested signed delta {formatCurrency(result.suggested_delta_position_eur)} if you
+          Suggested exposure change {formatCurrency(result.suggested_exposure_change)} if you
           want the desk to stay within the same advisory envelope.
         </div>
       ) : null}
@@ -288,9 +296,21 @@ function DecisionResult({
           ))}
         </ul>
       </div>
+      <div className="mt-6 rounded-[1.35rem] border border-white/8 bg-white/[0.02] px-4 py-4">
+        <div className="mono text-[11px] uppercase tracking-[0.24em] text-[var(--color-text-muted)]">
+          Broker preview
+        </div>
+        <div className="mt-3 text-sm leading-7 text-[var(--color-text-soft)]">
+          Advisory evaluation has no broker connection — exact lot sizing, margin requirement and VaR impact are only available in the{" "}
+          <Link href="/desk/execution" className="text-[var(--color-accent)] underline-offset-2 hover:underline">
+            Dry Run
+          </Link>{" "}
+          panel.
+        </div>
+      </div>
       <div className="mt-6">
-        <ButtonLink href="/desk/simulation" variant="secondary">
-          Continue to simulation
+        <ButtonLink href="/desk/blotter" variant="secondary">
+          Continue to blotter
         </ButtonLink>
       </div>
     </div>
@@ -318,7 +338,7 @@ function StatePanel({
               : formatPercent(state.budget_utilization_var, 0),
           ],
           ["Headroom", formatCurrency(state.headroom_var)],
-          ["Gross", formatCurrency(state.gross_notional)],
+          ["Gross exposure", formatCurrency(state.gross_exposure)],
           ["Status", state.status],
         ].map(([label, value]) => (
           <div key={label} className="border-t border-white/8 pt-3">

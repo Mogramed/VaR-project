@@ -4,6 +4,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import type {
   AuditEventResponse,
   DealHistoryEntryResponse,
+  ExecutionFillResponse,
   ExecutionResultResponse,
   HoldingSnapshotResponse,
   InstrumentDefinitionResponse,
@@ -34,6 +35,9 @@ function toneFromKeyword(value: string) {
     normalized.includes("reduce") ||
     normalized.includes("warn") ||
     normalized.includes("amber") ||
+    normalized.includes("partial") ||
+    normalized.includes("manual") ||
+    normalized.includes("drift") ||
     normalized.includes("watch") ||
     normalized.includes("hold")
   ) {
@@ -215,25 +219,25 @@ export function DecisionHistoryTable({
       ),
     },
     {
-      accessorKey: "requested_delta_position_eur",
-      header: "Requested",
+      accessorKey: "requested_exposure_change",
+      header: "Requested exposure",
       cell: ({ row }) => (
-        <span className="mono">{formatCurrency(row.original.requested_delta_position_eur)}</span>
+        <span className="mono">{formatCurrency(row.original.requested_exposure_change)}</span>
       ),
     },
     {
-      accessorKey: "approved_delta_position_eur",
-      header: "Approved",
+      accessorKey: "approved_exposure_change",
+      header: "Approved exposure",
       cell: ({ row }) => (
-        <span className="mono text-white">{formatCurrency(row.original.approved_delta_position_eur)}</span>
+        <span className="mono text-white">{formatCurrency(row.original.approved_exposure_change)}</span>
       ),
     },
     {
       id: "fill_ratio",
       header: "Fill",
       cell: ({ row }) => {
-        const requested = Math.abs(row.original.requested_delta_position_eur);
-        const approved = Math.abs(row.original.approved_delta_position_eur);
+        const requested = Math.abs(row.original.requested_exposure_change);
+        const approved = Math.abs(row.original.approved_exposure_change);
         return requested === 0 ? "n/a" : formatPercent(approved / requested, 0);
       },
     },
@@ -299,9 +303,9 @@ export function MT5PositionsTable({ rows }: { rows: MT5PositionResponse[] }) {
       cell: ({ row }) => <span className="mono">{row.original.volume_lots.toFixed(2)}</span>,
     },
     {
-      accessorKey: "signed_position_eur",
+      accessorKey: "signed_exposure_base_ccy",
       header: "Exposure",
-      cell: ({ row }) => <span className="mono text-white">{formatCurrency(row.original.signed_position_eur)}</span>,
+      cell: ({ row }) => <span className="mono text-white">{formatCurrency(row.original.signed_exposure_base_ccy)}</span>,
     },
     {
       accessorKey: "profit",
@@ -382,10 +386,10 @@ export function HoldingsTable({ rows }: { rows: HoldingSnapshotResponse[] }) {
       cell: ({ row }) => <span className="mono">{row.original.volume_lots.toFixed(2)}</span>,
     },
     {
-      accessorKey: "signed_position_eur",
+      accessorKey: "signed_exposure_base_ccy",
       header: "Exposure",
       cell: ({ row }) => (
-        <span className="mono text-white">{formatCurrency(row.original.signed_position_eur)}</span>
+        <span className="mono text-white">{formatCurrency(row.original.signed_exposure_base_ccy)}</span>
       ),
     },
     {
@@ -524,8 +528,10 @@ export function DealHistoryTable({ rows }: { rows: DealHistoryEntryResponse[] })
 
 export function ReconciliationTable({
   rows,
+  onAcknowledge,
 }: {
   rows: ReconciliationMismatchResponse[];
+  onAcknowledge?: (symbol: string) => void;
 }) {
   const columns: ColumnDef<ReconciliationMismatchResponse>[] = [
     {
@@ -560,6 +566,41 @@ export function ReconciliationTable({
         <StatusBadge label={row.original.status} tone={toneFromKeyword(row.original.status)} />
       ),
     },
+    {
+      id: "acknowledgement",
+      header: "Ack",
+      cell: ({ row }) =>
+        row.original.acknowledged ? (
+          <div className="space-y-1">
+            <StatusBadge label="Acknowledged" tone="neutral" />
+            <div className="text-xs text-[var(--color-text-muted)]">
+              {formatTimestamp(row.original.acknowledged_at)}
+            </div>
+          </div>
+        ) : (
+          <span className="text-xs text-[var(--color-text-muted)]">Pending</span>
+        ),
+    },
+    ...(onAcknowledge
+      ? [
+          {
+            id: "action",
+            header: "Action",
+            cell: ({ row }: { row: { original: ReconciliationMismatchResponse } }) =>
+              row.original.status !== "match" && !row.original.acknowledged ? (
+                <button
+                  type="button"
+                  className="rounded-full border border-white/12 bg-white/5 px-3 py-1 text-xs font-semibold text-[var(--color-text)] transition hover:bg-white/8"
+                  onClick={() => onAcknowledge(row.original.symbol)}
+                >
+                  Acknowledge
+                </button>
+              ) : row.original.acknowledged ? (
+                <span className="text-xs text-[var(--color-text-muted)]">Logged</span>
+              ) : null,
+          } satisfies ColumnDef<ReconciliationMismatchResponse>,
+        ]
+      : []),
   ];
 
   return <DataGrid data={rows} columns={columns} maxHeight="28rem" />;
@@ -631,14 +672,14 @@ export function ExecutionHistoryTable({ rows }: { rows: ExecutionResultResponse[
       ),
     },
     {
-      accessorKey: "approved_delta_position_eur",
-      header: "Approved",
-      cell: ({ row }) => <span className="mono">{formatCurrency(row.original.approved_delta_position_eur)}</span>,
+      accessorKey: "approved_exposure_change",
+      header: "Approved exposure",
+      cell: ({ row }) => <span className="mono">{formatCurrency(row.original.approved_exposure_change)}</span>,
     },
     {
-      accessorKey: "executed_delta_position_eur",
-      header: "Executed",
-      cell: ({ row }) => <span className="mono text-white">{formatCurrency(row.original.executed_delta_position_eur)}</span>,
+      accessorKey: "executed_exposure_change",
+      header: "Executed exposure",
+      cell: ({ row }) => <span className="mono text-white">{formatCurrency(row.original.executed_exposure_change)}</span>,
     },
     {
       accessorKey: "volume_lots",
@@ -673,6 +714,63 @@ export function ExecutionHistoryTable({ rows }: { rows: ExecutionResultResponse[
   ];
 
   return <DataGrid data={rows} columns={columns} maxHeight="34rem" />;
+}
+
+export function ExecutionFillsTable({ rows }: { rows: ExecutionFillResponse[] }) {
+  const columns: ColumnDef<ExecutionFillResponse>[] = [
+    {
+      accessorKey: "deal_ticket",
+      header: "Deal",
+      cell: ({ row }) => <span className="mono">{row.original.deal_ticket ?? "n/a"}</span>,
+    },
+    {
+      accessorKey: "symbol",
+      header: "Symbol",
+      cell: ({ row }) => <span className="font-semibold text-white">{row.original.symbol}</span>,
+    },
+    {
+      accessorKey: "side",
+      header: "Side",
+      cell: ({ row }) =>
+        row.original.side ? (
+          <StatusBadge label={row.original.side} tone={toneFromKeyword(row.original.side)} />
+        ) : (
+          "n/a"
+        ),
+    },
+    {
+      accessorKey: "volume_lots",
+      header: "Lots",
+      cell: ({ row }) => <span className="mono">{row.original.volume_lots.toFixed(2)}</span>,
+    },
+    {
+      accessorKey: "price",
+      header: "Price",
+      cell: ({ row }) => (row.original.price == null ? "n/a" : row.original.price.toFixed(4)),
+    },
+    {
+      accessorKey: "slippage_points",
+      header: "Slippage",
+      cell: ({ row }) => (row.original.slippage_points == null ? "n/a" : row.original.slippage_points.toFixed(1)),
+    },
+    {
+      accessorKey: "is_manual",
+      header: "Origin",
+      cell: ({ row }) => (
+        <StatusBadge
+          label={row.original.is_manual ? "Manual" : "Desk"}
+          tone={row.original.is_manual ? "warning" : "success"}
+        />
+      ),
+    },
+    {
+      accessorKey: "created_at",
+      header: "Time",
+      cell: ({ row }) => formatTimestamp(row.original.created_at ?? row.original.time_utc),
+    },
+  ];
+
+  return <DataGrid data={rows} columns={columns} maxHeight="28rem" />;
 }
 
 function humanizeAssetClass(value: string | null | undefined) {

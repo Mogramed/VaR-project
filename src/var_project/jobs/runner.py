@@ -7,7 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from var_project.core.settings import get_data_defaults, get_risk_defaults, load_settings
+from var_project.core.settings import (
+    get_data_defaults,
+    get_mt5_config,
+    get_portfolio_contexts,
+    get_risk_defaults,
+    load_settings,
+)
 from var_project.storage import AppStorage
 
 
@@ -32,6 +38,7 @@ class WorkerSettings:
     loop_sleep_seconds: int = 30
     snapshot: ScheduledJob = ScheduledJob(enabled=True, interval_seconds=900)
     backtest: ScheduledJob = ScheduledJob(enabled=True, interval_seconds=3600)
+    live_refresh: ScheduledJob = ScheduledJob(enabled=False, interval_seconds=15)
     report: ScheduledJob = ScheduledJob(enabled=True, interval_seconds=3600)
 
 
@@ -70,6 +77,8 @@ def load_worker_settings(root: Path) -> WorkerSettings:
     raw_cfg = load_settings(root)
     data_defaults = get_data_defaults(raw_cfg)
     risk_defaults = get_risk_defaults(raw_cfg)
+    mt5_config = get_mt5_config(raw_cfg)
+    portfolios = get_portfolio_contexts(raw_cfg)
     jobs_cfg = dict(raw_cfg.get("jobs") or {})
 
     default_timeframe = (data_defaults["timeframes"][0] if data_defaults["timeframes"] else "H1")
@@ -106,6 +115,23 @@ def load_worker_settings(root: Path) -> WorkerSettings:
         df_t_default=mc_defaults["df_t"],
         seed_default=mc_defaults["seed"],
     )
+    live_refresh_default_enabled = bool(
+        mt5_config.live_enabled
+        and any(str(portfolio.get("mode") or "").lower() in {"live_mt5", "hybrid"} for portfolio in portfolios)
+        and any(
+            [
+                mt5_config.agent_base_url,
+                mt5_config.path,
+                mt5_config.login,
+                mt5_config.server,
+            ]
+        )
+    )
+    live_refresh = _scheduled_job(
+        dict(jobs_cfg.get("live_refresh") or {}),
+        enabled_default=live_refresh_default_enabled,
+        interval_default=max(5, min(15, int(max(float(mt5_config.live_history_poll_seconds), 1.0)))),
+    )
     report = _scheduled_job(
         dict(jobs_cfg.get("report") or {}),
         enabled_default=True,
@@ -116,21 +142,30 @@ def load_worker_settings(root: Path) -> WorkerSettings:
         loop_sleep_seconds=int(jobs_cfg.get("loop_sleep_seconds", 30)),
         snapshot=snapshot,
         backtest=backtest,
+        live_refresh=live_refresh,
         report=report,
     )
 
 
 class JobRunner:
-    def __init__(self, root: Path, settings: WorkerSettings | None = None, *, bootstrap_storage: bool = False):
+    def __init__(
+        self,
+        root: Path,
+        settings: WorkerSettings | None = None,
+        *,
+        bootstrap_storage: bool = False,
+        mt5_connector_factory: Any | None = None,
+    ):
         self.root = root.resolve()
         self.settings = settings or load_worker_settings(self.root)
         self.bootstrap_storage = bool(bootstrap_storage)
+        self.mt5_connector_factory = mt5_connector_factory
         self.last_run: dict[str, float] = {}
         self.log = logging.getLogger("var_project.jobs")
 
     def run_pending(self, *, force_all: bool = False) -> dict[str, Any]:
         results: dict[str, Any] = {}
-        for job_name in ("snapshot", "backtest", "report"):
+        for job_name in ("snapshot", "backtest", "live_refresh", "report"):
             job_cfg = getattr(self.settings, job_name)
             if not job_cfg.enabled:
                 continue
@@ -162,7 +197,11 @@ class JobRunner:
     def _run_job(self, job_name: str, job_cfg: ScheduledJob) -> dict[str, Any]:
         from var_project.api.service import DeskApiService
 
-        service = DeskApiService(self.root, bootstrap_storage=self.bootstrap_storage)
+        service = DeskApiService(
+            self.root,
+            mt5_connector_factory=self.mt5_connector_factory,
+            bootstrap_storage=self.bootstrap_storage,
+        )
         if job_name == "snapshot":
             result = service.run_snapshot(
                 timeframe=job_cfg.timeframe,
@@ -193,6 +232,110 @@ class JobRunner:
             self.log.info("backtest job ok: %s", result["compare_csv"])
             return result
 
+        if job_name == "live_refresh":
+            if not service.mt5_config.live_enabled:
+                result = {"status": "skipped", "reason": "MT5 live bridge is disabled.", "refreshed_portfolios": []}
+                self.log.info("live refresh job skipped: %s", result["reason"])
+                return result
+
+            storage_ready = bool(service.runtime.storage_ready)
+            refreshed_portfolios: list[dict[str, Any]] = []
+            skipped_portfolios: list[dict[str, Any]] = []
+            errors: list[dict[str, Any]] = []
+            auto_report_count = 0
+
+            for portfolio in service.portfolios:
+                slug = str(portfolio["slug"])
+                mode = str(portfolio.get("mode") or "").lower()
+                if mode not in {"live_mt5", "hybrid"}:
+                    skipped_portfolios.append({"portfolio_slug": slug, "reason": f"Portfolio mode '{mode or 'unknown'}' is not live."})
+                    continue
+
+                before_snapshot = (
+                    service.storage.latest_snapshot(source="mt5_live_bridge", portfolio_slug=slug)
+                    if storage_ready
+                    else None
+                )
+                before_report = (
+                    service.storage.latest_artifact("daily_report", portfolio_slug=slug)
+                    if storage_ready
+                    else None
+                )
+                try:
+                    live_state = service.mt5_live_state(portfolio_slug=slug)
+                except Exception as exc:
+                    errors.append({"portfolio_slug": slug, "error": str(exc)})
+                    continue
+
+                after_snapshot = (
+                    service.storage.latest_snapshot(source="mt5_live_bridge", portfolio_slug=slug)
+                    if storage_ready
+                    else None
+                )
+                after_report = (
+                    service.storage.latest_artifact("daily_report", portfolio_slug=slug)
+                    if storage_ready
+                    else None
+                )
+
+                report_changed = False
+                report_auto_generated = False
+                report_path = None
+                if after_report is not None:
+                    report_details = dict(after_report.get("details") or {})
+                    report_changed = (
+                        before_report is None
+                        or before_report.get("updated_at") != after_report.get("updated_at")
+                        or before_report.get("id") != after_report.get("id")
+                    )
+                    report_auto_generated = bool(report_details.get("auto_generated"))
+                    report_path = after_report.get("path")
+                    if report_changed and report_auto_generated:
+                        auto_report_count += 1
+
+                refreshed_portfolios.append(
+                    {
+                        "portfolio_slug": slug,
+                        "status": live_state.get("status"),
+                        "connected": bool(live_state.get("connected")),
+                        "stale": bool(live_state.get("stale")),
+                        "sequence": int(live_state.get("sequence") or 0),
+                        "snapshot_id": None if after_snapshot is None else after_snapshot.get("id"),
+                        "snapshot_changed": (
+                            before_snapshot is None
+                            or after_snapshot is None
+                            or before_snapshot.get("id") != after_snapshot.get("id")
+                        ),
+                        "report_markdown": report_path,
+                        "report_changed": report_changed,
+                        "report_auto_generated": report_auto_generated,
+                    }
+                )
+
+            if refreshed_portfolios and not errors:
+                status = "ok"
+            elif refreshed_portfolios and errors:
+                status = "partial"
+            elif errors:
+                status = "error"
+            else:
+                status = "skipped"
+
+            result = {
+                "status": status,
+                "refreshed_portfolios": refreshed_portfolios,
+                "skipped_portfolios": skipped_portfolios,
+                "errors": errors,
+                "auto_report_count": auto_report_count,
+            }
+            self.log.info(
+                "live refresh job %s: %s refreshed, %s auto reports",
+                status,
+                len(refreshed_portfolios),
+                auto_report_count,
+            )
+            return result
+
         result = service.run_report(compare_path=job_cfg.compare_path)
         self.log.info("report job ok: %s", result["report_markdown"])
         return result
@@ -217,12 +360,14 @@ def build_worker_status(root: Path, *, storage: AppStorage | None = None) -> dic
 
     latest_snapshot = active_storage.latest_snapshot(source="historical") if database_ready else None
     latest_backtest = active_storage.latest_backtest_run() if database_ready else None
+    latest_live_refresh = active_storage.latest_snapshot(source="mt5_live_bridge") if database_ready else None
     latest_report = active_storage.latest_artifact("daily_report") if database_ready else None
 
     jobs: dict[str, dict[str, Any]] = {}
     for job_name, latest in {
         "snapshot": latest_snapshot,
         "backtest": latest_backtest,
+        "live_refresh": latest_live_refresh,
         "report": latest_report,
     }.items():
         job_cfg = getattr(settings, job_name)

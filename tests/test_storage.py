@@ -199,6 +199,14 @@ def test_app_storage_persists_and_reads_platform_records(tmp_path: Path):
         payload={"portfolio_slug": "fx_eur_20k"},
         portfolio_id=portfolio_id,
     )
+    acknowledgement_id = storage.upsert_reconciliation_acknowledgement(
+        portfolio_id=portfolio_id,
+        symbol="USDJPY",
+        reason="operator_reviewed",
+        operator_note="known partial fill",
+        mismatch_status="partial_fill",
+        payload={"difference_eur": -1200.0},
+    )
 
     report_path = root / "reports" / "daily" / "compare_test.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -214,6 +222,7 @@ def test_app_storage_persists_and_reads_platform_records(tmp_path: Path):
     capital_history = storage.capital_history(limit=10, portfolio_slug="fx_eur_20k")
     recent_execution_results = storage.recent_execution_results(limit=10, portfolio_slug="fx_eur_20k")
     recent_execution_fills = storage.recent_execution_fills(limit=10, portfolio_slug="fx_eur_20k")
+    acknowledgements = storage.reconciliation_acknowledgements(portfolio_slug="fx_eur_20k")
     recent_audit = storage.recent_audit_events(limit=10, portfolio_slug="fx_eur_20k")
     latest_report = storage.latest_artifact("daily_report")
     portfolios = storage.list_portfolios()
@@ -235,6 +244,10 @@ def test_app_storage_persists_and_reads_platform_records(tmp_path: Path):
     assert recent_execution_results[0]["fill_ratio"] == 0.8
     assert recent_execution_fills
     assert recent_execution_fills[0]["execution_result_id"] == execution_result_id
+    assert acknowledgements
+    assert acknowledgements[0]["id"] == acknowledgement_id
+    assert acknowledgements[0]["symbol"] == "USDJPY"
+    assert acknowledgements[0]["reason"] == "operator_reviewed"
     assert recent_audit
     assert recent_audit[0]["id"] == audit_id
     assert latest_report is not None

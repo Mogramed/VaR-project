@@ -6,6 +6,7 @@ import {
   BarChart3,
   BriefcaseBusiness,
   FileText,
+  Flame,
   Gauge,
   Landmark,
   Languages,
@@ -23,10 +24,12 @@ import type {
   AlertSummary,
   AuditEventResponse,
   HealthResponse,
+  MT5LiveStateResponse,
   PortfolioSummary,
   WorkerStatusResponse,
 } from "@/lib/api/types";
 import { OperatorActions } from "@/components/app-shell/operator-actions";
+import { useMt5LiveState } from "@/lib/use-mt5-live-state";
 import { cn, formatTimestamp } from "@/lib/utils";
 
 const navItems = [
@@ -38,7 +41,8 @@ const navItems = [
   { href: "/desk/capital", label: "Capital", icon: Landmark },
   { href: "/desk/decisions", label: "Decisions", icon: ShieldCheck },
   { href: "/desk/execution", label: "Dry Run", icon: BriefcaseBusiness },
-  { href: "/desk/simulation", label: "Blotter", icon: Orbit },
+  { href: "/desk/stress", label: "Stress", icon: Flame },
+  { href: "/desk/blotter", label: "Blotter", icon: Orbit },
   { href: "/desk/reports", label: "Reports", icon: FileText },
 ] as const;
 
@@ -101,6 +105,13 @@ export function DeskChrome({
   const contextKey = `${pathname}:${portfolioSlug}`;
   const [openContextKey, setOpenContextKey] = useState<string | null>(null);
   const contextOpen = openContextKey === contextKey;
+  const { liveState, transport } = useMt5LiveState(portfolioSlug ?? undefined);
+  const liveTone =
+    liveState?.status === "ok"
+      ? "border-emerald-400/18 bg-emerald-400/10 text-[var(--color-green)]"
+      : liveState?.degraded
+        ? "border-amber-400/18 bg-amber-400/10 text-[var(--color-amber)]"
+        : "border-white/8 text-[var(--color-text-soft)]";
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(216,155,73,0.08),transparent_18%),linear-gradient(180deg,rgba(255,255,255,0.02),transparent_24%)]">
@@ -184,6 +195,17 @@ export function DeskChrome({
                   <div className="rounded-full border border-emerald-400/18 bg-emerald-400/10 px-3 py-2 text-xs uppercase tracking-[0.22em] text-[var(--color-green)]">
                     API {health.status}
                   </div>
+                  <div className={cn("rounded-full border px-3 py-2 text-xs uppercase tracking-[0.22em]", liveTone)}>
+                    {liveState
+                      ? `MT5 ${liveState.status} · ${transport === "stream" ? "stream" : transport === "polling" ? "poll" : "connect"}`
+                      : "MT5 live pending"}
+                  </div>
+                  {(liveState?.operator_alerts ?? []).length > 0 ? (
+                    <div className="rounded-full border border-amber-400/18 bg-amber-400/10 px-3 py-2 text-xs uppercase tracking-[0.22em] text-[var(--color-amber)]">
+                      {(liveState?.operator_alerts ?? []).length} live alert
+                      {(liveState?.operator_alerts ?? []).length > 1 ? "s" : ""}
+                    </div>
+                  ) : null}
                   <div className="rounded-full border border-white/8 px-3 py-2 text-xs uppercase tracking-[0.22em] text-[var(--color-text-soft)]">
                     {latestReady ? "report ready" : "report pending"}
                   </div>
@@ -206,6 +228,16 @@ export function DeskChrome({
                     <Activity className="size-4 text-[var(--color-green)]" />
                     mt5-first workflow
                   </div>
+                  {liveState?.generated_at ? (
+                    <div className="inline-flex items-center gap-2 rounded-full border border-white/8 px-3 py-2">
+                      <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-accent)]">
+                        live feed
+                      </div>
+                      <span className="mono text-white">
+                        {formatTimestamp(liveState.generated_at)}
+                      </span>
+                    </div>
+                  ) : null}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {portfolios.map((portfolio) => (
@@ -245,7 +277,7 @@ export function DeskChrome({
             routeBehavior.dockedRailClass,
           )}
         >
-          <DeskInspectorContent health={health} alerts={alerts} audit={audit} jobsStatus={jobsStatus} />
+          <DeskInspectorContent health={health} alerts={alerts} audit={audit} jobsStatus={jobsStatus} liveState={liveState} transport={transport} />
         </aside>
       </div>
 
@@ -277,7 +309,7 @@ export function DeskChrome({
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-              <DeskInspectorContent health={health} alerts={alerts} audit={audit} jobsStatus={jobsStatus} />
+              <DeskInspectorContent health={health} alerts={alerts} audit={audit} jobsStatus={jobsStatus} liveState={liveState} transport={transport} />
             </div>
           </aside>
         </>
@@ -291,17 +323,24 @@ function DeskInspectorContent({
   alerts,
   audit,
   jobsStatus,
+  liveState,
+  transport,
 }: {
   health: HealthResponse;
   alerts: AlertSummary[];
   audit: AuditEventResponse[];
   jobsStatus: WorkerStatusResponse | null;
+  liveState: MT5LiveStateResponse | null;
+  transport: "stream" | "polling" | "connecting";
 }) {
   const dbDependency = health.dependencies?.database as
     | { reachable?: boolean; schema_ready?: boolean }
     | undefined;
   const mt5Dependency = health.dependencies?.mt5 as
     | { reachable?: boolean | null; mode?: string }
+    | undefined;
+  const mt5LiveDependency = health.dependencies?.mt5_live as
+    | { reachable?: boolean | null; mode?: string; stale?: boolean; detail?: string; generated_at?: string }
     | undefined;
 
   return (
@@ -337,6 +376,57 @@ function DeskInspectorContent({
                   : mt5Dependency?.mode ?? "n/a"}
             </span>
           </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-[var(--color-text-soft)]">Live feed</span>
+            <span className="mono text-xs text-[var(--color-text-muted)]">
+              {liveState
+                ? `${liveState.status}/${transport}`
+                : mt5LiveDependency?.reachable === false
+                  ? "offline"
+                  : "pending"}
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <section className="surface rounded-[1.6rem] p-5">
+        <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
+          Live Bridge
+        </div>
+        <div className="mt-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-[var(--color-text-soft)]">Status</span>
+            <span className="mono text-xs text-[var(--color-text-muted)]">
+              {liveState?.status ?? mt5LiveDependency?.detail ?? "unknown"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-[var(--color-text-soft)]">Transport</span>
+            <span className="mono text-xs text-[var(--color-text-muted)]">{transport}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-[var(--color-text-soft)]">Freshness</span>
+            <span className="mono text-xs text-[var(--color-text-muted)]">
+              {liveState?.generated_at
+                ? formatTimestamp(liveState.generated_at)
+                : mt5LiveDependency?.generated_at
+                  ? formatTimestamp(mt5LiveDependency.generated_at)
+                  : "n/a"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-[var(--color-text-soft)]">Sequence</span>
+            <span className="mono text-xs text-[var(--color-text-muted)]">
+              {liveState?.sequence ?? (health.dependencies?.mt5_live as { sequence?: number } | undefined)?.sequence ?? "n/a"}
+            </span>
+          </div>
+          <div className="text-sm text-[var(--color-text-soft)]">
+            {liveState?.last_error
+              ? liveState.last_error
+              : liveState?.stale
+                ? "Live bridge connected but stale. The desk is in degraded read mode until MT5 recovers."
+                : "The desk shell is following the MT5 live bridge and can fall back to polling if streaming drops."}
+          </div>
         </div>
       </section>
 
@@ -367,6 +457,40 @@ function DeskInspectorContent({
             <div className="text-sm text-[var(--color-text-muted)]">
               Worker status unavailable.
             </div>
+          )}
+        </div>
+      </section>
+
+      <section className="surface rounded-[1.6rem] p-5">
+        <div className="flex items-center justify-between">
+          <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
+            Live Operator Alerts
+          </div>
+          <div className="rounded-full border border-white/8 px-2 py-1 text-xs text-[var(--color-text-soft)]">
+            {(liveState?.operator_alerts ?? []).length}
+          </div>
+        </div>
+        <div className="mt-4 space-y-4">
+          {(liveState?.operator_alerts ?? []).length === 0 ? (
+            <div className="text-sm text-[var(--color-text-muted)]">
+              No live bridge incident is currently flagged.
+            </div>
+          ) : (
+            (liveState?.operator_alerts ?? []).slice(0, 4).map((alert) => (
+              <div key={`${alert.code}:${JSON.stringify(alert.context)}`} className="border-t border-white/8 pt-4 first:border-t-0 first:pt-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-white">{alert.code}</div>
+                    <div className="mt-1 text-sm leading-6 text-[var(--color-text-soft)]">
+                      {alert.message}
+                    </div>
+                  </div>
+                  <AlertTriangle
+                    className={cn("mt-1 size-4 shrink-0", severityTone(alert.severity))}
+                  />
+                </div>
+              </div>
+            ))
           )}
         </div>
       </section>

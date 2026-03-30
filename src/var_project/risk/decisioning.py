@@ -9,23 +9,41 @@ from var_project.engine.risk_engine import RiskEngine, RiskModelConfig
 from var_project.risk.budgeting import RiskBudgetSnapshot, build_risk_budget_snapshot
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class TradeProposal:
     symbol: str
-    delta_position_eur: float
+    exposure_change: float
     note: str | None = None
+
+    def __init__(
+        self,
+        symbol: str,
+        exposure_change: float | None = None,
+        note: str | None = None,
+        *,
+        delta_position_eur: float | None = None,
+    ) -> None:
+        selected_change = exposure_change if exposure_change is not None else delta_position_eur
+        object.__setattr__(self, "symbol", str(symbol).upper())
+        object.__setattr__(self, "exposure_change", float(0.0 if selected_change is None else selected_change))
+        object.__setattr__(self, "note", note)
+
+    @property
+    def delta_position_eur(self) -> float:
+        return self.exposure_change
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "TradeProposal":
         return cls(
             symbol=str(payload.get("symbol", "")).upper(),
-            delta_position_eur=float(payload.get("delta_position_eur", 0.0)),
+            exposure_change=float(payload.get("exposure_change", payload.get("delta_position_eur", 0.0))),
             note=None if payload.get("note") is None else str(payload.get("note")),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "symbol": self.symbol,
+            "exposure_change": self.exposure_change,
             "delta_position_eur": self.delta_position_eur,
             "note": self.note,
         }
@@ -39,9 +57,17 @@ class DecisionRiskState:
     budget_utilization_es: float | None
     headroom_var: float
     headroom_es: float
-    gross_notional: float
-    position_eur: float
+    gross_exposure: float
+    symbol_exposure: float
     status: str
+
+    @property
+    def gross_notional(self) -> float:
+        return self.gross_exposure
+
+    @property
+    def position_eur(self) -> float:
+        return self.symbol_exposure
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "DecisionRiskState":
@@ -56,8 +82,8 @@ class DecisionRiskState:
             else float(payload.get("budget_utilization_es")),
             headroom_var=float(payload.get("headroom_var", 0.0)),
             headroom_es=float(payload.get("headroom_es", 0.0)),
-            gross_notional=float(payload.get("gross_notional", 0.0)),
-            position_eur=float(payload.get("position_eur", 0.0)),
+            gross_exposure=float(payload.get("gross_exposure", payload.get("gross_notional", 0.0))),
+            symbol_exposure=float(payload.get("symbol_exposure", payload.get("position_eur", 0.0))),
             status=str(payload.get("status", "OK")),
         )
 
@@ -69,7 +95,9 @@ class DecisionRiskState:
             "budget_utilization_es": self.budget_utilization_es,
             "headroom_var": self.headroom_var,
             "headroom_es": self.headroom_es,
+            "gross_exposure": self.gross_exposure,
             "gross_notional": self.gross_notional,
+            "symbol_exposure": self.symbol_exposure,
             "position_eur": self.position_eur,
             "status": self.status,
         }
@@ -79,27 +107,47 @@ class DecisionRiskState:
 class RiskDecisionResult:
     symbol: str
     decision: str
-    requested_delta_position_eur: float
-    approved_delta_position_eur: float
-    suggested_delta_position_eur: float | None
-    resulting_position_eur: float
+    requested_exposure_change: float
+    approved_exposure_change: float
+    suggested_exposure_change: float | None
+    resulting_exposure: float
     model_used: str
     reasons: list[str]
     note: str | None
     pre_trade: DecisionRiskState
     post_trade: DecisionRiskState
 
+    @property
+    def requested_delta_position_eur(self) -> float:
+        return self.requested_exposure_change
+
+    @property
+    def approved_delta_position_eur(self) -> float:
+        return self.approved_exposure_change
+
+    @property
+    def suggested_delta_position_eur(self) -> float | None:
+        return self.suggested_exposure_change
+
+    @property
+    def resulting_position_eur(self) -> float:
+        return self.resulting_exposure
+
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "RiskDecisionResult":
         return cls(
             symbol=str(payload.get("symbol", "")).upper(),
             decision=str(payload.get("decision", "REJECT")).upper(),
-            requested_delta_position_eur=float(payload.get("requested_delta_position_eur", 0.0)),
-            approved_delta_position_eur=float(payload.get("approved_delta_position_eur", 0.0)),
-            suggested_delta_position_eur=None
-            if payload.get("suggested_delta_position_eur") is None
-            else float(payload.get("suggested_delta_position_eur")),
-            resulting_position_eur=float(payload.get("resulting_position_eur", 0.0)),
+            requested_exposure_change=float(
+                payload.get("requested_exposure_change", payload.get("requested_delta_position_eur", 0.0))
+            ),
+            approved_exposure_change=float(
+                payload.get("approved_exposure_change", payload.get("approved_delta_position_eur", 0.0))
+            ),
+            suggested_exposure_change=None
+            if payload.get("suggested_exposure_change", payload.get("suggested_delta_position_eur")) is None
+            else float(payload.get("suggested_exposure_change", payload.get("suggested_delta_position_eur"))),
+            resulting_exposure=float(payload.get("resulting_exposure", payload.get("resulting_position_eur", 0.0))),
             model_used=str(payload.get("model_used", "hist")).lower(),
             reasons=[str(item) for item in payload.get("reasons") or []],
             note=None if payload.get("note") is None else str(payload.get("note")),
@@ -111,6 +159,10 @@ class RiskDecisionResult:
         return {
             "symbol": self.symbol,
             "decision": self.decision,
+            "requested_exposure_change": self.requested_exposure_change,
+            "approved_exposure_change": self.approved_exposure_change,
+            "suggested_exposure_change": self.suggested_exposure_change,
+            "resulting_exposure": self.resulting_exposure,
             "requested_delta_position_eur": self.requested_delta_position_eur,
             "approved_delta_position_eur": self.approved_delta_position_eur,
             "suggested_delta_position_eur": self.suggested_delta_position_eur,
@@ -165,7 +217,7 @@ def _build_state(
 ) -> DecisionRiskState:
     model_budget = budget.models[model_name]
     position_budget = model_budget.positions.get(symbol)
-    position_eur = 0.0 if position_budget is None else float(position_budget.position_eur)
+    symbol_exposure = 0.0 if position_budget is None else float(position_budget.current_exposure)
     return DecisionRiskState(
         var=float(model_budget.total_var),
         es=float(model_budget.total_es),
@@ -173,8 +225,8 @@ def _build_state(
         budget_utilization_es=None if model_budget.utilization_es is None else float(model_budget.utilization_es),
         headroom_var=float(model_budget.headroom_var),
         headroom_es=float(model_budget.headroom_es),
-        gross_notional=_gross_notional(exposure_by_symbol),
-        position_eur=position_eur,
+        gross_exposure=_gross_notional(exposure_by_symbol),
+        symbol_exposure=symbol_exposure,
         status=str(model_budget.status),
     )
 
@@ -312,10 +364,10 @@ def evaluate_trade_proposal(
         return RiskDecisionResult(
             symbol=symbol,
             decision="REJECT",
-            requested_delta_position_eur=float(proposal.delta_position_eur),
-            approved_delta_position_eur=0.0,
-            suggested_delta_position_eur=None,
-            resulting_position_eur=current_position,
+            requested_exposure_change=float(proposal.exposure_change),
+            approved_exposure_change=0.0,
+            suggested_exposure_change=None,
+            resulting_exposure=current_position,
             model_used=model_used,
             reasons=[f"Unknown symbol '{symbol}' for the current portfolio."],
             note=proposal.note,
@@ -323,17 +375,17 @@ def evaluate_trade_proposal(
             post_trade=pre_eval.state,
         )
 
-    requested_delta = float(proposal.delta_position_eur)
+    requested_delta = float(proposal.exposure_change)
     if abs(requested_delta) <= 1e-9:
         return RiskDecisionResult(
             symbol=symbol,
             decision="REJECT",
-            requested_delta_position_eur=requested_delta,
-            approved_delta_position_eur=0.0,
-            suggested_delta_position_eur=None,
-            resulting_position_eur=current_position,
+            requested_exposure_change=requested_delta,
+            approved_exposure_change=0.0,
+            suggested_exposure_change=None,
+            resulting_exposure=current_position,
             model_used=model_used,
-            reasons=["delta_position_eur must be non-zero."],
+            reasons=["exposure_change must be non-zero."],
             note=proposal.note,
             pre_trade=pre_eval.state,
             post_trade=pre_eval.state,
@@ -372,10 +424,10 @@ def evaluate_trade_proposal(
         return RiskDecisionResult(
             symbol=symbol,
             decision="ACCEPT",
-            requested_delta_position_eur=requested_delta,
-            approved_delta_position_eur=requested_delta,
-            suggested_delta_position_eur=None,
-            resulting_position_eur=full_position,
+            requested_exposure_change=requested_delta,
+            approved_exposure_change=requested_delta,
+            suggested_exposure_change=None,
+            resulting_exposure=full_position,
             model_used=model_used,
             reasons=reasons,
             note=proposal.note,
@@ -410,10 +462,10 @@ def evaluate_trade_proposal(
         return RiskDecisionResult(
             symbol=symbol,
             decision="REDUCE",
-            requested_delta_position_eur=requested_delta,
-            approved_delta_position_eur=approved_delta,
-            suggested_delta_position_eur=approved_delta,
-            resulting_position_eur=best_position,
+            requested_exposure_change=requested_delta,
+            approved_exposure_change=approved_delta,
+            suggested_exposure_change=approved_delta,
+            resulting_exposure=best_position,
             model_used=model_used,
             reasons=[
                 f"Requested trade would exceed the advisory thresholds under {model_used.upper()}.",
@@ -427,10 +479,10 @@ def evaluate_trade_proposal(
     return RiskDecisionResult(
         symbol=symbol,
         decision="REJECT",
-        requested_delta_position_eur=requested_delta,
-        approved_delta_position_eur=0.0,
-        suggested_delta_position_eur=None,
-        resulting_position_eur=current_position,
+        requested_exposure_change=requested_delta,
+        approved_exposure_change=0.0,
+        suggested_exposure_change=None,
+        resulting_exposure=current_position,
         model_used=model_used,
         reasons=[
             f"Requested trade exceeds the advisory thresholds under {model_used.upper()}.",

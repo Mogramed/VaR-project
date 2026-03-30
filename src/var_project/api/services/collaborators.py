@@ -24,9 +24,11 @@ from var_project.execution.mt5_live import (
 from var_project.execution.mt5_remote import RemoteMT5Connector
 from var_project.market_data.daily_returns import load_daily_simple_returns_from_processed
 from var_project.portfolio.holdings import aggregate_exposure_by_symbol, holding_symbols, normalize_holdings
+from var_project.reporting.render import render_daily_markdown
 from var_project.risk.budgeting import build_risk_budget_snapshot
 from var_project.risk.capital import build_capital_usage_snapshot
 from var_project.risk.decisioning import TradeProposal, evaluate_trade_proposal
+from var_project.storage.serialization import coerce_datetime
 
 if TYPE_CHECKING:
     from var_project.api.services.runtime import DeskServiceRuntime
@@ -76,6 +78,20 @@ class PortfolioRiskCalculator:
         window: int | None = None,
     ) -> dict[str, Any]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        if self.runtime.market_data.should_use_mt5_market_data(portfolio):
+            live_holdings = self.runtime.market_data.live_holdings(portfolio_slug=portfolio["slug"])
+            if live_holdings:
+                return self.compute_portfolio_state_for_holdings(
+                    portfolio=portfolio,
+                    holdings=live_holdings,
+                    timeframe=timeframe,
+                    days=days,
+                    min_coverage=min_coverage,
+                    config=config,
+                    window=window,
+                    snapshot_source="mt5_live",
+                    snapshot_timestamp=datetime.now(timezone.utc).isoformat(),
+                )
         return self.compute_portfolio_state_for_holdings(
             portfolio=portfolio,
             holdings=portfolio.get("configured_holdings") or [],
@@ -85,6 +101,31 @@ class PortfolioRiskCalculator:
             config=config,
             window=window,
             snapshot_source="historical",
+        )
+
+    def compute_portfolio_state_for_exposure(
+        self,
+        *,
+        portfolio: Mapping[str, Any],
+        exposure_by_symbol: Mapping[str, Any],
+        timeframe: str | None = None,
+        days: int | None = None,
+        min_coverage: float | None = None,
+        config: RiskModelConfig | None = None,
+        window: int | None = None,
+        snapshot_source: str = "historical",
+        snapshot_timestamp: str | None = None,
+    ) -> dict[str, Any]:
+        return self.compute_portfolio_state_for_holdings(
+            portfolio=portfolio,
+            holdings=exposure_by_symbol,
+            timeframe=timeframe,
+            days=days,
+            min_coverage=min_coverage,
+            config=config,
+            window=window,
+            snapshot_source=snapshot_source,
+            snapshot_timestamp=snapshot_timestamp,
         )
 
     def compute_portfolio_state_for_positions(
@@ -100,9 +141,9 @@ class PortfolioRiskCalculator:
         snapshot_source: str = "historical",
         snapshot_timestamp: str | None = None,
     ) -> dict[str, Any]:
-        return self.compute_portfolio_state_for_holdings(
+        return self.compute_portfolio_state_for_exposure(
             portfolio=portfolio,
-            holdings=positions_eur,
+            exposure_by_symbol=positions_eur,
             timeframe=timeframe,
             days=days,
             min_coverage=min_coverage,
@@ -248,7 +289,9 @@ class PortfolioRiskCalculator:
         return int(days_list[-1]) if days_list else 365
 
     def exposures_json(self, exposure_by_symbol: Mapping[str, Any] | None = None) -> str:
-        selected = dict(self.runtime.portfolio["positions"] if exposure_by_symbol is None else exposure_by_symbol)
+        selected = dict(
+            self.runtime.portfolio["configured_exposure"] if exposure_by_symbol is None else exposure_by_symbol
+        )
         return "{" + ", ".join(f'"{symbol}": {float(value):.6f}' for symbol, value in selected.items()) + "}"
 
 
@@ -261,7 +304,8 @@ class DecisionPolicyEngine:
         *,
         bundle: Mapping[str, Any],
         symbol: str,
-        delta_position_eur: float,
+        exposure_change: float | None = None,
+        delta_position_eur: float | None = None,
         note: str | None,
         persist: bool,
         audit_action: str = "decision.evaluate",
@@ -270,10 +314,11 @@ class DecisionPolicyEngine:
         exposure_by_symbol = dict(bundle["exposure_by_symbol"])
         sample = bundle["sample"]
         sample_symbols = list(bundle.get("portfolio_symbols") or portfolio["symbols"])
+        selected_change = delta_position_eur if exposure_change is None else exposure_change
         result = evaluate_trade_proposal(
             sample[sample_symbols],
             exposure_by_symbol=exposure_by_symbol,
-            proposal=TradeProposal(symbol=str(symbol).upper(), delta_position_eur=delta_position_eur, note=note),
+            proposal=TradeProposal(symbol=str(symbol).upper(), exposure_change=selected_change, note=note),
             config=bundle["config"],
             limits_cfg=self.runtime.limits_config,
             reference_model=self.decision_reference_model(portfolio["slug"]),
@@ -313,7 +358,8 @@ class DecisionPolicyEngine:
         *,
         bundle: Mapping[str, Any],
         symbol: str,
-        approved_delta_position_eur: float,
+        approved_exposure_change: float | None = None,
+        approved_delta_position_eur: float | None = None,
         snapshot_source: str,
     ) -> dict[str, Any]:
         portfolio = dict(bundle["portfolio"])
@@ -321,10 +367,11 @@ class DecisionPolicyEngine:
         symbol_key = str(symbol).upper()
         if symbol_key not in post_exposure:
             return dict(bundle["capital"])
-        post_exposure[symbol_key] = float(post_exposure.get(symbol_key, 0.0) + approved_delta_position_eur)
-        post_bundle = self.runtime._compute_portfolio_state_for_positions(
+        selected_change = approved_delta_position_eur if approved_exposure_change is None else approved_exposure_change
+        post_exposure[symbol_key] = float(post_exposure.get(symbol_key, 0.0) + float(selected_change or 0.0))
+        post_bundle = self.runtime._compute_portfolio_state_for_exposure(
             portfolio=portfolio,
-            positions_eur=post_exposure,
+            exposure_by_symbol=post_exposure,
             timeframe=bundle["timeframe"],
             days=bundle["days"],
             min_coverage=bundle["min_coverage"],
@@ -412,6 +459,48 @@ class MT5ExecutionOrchestrator:
                 return payload
         return initial
 
+    def _attach_position_target_if_reducing(
+        self,
+        *,
+        live: MT5LiveGateway,
+        symbol: str,
+        order_request: Mapping[str, Any],
+        request_side: str | None,
+        requested_volume_lots: float,
+    ) -> dict[str, Any]:
+        normalized_side = str(request_side or "").upper()
+        if normalized_side not in {"BUY", "SELL"}:
+            return dict(order_request)
+        opposite_side = "SELL" if normalized_side == "BUY" else "BUY"
+        target_volume = float(requested_volume_lots or order_request.get("volume") or 0.0)
+        if target_volume <= 1e-9:
+            return dict(order_request)
+
+        candidates = []
+        for position in live.positions(symbols=[symbol]):
+            if position.ticket is None:
+                continue
+            if str(position.side or "").upper() != opposite_side:
+                continue
+            live_volume = float(position.volume_lots or 0.0)
+            if live_volume + 1e-9 < target_volume:
+                continue
+            candidates.append(position)
+
+        if not candidates:
+            return dict(order_request)
+
+        candidates.sort(
+            key=lambda item: (
+                abs(float(item.volume_lots or 0.0) - target_volume),
+                str(item.time_utc or ""),
+                int(item.ticket or 0),
+            )
+        )
+        targeted_request = dict(order_request)
+        targeted_request["position"] = int(candidates[0].ticket)
+        return targeted_request
+
     def build_execution_guard(
         self,
         *,
@@ -454,6 +543,13 @@ class MT5ExecutionOrchestrator:
             return guard, {}, {}
 
         order_request, meta = live.build_market_order(symbol=str(symbol).upper(), delta_position_eur=approved_delta, note=note)
+        order_request = self._attach_position_target_if_reducing(
+            live=live,
+            symbol=str(symbol).upper(),
+            order_request=order_request,
+            request_side=None if meta.get("side") is None else str(meta.get("side")),
+            requested_volume_lots=float(meta.get("volume_lots", 0.0)),
+        )
         order_check = self.run_order_check_with_fill_fallback(
             live=live,
             order_request=order_request,
@@ -520,10 +616,178 @@ class MT5ExecutionOrchestrator:
             "target": self.runtime.mt5_config.path,
         }
 
+    def mt5_live_dependency(self, portfolio_slug: str | None = None) -> dict[str, Any]:
+        target = self.runtime.mt5_config.agent_base_url
+        if not target:
+            return {
+                "mode": "direct_terminal",
+                "configured": bool(self.runtime.mt5_config.path or self.runtime.mt5_config.login or self.runtime.mt5_config.server),
+                "reachable": None,
+                "schema_ready": None,
+                "detail": "Live bridge is only available through the remote MT5 agent.",
+                "target": self.runtime.mt5_config.path,
+            }
+        connector = self.build_mt5_connector()
+        try:
+            connector.init()
+            if hasattr(connector, "live_state"):
+                state = dict(connector.live_state())
+                return {
+                    "mode": "remote_agent_live_bridge",
+                    "configured": True,
+                    "reachable": bool(state.get("connected", False)),
+                    "schema_ready": None,
+                    "detail": str(state.get("status") or "unknown"),
+                    "target": target,
+                    "sequence": int(state.get("sequence") or 0),
+                    "generated_at": state.get("generated_at"),
+                    "stale": bool(state.get("stale", False)),
+                    "degraded": bool(state.get("degraded", False)),
+                }
+            return {
+                "mode": "remote_agent_live_bridge",
+                "configured": True,
+                "reachable": False,
+                "schema_ready": None,
+                "detail": "Remote connector does not expose a live bridge contract.",
+                "target": target,
+            }
+        except Exception as exc:  # pragma: no cover
+            return {
+                "mode": "remote_agent_live_bridge",
+                "configured": True,
+                "reachable": False,
+                "schema_ready": None,
+                "detail": str(exc),
+                "target": target,
+            }
+        finally:
+            try:
+                connector.shutdown()
+            except Exception:
+                pass
+
 
 class GovernanceRecorder:
     def __init__(self, runtime: "DeskServiceRuntime"):
         self.runtime = runtime
+
+    def _live_report_refresh_interval_seconds(self) -> float:
+        return max(
+            30.0,
+            float(self.runtime.mt5_config.live_history_poll_seconds),
+            float(self.runtime.mt5_config.live_poll_seconds) * 10.0,
+        )
+
+    def refresh_live_report_if_needed(
+        self,
+        *,
+        portfolio: Mapping[str, Any],
+        portfolio_id: int,
+        snapshot_payload: Mapping[str, Any],
+        snapshot_id: int,
+        source: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        if source != "mt5_live_bridge" or not self.runtime.storage_ready:
+            return
+
+        compare_csv = self.resolve_compare_path(None, portfolio_slug=portfolio["slug"])
+        if compare_csv is None or not compare_csv.exists():
+            return
+
+        latest_report = self.runtime.storage.latest_artifact("daily_report", portfolio_slug=portfolio["slug"])
+        latest_details = {} if latest_report is None else dict(latest_report.get("details") or {})
+        normalized_metadata = dict(metadata or {})
+        live_persistence_key = str(normalized_metadata.get("live_persistence_key") or "")
+
+        if live_persistence_key and str(latest_details.get("live_persistence_key") or "") == live_persistence_key:
+            return
+        if latest_details.get("snapshot_id") is not None and int(latest_details["snapshot_id"]) == int(snapshot_id):
+            return
+
+        latest_updated_at = coerce_datetime(
+            None if latest_report is None else latest_report.get("updated_at") or latest_report.get("created_at")
+        )
+        if latest_updated_at is not None:
+            age_seconds = max((datetime.now(timezone.utc) - latest_updated_at).total_seconds(), 0.0)
+            if age_seconds < self._live_report_refresh_interval_seconds():
+                return
+
+        rendered_snapshot = {
+            "id": snapshot_id,
+            "source": source,
+            "created_at": snapshot_payload.get("time_utc"),
+            "payload": dict(snapshot_payload),
+        }
+        report_path = render_daily_markdown(
+            compare_csv=compare_csv,
+            out_dir=self.runtime.storage.settings.reports_dir,
+            snapshot=rendered_snapshot,
+            risk_limits_yaml=self.runtime.root / "config" / "risk_limits.yaml",
+            report_label=str(portfolio["name"]),
+        )
+        self.append_governance_sections(
+            report_path,
+            portfolio_slug=portfolio["slug"],
+            capital_source=source,
+        )
+
+        compare_artifact_id = self.runtime.storage.register_artifact(
+            compare_csv,
+            artifact_type="backtest_compare",
+        )
+        report_artifact_id = self.runtime.storage.register_artifact(
+            report_path,
+            artifact_type="daily_report",
+            details={
+                "portfolio_slug": portfolio["slug"],
+                "compare_csv": str(compare_csv.resolve()),
+                "source_artifact_id": compare_artifact_id,
+                "snapshot_source": source,
+                "snapshot_id": snapshot_id,
+                "auto_generated": True,
+                "live_persistence_key": live_persistence_key,
+            },
+        )
+
+        chart_paths: list[str] = []
+        for chart_path in (
+            report_path.with_name(f"{compare_csv.stem}_exceptions.png"),
+            report_path.with_name(f"{compare_csv.stem}_pnl_var.png"),
+        ):
+            if not chart_path.exists():
+                continue
+            resolved_path = str(chart_path.resolve())
+            chart_paths.append(resolved_path)
+            self.runtime.storage.register_artifact(
+                chart_path,
+                artifact_type="report_chart",
+                details={
+                    "report_markdown": str(report_path.resolve()),
+                    "portfolio_slug": portfolio["slug"],
+                    "snapshot_source": source,
+                    "snapshot_id": snapshot_id,
+                    "auto_generated": True,
+                },
+            )
+
+        self.runtime.storage.record_audit_event(
+            actor="api",
+            action_type="report.auto_refresh",
+            object_type="daily_report",
+            object_id=report_artifact_id,
+            payload={
+                "portfolio_slug": portfolio["slug"],
+                "report_markdown": str(report_path.resolve()),
+                "compare_csv": str(compare_csv.resolve()),
+                "snapshot_source": source,
+                "snapshot_id": snapshot_id,
+                "live_persistence_key": live_persistence_key,
+                "chart_paths": chart_paths,
+            },
+            portfolio_id=portfolio_id,
+        )
 
     def database_dependency(self) -> dict[str, Any]:
         reachable, detail = self.runtime.storage.ping()
@@ -536,7 +800,16 @@ class GovernanceRecorder:
             "target": self.runtime.storage.settings.database_url,
         }
 
-    def persist_live_bundle(self, *, bundle: Mapping[str, Any], portfolio_id: int, source: str) -> None:
+    def persist_live_bundle(
+        self,
+        *,
+        bundle: Mapping[str, Any],
+        portfolio_id: int,
+        source: str,
+        metadata: Mapping[str, Any] | None = None,
+        persist_alerts: bool = True,
+        persist_audit: bool = True,
+    ) -> None:
         portfolio = dict(bundle["portfolio"])
         sample = bundle["sample"]
         snapshot_payload = {
@@ -556,23 +829,34 @@ class GovernanceRecorder:
             "capital_usage": dict(bundle["capital"]),
             "sample_size": bundle["snapshot"].sample_size,
             "latest_observation": sample.index[-1].isoformat(),
+            "metadata": dict(metadata or {}),
         }
         snapshot_id = self.runtime.storage.record_snapshot(snapshot_payload, portfolio_id=portfolio_id, source=source)
         self.runtime.storage.record_capital_snapshot(dict(bundle["capital"]), portfolio_id=portfolio_id, source=source)
-        budget_alerts = alerts_from_risk_budget(bundle["risk_budget"].to_dict())
-        capital_alerts = alerts_from_capital_snapshot(bundle["capital"])
-        if budget_alerts:
-            self.runtime.storage.record_alerts(budget_alerts, portfolio_id=portfolio_id, snapshot_id=snapshot_id)
-        if capital_alerts:
-            self.runtime.storage.record_alerts(capital_alerts, portfolio_id=portfolio_id, snapshot_id=snapshot_id)
-        self.runtime.storage.record_audit_event(
-            actor="api",
-            action_type="mt5.reconcile",
-            object_type="risk_snapshot",
-            object_id=snapshot_id,
-            payload={"portfolio_slug": portfolio["slug"], "source": source},
+        self.refresh_live_report_if_needed(
+            portfolio=portfolio,
             portfolio_id=portfolio_id,
+            snapshot_payload=snapshot_payload,
+            snapshot_id=snapshot_id,
+            source=source,
+            metadata=metadata,
         )
+        if persist_alerts:
+            budget_alerts = alerts_from_risk_budget(bundle["risk_budget"].to_dict())
+            capital_alerts = alerts_from_capital_snapshot(bundle["capital"])
+            if budget_alerts:
+                self.runtime.storage.record_alerts(budget_alerts, portfolio_id=portfolio_id, snapshot_id=snapshot_id)
+            if capital_alerts:
+                self.runtime.storage.record_alerts(capital_alerts, portfolio_id=portfolio_id, snapshot_id=snapshot_id)
+        if persist_audit:
+            self.runtime.storage.record_audit_event(
+                actor="api",
+                action_type="mt5.reconcile",
+                object_type="risk_snapshot",
+                object_id=snapshot_id,
+                payload={"portfolio_slug": portfolio["slug"], "source": source, "metadata": dict(metadata or {})},
+                portfolio_id=portfolio_id,
+            )
 
     def alert_counts_by_portfolio(self) -> dict[str, int]:
         if not self.runtime.storage_ready:
@@ -605,11 +889,35 @@ class GovernanceRecorder:
             return None
         return Path(latest["path"]).resolve()
 
-    def append_governance_sections(self, report_path: Path) -> None:
+    def append_governance_sections(
+        self,
+        report_path: Path,
+        *,
+        portfolio_slug: str | None = None,
+        capital_source: str | None = None,
+    ) -> None:
         content = report_path.read_text(encoding="utf-8")
-        decisions = self.runtime.storage.recent_decisions(limit=5) if self.runtime.storage_ready else []
-        capital_history = self.runtime.storage.capital_history(limit=5) if self.runtime.storage_ready else []
-        audits = self.runtime.storage.recent_audit_events(limit=8) if self.runtime.storage_ready else []
+        decisions = (
+            self.runtime.storage.recent_decisions(limit=5, portfolio_slug=portfolio_slug)
+            if self.runtime.storage_ready
+            else []
+        )
+        capital_history = (
+            self.runtime.storage.capital_history(
+                limit=5,
+                source=capital_source,
+                portfolio_slug=portfolio_slug,
+            )
+            if self.runtime.storage_ready
+            else []
+        )
+        if self.runtime.storage_ready and capital_source is not None and not capital_history:
+            capital_history = self.runtime.storage.capital_history(limit=5, portfolio_slug=portfolio_slug)
+        audits = (
+            self.runtime.storage.recent_audit_events(limit=8, portfolio_slug=portfolio_slug)
+            if self.runtime.storage_ready
+            else []
+        )
 
         lines = [content.rstrip(), "", "## Decision History", ""]
         if not decisions:
@@ -629,7 +937,8 @@ class GovernanceRecorder:
                 lines.append(
                     f"- {item.get('created_at') or item.get('snapshot_timestamp')}: "
                     f"consumed={item.get('total_capital_consumed_eur')} remaining={item.get('total_capital_remaining_eur')} "
-                    f"status={item.get('status')}"
+                    f"status={item.get('status')} "
+                    f"source={item.get('snapshot_source') or item.get('source') or 'n/a'}"
                 )
 
         lines.extend(["", "## Audit Trail", ""])

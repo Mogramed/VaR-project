@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from var_project.alerts.engine import alerts_from_execution_result
+from var_project.alerts.engine import (
+    alerts_from_capital_snapshot,
+    alerts_from_execution_result,
+    alerts_from_live_operator_state,
+    alerts_from_risk_budget,
+)
 from var_project.api.services.runtime import DeskServiceRuntime
 from var_project.core.exceptions import MT5ConnectionError
 from var_project.execution.mt5_bridge import build_empty_live_state, collect_live_state_from_connector
@@ -13,6 +19,7 @@ from var_project.execution.mt5_live import ExecutionPreview, ExecutionResult, MT
 class DeskMt5Service:
     def __init__(self, runtime: DeskServiceRuntime):
         self.runtime = runtime
+        self._startup_import_done = False
 
     def _normalize_live_state(self, raw_state: dict[str, Any]) -> dict[str, Any]:
         payload = dict(raw_state)
@@ -35,6 +42,209 @@ class DeskMt5Service:
         payload["source"] = str(payload.get("source") or "mt5_agent_bridge")
         return payload
 
+    def _check_startup_import(self, raw_state: dict[str, Any], *, portfolio_slug: str | None = None) -> None:
+        if self._startup_import_done:
+            return
+        if not raw_state.get("connected"):
+            return
+        live_holdings = list(raw_state.get("holdings") or [])
+        if not live_holdings:
+            return
+        self._startup_import_done = True
+
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        portfolio_id = self.runtime.portfolio_ids.get(portfolio["slug"])
+        desk_symbols = {
+            str(s).upper()
+            for s in (portfolio.get("watchlist_symbols") or portfolio["symbols"] or [])
+        }
+        imported_symbols: list[str] = []
+        for holding in live_holdings:
+            symbol = str((holding if isinstance(holding, dict) else {}).get("symbol") or "").upper()
+            if symbol and symbol not in desk_symbols:
+                imported_symbols.append(symbol)
+
+        if imported_symbols:
+            self.runtime.storage.record_audit_event(
+                actor="system",
+                action_type="mt5.startup_import",
+                object_type="portfolio",
+                payload={
+                    "portfolio_slug": portfolio["slug"],
+                    "imported_symbols": imported_symbols,
+                    "total_live_holdings": len(live_holdings),
+                    "desk_symbols": sorted(desk_symbols),
+                },
+                portfolio_id=portfolio_id,
+            )
+
+    def _live_portfolio_scope(
+        self,
+        raw_state: dict[str, Any],
+        *,
+        portfolio_slug: str | None = None,
+    ) -> dict[str, Any]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        symbols = {
+            str(symbol).upper()
+            for symbol in list(portfolio.get("watchlist_symbols") or portfolio["symbols"] or [])
+            if str(symbol).strip()
+        }
+        for symbol in list(raw_state.get("symbols") or []):
+            normalized = str(symbol).upper()
+            if normalized:
+                symbols.add(normalized)
+        for section in ("holdings", "pending_orders", "order_history", "deal_history"):
+            for item in list(raw_state.get(section) or []):
+                normalized = str((item or {}).get("symbol") or "").upper()
+                if normalized:
+                    symbols.add(normalized)
+        scoped_symbols = sorted(symbols)
+        return {
+            **dict(portfolio),
+            "watchlist_symbols": scoped_symbols,
+            "symbols": scoped_symbols,
+        }
+
+    def _build_live_analytics(
+        self,
+        raw_state: dict[str, Any],
+        *,
+        portfolio_slug: str | None = None,
+    ) -> dict[str, Any] | None:
+        holdings = list(raw_state.get("holdings") or [])
+        if not holdings:
+            return None
+
+        portfolio = self._live_portfolio_scope(raw_state, portfolio_slug=portfolio_slug)
+        bundle = self.runtime._compute_portfolio_state_for_holdings(
+            portfolio=portfolio,
+            holdings=holdings,
+            timeframe=self.runtime._default_timeframe(),
+            days=self.runtime._default_days(),
+            min_coverage=float(self.runtime.data_defaults["min_coverage"]),
+            config=self.runtime._build_risk_model_config(None, None, None, None, None),
+            window=int(self.runtime.risk_defaults["window"]),
+            snapshot_source="mt5_live_bridge",
+            snapshot_timestamp=str(raw_state.get("generated_at") or datetime.now(timezone.utc).isoformat()),
+        )
+        sample = bundle["sample"]
+        risk_budget = bundle["risk_budget"].to_dict()
+        risk_budget["snapshot_source"] = "mt5_live_bridge"
+        risk_budget["snapshot_timestamp"] = str(raw_state.get("generated_at") or sample.index[-1].isoformat())
+        capital_usage = dict(bundle["capital"])
+        capital_usage["snapshot_source"] = "mt5_live_bridge"
+        capital_usage["snapshot_timestamp"] = str(raw_state.get("generated_at") or sample.index[-1].isoformat())
+        return {
+            "bundle": bundle,
+            "risk_summary": {
+                "generated_at": str(raw_state.get("generated_at") or datetime.now(timezone.utc).isoformat()),
+                "portfolio_slug": portfolio["slug"],
+                "portfolio_mode": portfolio.get("mode"),
+                "source": "mt5_live_bridge",
+                "reference_model": self.runtime._decision_reference_model(portfolio["slug"]),
+                "preferred_model": self.runtime._preferred_model(portfolio["slug"]),
+                "alpha": float(bundle["config"].alpha),
+                "sample_size": int(bundle["snapshot"].sample_size),
+                "timeframe": bundle["timeframe"],
+                "days": int(bundle["days"]),
+                "window": int(bundle["window"]),
+                "latest_observation": sample.index[-1].isoformat(),
+                "var": bundle["snapshot"].vars_dict(),
+                "es": bundle["snapshot"].es_dict(),
+            },
+            "risk_budget": risk_budget,
+            "capital_usage": capital_usage,
+            "alerts": [
+                *[alert.to_dict() for alert in alerts_from_risk_budget(risk_budget)],
+                *[alert.to_dict() for alert in alerts_from_capital_snapshot(capital_usage)],
+            ],
+        }
+
+    def _dedupe_alerts(self, alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduped: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for alert in alerts:
+            normalized = dict(alert)
+            key = (
+                f"{normalized.get('source')}|{normalized.get('severity')}|"
+                f"{normalized.get('code')}|{normalized.get('message')}|"
+                f"{normalized.get('context')}"
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(normalized)
+        return deduped
+
+    def _live_persistence_key(self, raw_state: dict[str, Any]) -> str:
+        sequence = int(raw_state.get("sequence") or 0)
+        if sequence > 0:
+            return f"sequence:{sequence}"
+        payload = {
+            "status": raw_state.get("status"),
+            "connected": bool(raw_state.get("connected", False)),
+            "stale": bool(raw_state.get("stale", False)),
+            "symbols": list(raw_state.get("symbols") or []),
+            "holdings": list(raw_state.get("holdings") or []),
+            "pending_orders": list(raw_state.get("pending_orders") or []),
+            "order_history": list(raw_state.get("order_history") or []),
+            "deal_history": list(raw_state.get("deal_history") or []),
+        }
+        return f"state:{json.dumps(payload, sort_keys=True, default=str)}"
+
+    def _persist_live_analytics_if_needed(
+        self,
+        *,
+        raw_state: dict[str, Any],
+        analytics: dict[str, Any] | None,
+        portfolio_slug: str | None = None,
+    ) -> None:
+        if analytics is None or not self.runtime.storage_ready:
+            return
+        if not bool(raw_state.get("connected", False)) or bool(raw_state.get("stale", False)):
+            return
+
+        sequence = int(raw_state.get("sequence") or 0)
+        persistence_key = self._live_persistence_key(raw_state)
+
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        portfolio_id = self.runtime._resolve_portfolio_id(portfolio["slug"])
+        latest = self.runtime.storage.latest_snapshot(source="mt5_live_bridge", portfolio_slug=portfolio["slug"])
+        latest_payload = {} if latest is None else dict(latest.get("payload") or latest)
+        latest_metadata = dict(latest_payload.get("metadata") or {})
+        latest_key = str(
+            latest_metadata.get("live_persistence_key")
+            or latest_payload.get("live_persistence_key")
+            or ""
+        )
+        if latest_key == persistence_key:
+            if latest is not None:
+                self.runtime.governance.refresh_live_report_if_needed(
+                    portfolio=portfolio,
+                    portfolio_id=portfolio_id,
+                    snapshot_payload=latest_payload,
+                    snapshot_id=int(latest["id"]),
+                    source="mt5_live_bridge",
+                    metadata=latest_metadata,
+                )
+            return
+
+        self.runtime._persist_live_bundle(
+            bundle=analytics["bundle"],
+            portfolio_id=portfolio_id,
+            source="mt5_live_bridge",
+            metadata={
+                "live_sequence": sequence,
+                "live_persistence_key": persistence_key,
+                "bridge_status": raw_state.get("status"),
+                "bridge_generated_at": raw_state.get("generated_at"),
+                "bridge_source": raw_state.get("source"),
+            },
+            persist_alerts=False,
+            persist_audit=False,
+        )
+
     def _build_live_state_direct(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         connector = self.runtime._build_mt5_connector()
@@ -52,6 +262,7 @@ class DeskMt5Service:
         return self._normalize_live_state(raw_state)
 
     def _enrich_live_state(self, raw_state: dict[str, Any], *, portfolio_slug: str | None = None) -> dict[str, Any]:
+        self._check_startup_import(raw_state, portfolio_slug=portfolio_slug)
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         exposure = self.runtime.market_data.exposure_from_holdings(
             list(raw_state.get("holdings") or []),
@@ -61,13 +272,42 @@ class DeskMt5Service:
             raw_state,
             portfolio_slug=portfolio["slug"],
         )
-        return {
+        enriched = {
             **dict(raw_state),
             "portfolio_slug": portfolio["slug"],
             "portfolio_mode": portfolio.get("mode"),
             "exposure": exposure,
             "reconciliation": reconciliation,
         }
+        operator_alerts = [alert.to_dict() for alert in alerts_from_live_operator_state(enriched)]
+        try:
+            analytics = self._build_live_analytics(enriched, portfolio_slug=portfolio["slug"])
+        except Exception as exc:
+            analytics = None
+            operator_alerts.append(
+                {
+                    "source": "risk_live",
+                    "severity": "WARN",
+                    "code": "LIVE_ANALYTICS_UNAVAILABLE",
+                    "message": "Live risk/capital recalculation is currently unavailable.",
+                    "context": {
+                        "detail": str(exc),
+                        "portfolio_slug": portfolio["slug"],
+                    },
+                }
+            )
+        if analytics is not None:
+            enriched["risk_summary"] = analytics["risk_summary"]
+            enriched["risk_budget"] = analytics["risk_budget"]
+            enriched["capital_usage"] = analytics["capital_usage"]
+            operator_alerts.extend(list(analytics["alerts"]))
+            self._persist_live_analytics_if_needed(
+                raw_state=enriched,
+                analytics=analytics,
+                portfolio_slug=portfolio["slug"],
+            )
+        enriched["operator_alerts"] = self._dedupe_alerts(operator_alerts)
+        return enriched
 
     def live_state(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
@@ -204,12 +444,16 @@ class DeskMt5Service:
         self,
         *,
         symbol: str,
-        delta_position_eur: float,
+        exposure_change: float | None = None,
+        delta_position_eur: float | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
     ) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        normalized_exposure_change = (
+            float(exposure_change) if exposure_change is not None else float(delta_position_eur or 0.0)
+        )
         with self.runtime._mt5_gateway() as live:
             terminal_status = live.terminal_status()
             account = live.account_snapshot()
@@ -219,14 +463,16 @@ class DeskMt5Service:
             decision = self.runtime._evaluate_trade_decision_from_bundle(
                 bundle=bundle,
                 symbol=symbol,
-                delta_position_eur=delta_position_eur,
+                exposure_change=normalized_exposure_change,
                 note=note,
                 persist=False,
             )
             post_capital = self.runtime._post_capital_after_trade(
                 bundle=bundle,
                 symbol=symbol,
-                approved_delta_position_eur=float(decision.get("approved_delta_position_eur", 0.0)),
+                approved_exposure_change=float(
+                    decision.get("approved_exposure_change", decision.get("approved_delta_position_eur", 0.0))
+                ),
                 snapshot_source="execution_preview",
             )
             guard, order_request, order_check = self.runtime._build_execution_guard(
@@ -270,13 +516,17 @@ class DeskMt5Service:
         self,
         *,
         symbol: str,
-        delta_position_eur: float,
+        exposure_change: float | None = None,
+        delta_position_eur: float | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
     ) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         portfolio_id = self.runtime._resolve_portfolio_id(portfolio["slug"])
+        normalized_exposure_change = (
+            float(exposure_change) if exposure_change is not None else float(delta_position_eur or 0.0)
+        )
         with self.runtime._mt5_gateway() as live:
             terminal_status = live.terminal_status()
             account_before = live.account_snapshot()
@@ -284,7 +534,7 @@ class DeskMt5Service:
             decision = self.runtime._evaluate_trade_decision_from_bundle(
                 bundle=bundle,
                 symbol=symbol,
-                delta_position_eur=delta_position_eur,
+                exposure_change=normalized_exposure_change,
                 note=note,
                 persist=True,
                 audit_action="execution.guard",
@@ -317,7 +567,9 @@ class DeskMt5Service:
             post_capital = self.runtime._post_capital_after_trade(
                 bundle=bundle,
                 symbol=symbol,
-                approved_delta_position_eur=float(decision.get("approved_delta_position_eur", 0.0)),
+                approved_exposure_change=float(
+                    decision.get("approved_exposure_change", decision.get("approved_delta_position_eur", 0.0))
+                ),
                 snapshot_source="execution_submit",
             )
 
@@ -327,7 +579,10 @@ class DeskMt5Service:
                 submitted_volume_lots = approved_volume_lots
                 if retcode in {10009, 10008}:
                     status = "EXECUTED" if retcode == 10009 else "PLACED"
-                    executed_delta = float(guard.executable_delta_position_eur)
+                    executed_delta = float(
+                        getattr(guard, "executable_exposure_change", None)
+                        or getattr(guard, "executable_delta_position_eur", 0.0)
+                    )
                     broker_status = "filled" if retcode == 10009 else "placed"
                 else:
                     status = "FAILED"
@@ -427,8 +682,10 @@ class DeskMt5Service:
                 portfolio_slug=portfolio["slug"],
                 symbol=str(symbol).upper(),
                 status=status,
-                requested_delta_position_eur=float(delta_position_eur),
-                approved_delta_position_eur=float(decision.get("approved_delta_position_eur", 0.0)),
+                requested_delta_position_eur=normalized_exposure_change,
+                approved_delta_position_eur=float(
+                    decision.get("approved_exposure_change", decision.get("approved_delta_position_eur", 0.0))
+                ),
                 executed_delta_position_eur=executed_delta,
                 terminal_status=terminal_status,
                 account_before=account_before,

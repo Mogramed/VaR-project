@@ -17,6 +17,10 @@ export default async function ReportExportPage({
   const portfolioSlug =
     typeof query.portfolio === "string" ? query.portfolio : undefined;
   const report = await loadDeskReportViewModel(portfolioSlug);
+  const snapshotSourceLabel =
+    report.meta.preferredSnapshotSource === "mt5_live_bridge"
+      ? "mt5 live snapshot"
+      : "historical snapshot";
 
   return (
     <main
@@ -40,6 +44,10 @@ export default async function ReportExportPage({
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
                 <StatusBadge label={report.selectedModel.toUpperCase()} tone="accent" />
+                <StatusBadge
+                  label={snapshotSourceLabel}
+                  tone={report.meta.preferredSnapshotSource === "mt5_live_bridge" ? "success" : "neutral"}
+                />
                 <StatusBadge label={report.capital?.status ?? "pending"} tone="success" />
                 <StatusBadge label={report.meta.reportTimestamp} />
               </div>
@@ -82,6 +90,7 @@ export default async function ReportExportPage({
             <div className="mt-5 grid gap-4 text-sm text-[var(--color-text-soft)]">
               <ReportMetaRow label="Portfolio" value={report.resolvedPortfolio} />
               <ReportMetaRow label="Report generated" value={report.meta.reportTimestamp} />
+              <ReportMetaRow label="Snapshot source" value={snapshotSourceLabel} />
               <ReportMetaRow label="Source markdown" value={report.meta.reportPath || "n/a"} mono />
               <ReportMetaRow label="Charts embedded" value={String(report.meta.chartCount)} />
             </div>
@@ -151,12 +160,12 @@ export default async function ReportExportPage({
         <section className="pdf-avoid-break grid gap-6 lg:grid-cols-2">
           <StaticTableCard
             title="Recent decisions"
-            headers={["Time", "Symbol", "Decision", "Approved"]}
+            headers={["Time", "Symbol", "Decision", "Approved exposure"]}
             rows={report.decisions.slice(0, 8).map((item) => [
               formatTimestamp(item.created_at ?? item.time_utc),
               item.symbol,
               item.decision,
-              formatCurrency(item.approved_delta_position_eur),
+              formatCurrency(item.approved_exposure_change),
             ])}
           />
           <StaticTableCard

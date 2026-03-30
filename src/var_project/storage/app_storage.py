@@ -224,6 +224,25 @@ class AppStorage:
             portfolio_id=portfolio_id,
         )
 
+    def upsert_reconciliation_acknowledgement(
+        self,
+        *,
+        portfolio_id: int | None,
+        symbol: str,
+        reason: str = "",
+        operator_note: str = "",
+        mismatch_status: str | None = None,
+        payload: Mapping[str, Any] | None = None,
+    ) -> int:
+        return self.writes.upsert_reconciliation_acknowledgement(
+            portfolio_id=portfolio_id,
+            symbol=symbol,
+            reason=reason,
+            operator_note=operator_note,
+            mismatch_status=mismatch_status,
+            payload=payload,
+        )
+
     def latest_snapshot(self, *, source: str | None = None, portfolio_slug: str | None = None) -> dict[str, Any] | None:
         return self.reads.latest_snapshot(source=source, portfolio_slug=portfolio_slug)
 
@@ -254,8 +273,14 @@ class AppStorage:
     def latest_capital_snapshot(self, *, source: str | None = None, portfolio_slug: str | None = None) -> dict[str, Any] | None:
         return self.reads.latest_capital_snapshot(source=source, portfolio_slug=portfolio_slug)
 
-    def capital_history(self, *, limit: int = 25, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
-        return self.reads.capital_history(limit=limit, portfolio_slug=portfolio_slug)
+    def capital_history(
+        self,
+        *,
+        limit: int = 25,
+        source: str | None = None,
+        portfolio_slug: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.reads.capital_history(limit=limit, source=source, portfolio_slug=portfolio_slug)
 
     def recent_decisions(self, *, limit: int = 25, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
         return self.reads.recent_decisions(limit=limit, portfolio_slug=portfolio_slug)
@@ -268,6 +293,9 @@ class AppStorage:
 
     def recent_audit_events(self, *, limit: int = 50, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
         return self.reads.recent_audit_events(limit=limit, portfolio_slug=portfolio_slug)
+
+    def reconciliation_acknowledgements(self, *, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
+        return self.reads.reconciliation_acknowledgements(portfolio_slug=portfolio_slug)
 
     def list_portfolios(self) -> list[dict[str, Any]]:
         return self.reads.list_portfolios()

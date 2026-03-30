@@ -7,7 +7,7 @@ from typing import Any, Mapping
 import yaml
 
 from var_project.core.types import MT5Config
-from var_project.portfolio.holdings import configured_holdings
+from var_project.portfolio.holdings import aggregate_exposure_by_symbol, configured_holdings, normalize_holdings
 from var_project.storage import slugify_label
 
 
@@ -49,11 +49,50 @@ def get_symbols(raw_cfg: Mapping[str, Any]) -> list[str]:
     return [str(symbol) for symbol in raw_cfg.get("symbols") or []]
 
 
-def get_positions(raw_cfg: Mapping[str, Any], symbols: list[str]) -> dict[str, float]:
-    positions = ((raw_cfg.get("portfolio") or {}).get("positions_eur")) or {}
-    if not positions:
-        return {symbol: 10_000.0 for symbol in symbols}
-    return {symbol: float(positions.get(symbol, 0.0)) for symbol in symbols}
+def _configured_holdings_from_portfolio_config(
+    portfolio_cfg: Mapping[str, Any] | None,
+    *,
+    symbols: list[str],
+    base_currency: str,
+) -> list[dict[str, Any]]:
+    holdings_payload = list((portfolio_cfg or {}).get("holdings") or [])
+    if holdings_payload:
+        normalized = normalize_holdings(
+            holdings_payload,
+            symbols=symbols,
+            base_currency=base_currency,
+            source="configured",
+        )
+        return [holding.to_dict() for holding in normalized]
+
+    configured_exposure = dict(
+        (portfolio_cfg or {}).get("configured_exposure")
+        or (portfolio_cfg or {}).get("positions_eur")
+        or {}
+    )
+    if not configured_exposure:
+        configured_exposure = {symbol: 10_000.0 for symbol in symbols}
+    configured = configured_holdings(
+        symbols,
+        configured_exposure,
+        base_currency=base_currency,
+        source="configured",
+    )
+    return [holding.to_dict() for holding in configured]
+
+
+def get_configured_exposure(
+    raw_cfg: Mapping[str, Any],
+    symbols: list[str],
+    *,
+    base_currency: str = "EUR",
+) -> dict[str, float]:
+    configured = _configured_holdings_from_portfolio_config(
+        dict(raw_cfg.get("portfolio") or {}),
+        symbols=symbols,
+        base_currency=base_currency,
+    )
+    return aggregate_exposure_by_symbol(configured, symbols=symbols, base_currency=base_currency)
 
 
 def get_data_defaults(raw_cfg: Mapping[str, Any]) -> dict[str, Any]:
@@ -177,7 +216,6 @@ def _build_portfolio_context(
     base_currency = str((portfolio_cfg or {}).get("base_currency") or raw_cfg.get("base_currency", "EUR"))
     portfolio_symbols = [str(symbol) for symbol in ((portfolio_cfg or {}).get("symbols") or root_symbols)]
     portfolio_name = str((portfolio_cfg or {}).get("name") or default_name or f"{base_currency}_{'_'.join(portfolio_symbols)}")
-    configured_positions = dict((portfolio_cfg or {}).get("positions_eur") or {})
     portfolio_mode = str(
         (portfolio_cfg or {}).get("mode")
         or (portfolio_cfg or {}).get("portfolio_mode")
@@ -187,16 +225,12 @@ def _build_portfolio_context(
             else "offline_fixture"
         )
     ).strip().lower()
-    if configured_positions:
-        positions = {symbol: float(configured_positions.get(symbol, 0.0)) for symbol in portfolio_symbols}
-    else:
-        positions = get_positions(raw_cfg, portfolio_symbols)
-    configured = configured_holdings(
-        portfolio_symbols,
-        positions,
+    configured = _configured_holdings_from_portfolio_config(
+        portfolio_cfg,
+        symbols=portfolio_symbols,
         base_currency=base_currency,
-        source="configured",
     )
+    positions = aggregate_exposure_by_symbol(configured, symbols=portfolio_symbols, base_currency=base_currency)
     return {
         "name": portfolio_name,
         "slug": slugify_label(portfolio_name),
@@ -205,7 +239,8 @@ def _build_portfolio_context(
         "symbols": portfolio_symbols,
         "watchlist_symbols": list(portfolio_symbols),
         "positions": positions,
-        "configured_holdings": [holding.to_dict() for holding in configured],
+        "configured_exposure": dict(positions),
+        "configured_holdings": list(configured),
     }
 
 

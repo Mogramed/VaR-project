@@ -6,6 +6,7 @@ import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
 import { makeBarOption } from "@/lib/chart-options";
 import { buildInstrumentClassCounts } from "@/lib/view-models";
+import { formatTimestamp } from "@/lib/utils";
 
 export default async function DeskUniversePage({
   searchParams,
@@ -17,9 +18,10 @@ export default async function DeskUniversePage({
     typeof query.portfolio === "string" ? query.portfolio : undefined;
   const resolvedPortfolio = portfolioSlug ?? (await api.health()).portfolio_slug;
 
-  const [instruments, marketStatus] = await Promise.all([
+  const [instruments, marketStatus, liveState] = await Promise.all([
     api.instruments(resolvedPortfolio).catch(() => []),
     api.marketDataStatus(resolvedPortfolio).catch(() => null),
+    api.mt5LiveState(resolvedPortfolio).catch(() => null),
   ]);
 
   const classCounts = buildInstrumentClassCounts(instruments);
@@ -36,8 +38,8 @@ export default async function DeskUniversePage({
         description="The desk now exposes contract size, trading mode and lot granularity as first-class product data, instead of burying them inside the execution bridge."
         aside={
           <StatusBadge
-            label={marketStatus?.status ?? "unknown"}
-            tone={marketStatus?.status === "ok" ? "success" : "warning"}
+            label={liveState?.status ?? marketStatus?.status ?? "unknown"}
+            tone={(liveState?.status ?? marketStatus?.status) === "ok" ? "success" : "warning"}
           />
         }
       />
@@ -63,7 +65,11 @@ export default async function DeskUniversePage({
         <MetricBlock
           label="Missing bars"
           value={String(missingBars.length)}
-          hint="Current default timeframe"
+          hint={
+            liveState?.generated_at
+              ? `Live ${formatTimestamp(liveState.generated_at)}`
+              : "Current default timeframe"
+          }
           tone={missingBars.length > 0 ? "warning" : "success"}
         />
       </section>

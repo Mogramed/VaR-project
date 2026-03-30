@@ -208,9 +208,11 @@ def alerts_from_risk_budget(snapshot: Mapping[str, Any]) -> List[AlertEvent]:
                 context={
                     "model": model.model,
                     "symbol": item.symbol,
+                    "current_exposure": item.current_exposure,
                     "position_eur": item.position_eur,
                     "utilization_var": item.utilization_var,
                     "utilization_es": item.utilization_es,
+                    "recommended_exposure": item.recommended_exposure,
                     "recommended_position_eur": item.recommended_position_eur,
                     "action": item.action,
                 },
@@ -236,6 +238,9 @@ def alerts_from_risk_decision(result: Mapping[str, Any]) -> List[AlertEvent]:
                 "symbol": decision.symbol,
                 "decision": decision.decision,
                 "model_used": decision.model_used,
+                "requested_exposure_change": decision.requested_exposure_change,
+                "approved_exposure_change": decision.approved_exposure_change,
+                "resulting_exposure": decision.resulting_exposure,
                 "requested_delta_position_eur": decision.requested_delta_position_eur,
                 "approved_delta_position_eur": decision.approved_delta_position_eur,
                 "resulting_position_eur": decision.resulting_position_eur,
@@ -343,3 +348,131 @@ def alerts_from_execution_result(result: Mapping[str, Any]) -> List[AlertEvent]:
             },
         )
     ]
+
+
+def alerts_from_live_operator_state(state: Mapping[str, Any]) -> List[AlertEvent]:
+    payload = dict(state)
+    reconciliation = dict(payload.get("reconciliation") or {})
+    status_counts = {
+        str(key): int(value)
+        for key, value in dict(reconciliation.get("status_counts") or {}).items()
+        if int(value or 0) > 0
+    }
+    alerts: List[AlertEvent] = []
+
+    if payload.get("connected") is False:
+        alerts.append(
+            AlertEvent(
+                source="mt5_live",
+                severity="BREACH",
+                code="MT5_LIVE_DISCONNECTED",
+                message="The MT5 live bridge is disconnected.",
+                context={
+                    "status": payload.get("status"),
+                    "generated_at": payload.get("generated_at"),
+                    "last_success_at": payload.get("last_success_at"),
+                },
+            )
+        )
+    elif payload.get("stale"):
+        alerts.append(
+            AlertEvent(
+                source="mt5_live",
+                severity="WARN",
+                code="MT5_LIVE_STALE",
+                message="The MT5 live bridge is connected but stale.",
+                context={
+                    "status": payload.get("status"),
+                    "generated_at": payload.get("generated_at"),
+                    "last_success_at": payload.get("last_success_at"),
+                },
+            )
+        )
+    elif payload.get("degraded"):
+        alerts.append(
+            AlertEvent(
+                source="mt5_live",
+                severity="WARN",
+                code="MT5_LIVE_DEGRADED",
+                message="The MT5 live bridge is running in degraded mode.",
+                context={
+                    "status": payload.get("status"),
+                    "generated_at": payload.get("generated_at"),
+                    "last_success_at": payload.get("last_success_at"),
+                },
+            )
+        )
+
+    if payload.get("last_error"):
+        alerts.append(
+            AlertEvent(
+                source="mt5_live",
+                severity="WARN",
+                code="MT5_LIVE_ERROR",
+                message="The live bridge reported a recent MT5 error.",
+                context={
+                    "last_error": payload.get("last_error"),
+                    "generated_at": payload.get("generated_at"),
+                },
+            )
+        )
+
+    manual_event_count = int(reconciliation.get("manual_event_count") or 0)
+    if manual_event_count > 0:
+        alerts.append(
+            AlertEvent(
+                source="reconciliation",
+                severity="WARN",
+                code="MT5_MANUAL_EVENTS",
+                message="Manual MT5 activity was detected outside the desk workflow.",
+                context={
+                    "manual_event_count": manual_event_count,
+                    "portfolio_slug": reconciliation.get("portfolio_slug") or payload.get("portfolio_slug"),
+                },
+            )
+        )
+
+    unmatched_execution_count = int(reconciliation.get("unmatched_execution_count") or 0)
+    if unmatched_execution_count > 0:
+        alerts.append(
+            AlertEvent(
+                source="reconciliation",
+                severity="WARN",
+                code="EXECUTION_UNMATCHED",
+                message="Some desk execution attempts are not fully matched to broker activity.",
+                context={
+                    "unmatched_execution_count": unmatched_execution_count,
+                    "portfolio_slug": reconciliation.get("portfolio_slug") or payload.get("portfolio_slug"),
+                },
+            )
+        )
+
+    status_alerts = {
+        "partial_fill": ("WARN", "PARTIAL_FILL_ACTIVE", "Partial MT5 fills still require operator follow-up."),
+        "pending_broker": ("WARN", "PENDING_BROKER_ACTIVITY", "Some submissions are still pending broker confirmation."),
+        "rejected_by_broker": ("BREACH", "BROKER_REJECTION_ACTIVE", "A broker rejection is present in the live reconciliation feed."),
+        "manual_trade_detected": ("WARN", "MANUAL_TRADE_DETECTED", "A manual MT5 trade was detected in the blotter."),
+        "orphan_live_position": ("BREACH", "ORPHAN_LIVE_POSITION", "A live MT5 position has no matching desk execution lineage."),
+        "orphan_live_order": ("WARN", "ORPHAN_LIVE_ORDER", "A live MT5 order has no matching desk execution lineage."),
+        "desk_vs_broker_drift": ("BREACH", "DESK_BROKER_DRIFT", "Desk vs broker exposure drift is currently detected."),
+        "overfill_or_volume_drift": ("BREACH", "OVERFILL_OR_VOLUME_DRIFT", "Broker fills exceed the approved desk volume."),
+    }
+    for status, (severity, code, message) in status_alerts.items():
+        count = status_counts.get(status, 0)
+        if count <= 0:
+            continue
+        alerts.append(
+            AlertEvent(
+                source="reconciliation",
+                severity=severity,
+                code=code,
+                message=message,
+                context={
+                    "count": count,
+                    "status": status,
+                    "portfolio_slug": reconciliation.get("portfolio_slug") or payload.get("portfolio_slug"),
+                },
+            )
+        )
+
+    return alerts

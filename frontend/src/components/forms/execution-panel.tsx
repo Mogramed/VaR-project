@@ -23,12 +23,20 @@ import {
 
 const executionPresets = ["250000", "500000", "1000000", "2500000"];
 
+function safeNum(obj: Record<string, unknown> | undefined, key: string): number | null {
+  if (!obj) return null;
+  const v = obj[key];
+  return typeof v === "number" ? v : null;
+}
+
 export function ExecutionPanel({
   portfolioSlug,
   terminalStatus,
+  onSubmitted,
 }: {
   portfolioSlug: string;
   terminalStatus: MT5TerminalStatusResponse;
+  onSubmitted?: (result: ExecutionResultResponse) => void;
 }) {
   const router = useRouter();
   const [symbol, setSymbol] = useState("EURUSD");
@@ -41,7 +49,7 @@ export function ExecutionPanel({
       api.previewExecution({
         portfolio_slug: portfolioSlug,
         symbol,
-        delta_position_eur: (side === "buy" ? 1 : -1) * Number(notional),
+        exposure_change: (side === "buy" ? 1 : -1) * Number(notional),
         note,
       }),
   });
@@ -51,10 +59,15 @@ export function ExecutionPanel({
       api.submitExecution({
         portfolio_slug: portfolioSlug,
         symbol,
-        delta_position_eur: (side === "buy" ? 1 : -1) * Number(notional),
+        exposure_change: (side === "buy" ? 1 : -1) * Number(notional),
         note,
       }),
-    onSuccess: () => router.refresh(),
+    onSuccess: (payload) => {
+      onSubmitted?.(payload);
+      if (!onSubmitted) {
+        router.refresh();
+      }
+    },
   });
 
   const preview = previewMutation.data;
@@ -63,11 +76,11 @@ export function ExecutionPanel({
   const activeError = submitMutation.error ?? previewMutation.error;
   const fillRatio = useMemo(() => {
     const source = result?.guard ?? preview?.guard;
-    if (!source || source.requested_delta_position_eur === 0) {
+    if (!source || source.requested_exposure_change === 0) {
       return null;
     }
     return Math.abs(
-      source.executable_delta_position_eur / source.requested_delta_position_eur,
+      source.executable_exposure_change / source.requested_exposure_change,
     );
   }, [preview, result]);
 
@@ -105,7 +118,7 @@ export function ExecutionPanel({
         <div className="mt-6 grid gap-4 sm:grid-cols-3">
           <FormMetaTile label="Portfolio" value={portfolioSlug} hint="Execution scope" tone="accent" />
           <FormMetaTile
-            label="Signed delta"
+            label="Signed exposure"
             value={formatSignedCurrency(signedDelta)}
             hint="Request sent to the guard"
             tone={side === "buy" ? "warning" : "success"}
@@ -137,10 +150,10 @@ export function ExecutionPanel({
               <option value="buy">Buy</option>
               <option value="sell">Sell</option>
             </FieldSelect>
-            <FieldHint>Direction controls the sign of the requested EUR delta.</FieldHint>
+            <FieldHint>Direction controls the sign of the requested exposure change.</FieldHint>
           </div>
           <div>
-            <FieldLabel htmlFor="execution-notional">Notional EUR</FieldLabel>
+            <FieldLabel htmlFor="execution-notional">Target exposure change</FieldLabel>
             <FieldInput
               id="execution-notional"
               type="number"
@@ -160,6 +173,9 @@ export function ExecutionPanel({
                 </PresetPill>
               ))}
             </div>
+            <FieldHint>
+              Enter the target base-currency exposure change. Guard computes broker lots, margin and VaR impact before confirmation.
+            </FieldHint>
           </div>
           <div className="flex items-end">
             <div className="w-full rounded-[1.4rem] border border-white/8 bg-white/[0.03] px-4 py-4">
@@ -241,9 +257,27 @@ function ExecutionOutput({
             Launch a guarded preview to see the risk decision, executable size, lot conversion and margin posture before sending anything to the demo account.
           </p>
         </div>
+        <div className="mt-6 grid gap-4 sm:grid-cols-3">
+          <FormMetaTile label="Lots" value="---" hint="Broker volume" />
+          <FormMetaTile label="Margin" value="---" hint="Required EUR" />
+          <FormMetaTile label="VaR delta" value="---" hint="Pre vs post-trade" />
+        </div>
       </div>
     );
   }
+
+  const orderRequest = preview?.order_request ?? result?.order_request;
+  const account = preview?.account ?? result?.account_before;
+  const riskDecision = preview?.risk_decision ?? result?.risk_decision;
+
+  const brokerPrice = safeNum(orderRequest, "price");
+  const eurPerLot = safeNum(orderRequest, "eur_per_lot");
+  const minNotional = safeNum(orderRequest, "minimum_notional_eur");
+
+  const preTadeVar = riskDecision?.pre_trade?.var ?? null;
+  const postTradeVar = riskDecision?.post_trade?.var ?? null;
+  const varDelta = preTadeVar != null && postTradeVar != null ? postTradeVar - preTadeVar : null;
+  const budgetUtil = riskDecision?.post_trade?.budget_utilization_var ?? null;
 
   return (
     <div className="surface-strong rounded-[1.8rem] p-6">
@@ -259,23 +293,116 @@ function ExecutionOutput({
         <StatusBadge label={result?.status ?? "Preview only"} tone={result ? "accent" : "neutral"} />
       </div>
 
+      {/* Summary row */}
       <div className="mt-6 grid gap-4 sm:grid-cols-4">
         <FormMetaTile label="Model" value={guard.model_used.toUpperCase()} hint="Decision reference" tone="accent" />
-        <FormMetaTile label="Executable" value={formatCurrency(guard.executable_delta_position_eur)} hint={`Approved ${formatCurrency(guard.approved_delta_position_eur)}`} tone="success" />
+        <FormMetaTile label="Executable exposure" value={formatCurrency(guard.executable_exposure_change)} hint={`Approved ${formatCurrency(guard.approved_exposure_change)}`} tone="success" />
         <FormMetaTile label="Lots" value={guard.volume_lots.toFixed(2)} hint={guard.side ?? "n/a"} />
         <FormMetaTile label="Fill ratio" value={fillRatio == null ? "n/a" : formatPercent(fillRatio, 0)} hint="Executable vs requested" />
       </div>
 
+      {/* Broker Ticket */}
+      <div className="mt-6">
+        <div className="mono text-[11px] uppercase tracking-[0.24em] text-[var(--color-text-muted)]">
+          Broker Ticket
+        </div>
+        <div className="mt-3 grid gap-4 sm:grid-cols-4">
+          <FormMetaTile
+            label="Volume"
+            value={`${guard.volume_lots.toFixed(2)} lots`}
+            hint={guard.side ?? "n/a"}
+          />
+          <FormMetaTile
+            label="Price"
+            value={brokerPrice != null ? brokerPrice.toFixed(5) : "n/a"}
+            hint="Indicative at preview"
+          />
+          <FormMetaTile
+            label="Exposure / lot"
+            value={eurPerLot != null ? formatCurrency(eurPerLot) : "n/a"}
+            hint="Contract notional"
+          />
+          <FormMetaTile
+            label="Min exposure"
+            value={minNotional != null ? formatCurrency(minNotional) : "n/a"}
+            hint="Broker minimum"
+          />
+        </div>
+      </div>
+
+      {/* VaR Impact */}
+      <div className="mt-6">
+        <div className="mono text-[11px] uppercase tracking-[0.24em] text-[var(--color-text-muted)]">
+          VaR Impact
+        </div>
+        <div className="mt-3 grid gap-4 sm:grid-cols-4">
+          <FormMetaTile
+            label="Pre-trade VaR"
+            value={preTadeVar != null ? formatCurrency(preTadeVar) : "n/a"}
+            hint="Current portfolio"
+          />
+          <FormMetaTile
+            label="Post-trade VaR"
+            value={postTradeVar != null ? formatCurrency(postTradeVar) : "n/a"}
+            hint="After this trade"
+          />
+          <FormMetaTile
+            label="VaR delta"
+            value={varDelta != null ? formatSignedCurrency(varDelta) : "n/a"}
+            hint="Risk added / removed"
+            tone={varDelta == null ? "neutral" : varDelta > 0 ? "warning" : "success"}
+          />
+          <FormMetaTile
+            label="Budget util."
+            value={budgetUtil != null ? formatPercent(budgetUtil, 1) : "n/a"}
+            hint="Post-trade utilisation"
+            tone={
+              budgetUtil == null
+                ? "neutral"
+                : budgetUtil > 0.9
+                ? "danger"
+                : budgetUtil > 0.7
+                ? "warning"
+                : "success"
+            }
+          />
+        </div>
+      </div>
+
+      {/* Margin Check + Terminal */}
       <div className="mt-6 grid gap-4 sm:grid-cols-2">
         <div className="rounded-[1.35rem] border border-white/8 bg-black/18 p-4">
-          <div className="mono text-[11px] uppercase tracking-[0.24em] text-[var(--color-text-muted)]">
-            Margin Check
-          </div>
-          <div className="mt-3 flex items-center gap-3">
+          <div className="flex items-center gap-3">
+            <div className="mono text-[11px] uppercase tracking-[0.24em] text-[var(--color-text-muted)]">
+              Margin Check
+            </div>
             <StatusBadge label={guard.margin_ok ? "Pass" : "Fail"} tone={guard.margin_ok ? "success" : "danger"} />
-            <span className="text-sm text-[var(--color-text-soft)]">
-              Required {formatCurrency(guard.margin_required, 2)} / free after {formatCurrency(guard.free_margin_after, 2)}
-            </span>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div>
+              <div className="text-xs text-[var(--color-text-muted)]">Required</div>
+              <div className="mt-1 text-sm font-semibold text-white">
+                {formatCurrency(guard.margin_required, 2)}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-[var(--color-text-muted)]">Free after</div>
+              <div className="mt-1 text-sm font-semibold text-white">
+                {formatCurrency(guard.free_margin_after, 2)}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-[var(--color-text-muted)]">Equity</div>
+              <div className="mt-1 text-sm font-semibold text-white">
+                {account?.equity != null ? formatCurrency(account.equity, 2) : "n/a"}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-[var(--color-text-muted)]">Margin level</div>
+              <div className="mt-1 text-sm font-semibold text-white">
+                {account?.margin_level != null ? formatPercent(account.margin_level / 100, 0) : "n/a"}
+              </div>
+            </div>
           </div>
         </div>
         <div className="rounded-[1.35rem] border border-white/8 bg-black/18 p-4">
@@ -291,6 +418,7 @@ function ExecutionOutput({
         </div>
       </div>
 
+      {/* Reasons */}
       <div className="mt-6 rounded-[1.35rem] border border-white/8 bg-black/18 px-4 py-4 text-sm leading-7 text-[var(--color-text-soft)]">
         <div className="mono text-[11px] uppercase tracking-[0.24em] text-[var(--color-text-muted)]">
           Reasons
@@ -305,9 +433,39 @@ function ExecutionOutput({
         </ul>
       </div>
 
+      {/* MT5 result banner */}
       {result ? (
         <div className="mt-6 rounded-[1.35rem] border border-emerald-300/16 bg-emerald-300/8 px-4 py-4 text-sm leading-7 text-[var(--color-text-soft)]">
           MT5 returned {String(result.mt5_result?.retcode ?? "n/a")} and the execution status is <span className="font-semibold text-white">{result.status}</span>.
+        </div>
+      ) : null}
+
+      {/* Post-fill tiles */}
+      {result ? (
+        <div className="mt-6 grid gap-4 sm:grid-cols-4">
+          <FormMetaTile
+            label="Broker"
+            value={result.broker_status ?? "n/a"}
+            hint={result.reconciliation_status ?? "No reconciliation yet"}
+            tone={result.status === "EXECUTED" ? "success" : result.status === "FAILED" ? "warning" : "accent"}
+          />
+          <FormMetaTile
+            label="Filled lots"
+            value={(result.filled_volume_lots ?? 0).toFixed(2)}
+            hint={`Remaining ${(result.remaining_volume_lots ?? 0).toFixed(2)}`}
+            tone="accent"
+          />
+          <FormMetaTile
+            label="Fill ratio"
+            value={result.fill_ratio == null ? "n/a" : formatPercent(result.fill_ratio, 0)}
+            hint={`Submitted ${(result.submitted_volume_lots ?? 0).toFixed(2)} lots`}
+            tone="success"
+          />
+          <FormMetaTile
+            label="Slippage"
+            value={result.slippage_points == null ? "n/a" : result.slippage_points.toFixed(1)}
+            hint={`Position ${result.position_id ?? "n/a"}`}
+          />
         </div>
       ) : null}
     </div>

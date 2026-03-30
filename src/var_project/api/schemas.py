@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+
+
+class ApiModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class PortfolioSummary(BaseModel):
@@ -143,10 +147,12 @@ class RunReportRequest(BaseModel):
     portfolio_slug: str | None = None
 
 
-class TradeProposalRequest(BaseModel):
+class TradeProposalRequest(ApiModel):
     portfolio_slug: str | None = None
     symbol: str
-    delta_position_eur: float
+    exposure_change: float = Field(
+        validation_alias=AliasChoices("exposure_change", "delta_position_eur")
+    )
     note: str | None = None
 
 
@@ -158,10 +164,12 @@ class CapitalRebalanceRequest(BaseModel):
     symbol_weights: dict[str, float] | None = None
 
 
-class ExecutionRequest(BaseModel):
+class ExecutionRequest(ApiModel):
     portfolio_slug: str | None = None
     symbol: str
-    delta_position_eur: float
+    exposure_change: float = Field(
+        validation_alias=AliasChoices("exposure_change", "delta_position_eur")
+    )
     note: str | None = None
 
 
@@ -239,9 +247,11 @@ class ModelComparisonResponse(BaseModel):
     ranking: list[ModelComparisonRow]
 
 
-class RiskAttributionPositionResponse(BaseModel):
+class RiskAttributionPositionResponse(ApiModel):
     symbol: str
-    position_eur: float
+    exposure_base_ccy: float = Field(
+        validation_alias=AliasChoices("exposure_base_ccy", "position_eur")
+    )
     standalone_var: float
     standalone_es: float
     incremental_var: float
@@ -269,9 +279,11 @@ class RiskAttributionResponse(BaseModel):
     models: dict[str, RiskAttributionModelResponse]
 
 
-class RiskBudgetPositionResponse(BaseModel):
+class RiskBudgetPositionResponse(ApiModel):
     symbol: str
-    position_eur: float
+    current_exposure: float = Field(
+        validation_alias=AliasChoices("current_exposure", "exposure_base_ccy", "position_eur")
+    )
     weight: float
     target_var_budget: float
     target_es_budget: float
@@ -283,13 +295,19 @@ class RiskBudgetPositionResponse(BaseModel):
     utilization_es: float | None = None
     headroom_var: float
     headroom_es: float
-    max_position_eur: float | None = None
-    recommended_position_eur: float | None = None
+    max_exposure: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices("max_exposure", "max_position_eur"),
+    )
+    recommended_exposure: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices("recommended_exposure", "recommended_position_eur"),
+    )
     action: str
     status: str
 
 
-class RiskBudgetModelResponse(BaseModel):
+class RiskBudgetModelResponse(ApiModel):
     model: str
     total_var: float
     total_es: float
@@ -302,8 +320,13 @@ class RiskBudgetModelResponse(BaseModel):
     scale_to_var_budget: float | None = None
     scale_to_es_budget: float | None = None
     recommended_scale: float | None = None
-    current_gross_notional: float
-    recommended_gross_notional: float | None = None
+    current_gross_exposure: float = Field(
+        validation_alias=AliasChoices("current_gross_exposure", "current_gross_notional")
+    )
+    recommended_gross_exposure: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices("recommended_gross_exposure", "recommended_gross_notional"),
+    )
     status: str
     positions: dict[str, RiskBudgetPositionResponse]
 
@@ -317,19 +340,23 @@ class RiskBudgetResponse(BaseModel):
     models: dict[str, RiskBudgetModelResponse]
 
 
-class RiskDecisionStateResponse(BaseModel):
+class RiskDecisionStateResponse(ApiModel):
     var: float
     es: float
     budget_utilization_var: float | None = None
     budget_utilization_es: float | None = None
     headroom_var: float
     headroom_es: float
-    gross_notional: float
-    position_eur: float
+    gross_exposure: float = Field(
+        validation_alias=AliasChoices("gross_exposure", "gross_notional")
+    )
+    symbol_exposure: float = Field(
+        validation_alias=AliasChoices("symbol_exposure", "position_eur")
+    )
     status: str
 
 
-class RiskDecisionResponse(BaseModel):
+class RiskDecisionResponse(ApiModel):
     id: int | None = None
     portfolio_id: int | None = None
     time_utc: str | None = None
@@ -341,10 +368,19 @@ class RiskDecisionResponse(BaseModel):
     window: int | None = None
     symbol: str
     decision: str
-    requested_delta_position_eur: float
-    approved_delta_position_eur: float
-    suggested_delta_position_eur: float | None = None
-    resulting_position_eur: float
+    requested_exposure_change: float = Field(
+        validation_alias=AliasChoices("requested_exposure_change", "requested_delta_position_eur")
+    )
+    approved_exposure_change: float = Field(
+        validation_alias=AliasChoices("approved_exposure_change", "approved_delta_position_eur")
+    )
+    suggested_exposure_change: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices("suggested_exposure_change", "suggested_delta_position_eur"),
+    )
+    resulting_exposure: float = Field(
+        validation_alias=AliasChoices("resulting_exposure", "resulting_position_eur")
+    )
     model_used: str
     reasons: list[str]
     note: str | None = None
@@ -487,12 +523,14 @@ class MT5AccountSnapshotResponse(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
-class MT5PositionResponse(BaseModel):
+class MT5PositionResponse(ApiModel):
     ticket: int | None = None
     symbol: str
     side: str
     volume_lots: float
-    signed_position_eur: float
+    signed_exposure_base_ccy: float = Field(
+        validation_alias=AliasChoices("signed_exposure_base_ccy", "signed_position_eur")
+    )
     price_open: float
     price_current: float
     profit: float
@@ -536,12 +574,14 @@ class InstrumentDefinitionResponse(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
-class HoldingSnapshotResponse(BaseModel):
+class HoldingSnapshotResponse(ApiModel):
     symbol: str
     asset_class: str
     side: str
     volume_lots: float
-    signed_position_eur: float
+    signed_exposure_base_ccy: float = Field(
+        validation_alias=AliasChoices("signed_exposure_base_ccy", "signed_position_eur")
+    )
     signed_units: float | None = None
     contract_size: float | None = None
     base_currency: str | None = None
@@ -558,11 +598,13 @@ class HoldingSnapshotResponse(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
-class PortfolioExposureItemResponse(BaseModel):
+class PortfolioExposureItemResponse(ApiModel):
     symbol: str
     asset_class: str | None = None
     exposure_base_ccy: float
-    signed_position_eur: float
+    signed_exposure_base_ccy: float = Field(
+        validation_alias=AliasChoices("signed_exposure_base_ccy", "signed_position_eur")
+    )
     gross_exposure_share: float | None = None
 
 
@@ -625,6 +667,31 @@ class DealHistoryEntryResponse(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class OperatorAlertResponse(BaseModel):
+    source: str
+    severity: str
+    code: str
+    message: str
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class LiveRiskSummaryResponse(BaseModel):
+    generated_at: str
+    portfolio_slug: str
+    portfolio_mode: str | None = None
+    source: str
+    reference_model: str
+    preferred_model: str | None = None
+    alpha: float
+    sample_size: int
+    timeframe: str | None = None
+    days: int | None = None
+    window: int | None = None
+    latest_observation: str | None = None
+    var: dict[str, float] = Field(default_factory=dict)
+    es: dict[str, float] = Field(default_factory=dict)
+
+
 class MarketDataSyncStatusResponse(BaseModel):
     portfolio_slug: str
     portfolio_mode: str | None = None
@@ -635,6 +702,11 @@ class MarketDataSyncStatusResponse(BaseModel):
     instrument_count: int = 0
     latest_sync_at: str | None = None
     latest_bar_times: dict[str, str | None] = Field(default_factory=dict)
+    live_bridge_status: str | None = None
+    live_bridge_connected: bool | None = None
+    live_bridge_stale: bool | None = None
+    live_bridge_generated_at: str | None = None
+    live_bridge_sequence: int | None = None
     missing_symbols: list[str] = Field(default_factory=list)
     missing_bars: list[str] = Field(default_factory=list)
     open_positions: list[HoldingSnapshotResponse] = Field(default_factory=list)
@@ -655,6 +727,10 @@ class ReconciliationMismatchResponse(BaseModel):
     position_id: int | None = None
     reason: str | None = None
     status: str
+    acknowledged: bool = False
+    acknowledged_at: str | None = None
+    acknowledged_reason: str | None = None
+    acknowledged_note: str | None = None
 
 
 class ReconciliationSummaryResponse(BaseModel):
@@ -716,7 +792,11 @@ class MT5LiveStateResponse(BaseModel):
     order_history: list[OrderHistoryEntryResponse] = Field(default_factory=list)
     deal_history: list[DealHistoryEntryResponse] = Field(default_factory=list)
     exposure: PortfolioExposureResponse | None = None
+    risk_summary: LiveRiskSummaryResponse | None = None
+    risk_budget: RiskBudgetResponse | None = None
+    capital_usage: CapitalUsageSnapshotResponse | None = None
     reconciliation: ReconciliationSummaryResponse | None = None
+    operator_alerts: list[OperatorAlertResponse] = Field(default_factory=list)
 
 
 class MT5LiveEventResponse(BaseModel):
@@ -727,13 +807,22 @@ class MT5LiveEventResponse(BaseModel):
     state: MT5LiveStateResponse
 
 
-class ExecutionGuardDecisionResponse(BaseModel):
+class ExecutionGuardDecisionResponse(ApiModel):
     decision: str
     risk_decision: str
-    requested_delta_position_eur: float
-    approved_delta_position_eur: float
-    executable_delta_position_eur: float
-    suggested_delta_position_eur: float | None = None
+    requested_exposure_change: float = Field(
+        validation_alias=AliasChoices("requested_exposure_change", "requested_delta_position_eur")
+    )
+    approved_exposure_change: float = Field(
+        validation_alias=AliasChoices("approved_exposure_change", "approved_delta_position_eur")
+    )
+    executable_exposure_change: float = Field(
+        validation_alias=AliasChoices("executable_exposure_change", "executable_delta_position_eur")
+    )
+    suggested_exposure_change: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices("suggested_exposure_change", "suggested_delta_position_eur"),
+    )
     model_used: str
     side: str | None = None
     volume_lots: float
@@ -789,7 +878,7 @@ class ExecutionFillResponse(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
-class ExecutionResultResponse(BaseModel):
+class ExecutionResultResponse(ApiModel):
     id: int | None = None
     portfolio_id: int | None = None
     decision_id: int | None = None
@@ -798,9 +887,15 @@ class ExecutionResultResponse(BaseModel):
     portfolio_slug: str
     symbol: str
     status: str
-    requested_delta_position_eur: float
-    approved_delta_position_eur: float
-    executed_delta_position_eur: float
+    requested_exposure_change: float = Field(
+        validation_alias=AliasChoices("requested_exposure_change", "requested_delta_position_eur")
+    )
+    approved_exposure_change: float = Field(
+        validation_alias=AliasChoices("approved_exposure_change", "approved_delta_position_eur")
+    )
+    executed_exposure_change: float = Field(
+        validation_alias=AliasChoices("executed_exposure_change", "executed_delta_position_eur")
+    )
     requested_volume_lots: float | None = None
     approved_volume_lots: float | None = None
     submitted_volume_lots: float | None = None
@@ -824,3 +919,64 @@ class ExecutionResultResponse(BaseModel):
     positions_after: list[MT5PositionResponse] = Field(default_factory=list)
     post_capital: dict[str, Any] = Field(default_factory=dict)
     fills: list[ExecutionFillResponse] = Field(default_factory=list)
+
+
+# ── Stress testing ──────────────────────────────────────────────────────
+
+# ── Reconciliation acknowledgement ──────────────────────────────────────
+
+class ReconciliationAcknowledgeRequest(BaseModel):
+    portfolio_slug: str | None = None
+    symbol: str
+    reason: str = ""
+    operator_note: str = ""
+
+
+class ReconciliationAcknowledgementResponse(BaseModel):
+    id: int | None = None
+    portfolio_id: int | None = None
+    symbol: str
+    reason: str | None = None
+    operator_note: str | None = None
+    mismatch_status: str | None = None
+    acknowledged_at: str | None = None
+    updated_at: str | None = None
+
+
+class ReconciliationAcknowledgeResponse(BaseModel):
+    acknowledged: bool
+    symbol: str
+    audit_event_id: int
+    acknowledgement_id: int | None = None
+    mismatch_status: str | None = None
+    acknowledgement: ReconciliationAcknowledgementResponse | None = None
+
+
+# ── Stress testing ──────────────────────────────────────────────────────
+
+class StressScenarioRequest(BaseModel):
+    name: str
+    vol_multiplier: float = 1.0
+    shock_pnl: float = 0.0
+
+
+class RunStressTestRequest(BaseModel):
+    portfolio_slug: str | None = None
+    scenarios: list[StressScenarioRequest] = Field(default_factory=list)
+    alpha: float | None = None
+
+
+class StressScenarioResultResponse(BaseModel):
+    name: str
+    vol_multiplier: float
+    shock_pnl: float
+    var: float
+    es: float
+
+
+class StressReportResponse(BaseModel):
+    portfolio_slug: str
+    alpha: float
+    baseline_var: float
+    baseline_es: float
+    scenarios: list[StressScenarioResultResponse]

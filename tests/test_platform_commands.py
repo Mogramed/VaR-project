@@ -30,8 +30,10 @@ def test_db_upgrade_enables_health_and_jobs_status(tmp_path: Path) -> None:
     assert jobs.status_code == 200
     body = jobs.json()
     assert body["database_ready"] is True
-    assert set(body["jobs"]) == {"snapshot", "backtest", "report"}
+    assert set(body["jobs"]) == {"snapshot", "backtest", "live_refresh", "report"}
     assert body["jobs"]["snapshot"]["state"] in {"pending", "due", "ok"}
+    assert body["jobs"]["live_refresh"]["enabled"] is False
+    assert body["jobs"]["live_refresh"]["state"] == "disabled"
 
 
 def test_seed_demo_environment_populates_platform_state(tmp_path: Path) -> None:

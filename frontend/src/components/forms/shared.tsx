@@ -34,13 +34,15 @@ export function FormMetaTile({
   label: string;
   value: string;
   hint?: string;
-  tone?: "neutral" | "accent" | "success" | "warning";
+  tone?: "neutral" | "accent" | "success" | "warning" | "danger";
 }) {
   const accentClass =
     tone === "success"
       ? "text-[var(--color-green)]"
       : tone === "warning"
         ? "text-[var(--color-amber)]"
+        : tone === "danger"
+          ? "text-[var(--color-red)]"
         : tone === "accent"
           ? "text-[var(--color-accent)]"
           : "text-white";

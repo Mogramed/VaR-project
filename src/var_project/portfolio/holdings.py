@@ -51,6 +51,7 @@ class PortfolioHolding:
             "signed_units": self.signed_units,
             "market_value_base_ccy": self.market_value_base_ccy,
             "exposure_base_ccy": self.exposure_base_ccy,
+            "signed_exposure_base_ccy": self.exposure_base_ccy,
             "signed_position_eur": self.exposure_base_ccy,
             "unrealized_pnl_base_ccy": self.unrealized_pnl_base_ccy,
             "profit": self.unrealized_pnl_base_ccy,
@@ -63,6 +64,7 @@ class PortfolioHolding:
         symbol = _normalize_symbol(payload.get("symbol") or "")
         exposure = float(
             payload.get("exposure_base_ccy")
+            or payload.get("signed_exposure_base_ccy")
             or payload.get("signed_position_eur")
             or payload.get("exposure_eur")
             or 0.0
@@ -157,6 +159,8 @@ def normalize_holdings(
             holdings.append(item)
         else:
             holdings.append(PortfolioHolding.from_mapping(item, fallback_base_currency=base_currency))
+    if not holdings and symbols is not None:
+        return configured_holdings(symbols, {}, base_currency=base_currency, source=source)
     return holdings
 
 

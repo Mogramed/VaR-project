@@ -13,8 +13,10 @@ from var_project.api.schemas import (
     RiskBudgetResponse,
     RunBacktestRequest,
     RunSnapshotRequest,
+    RunStressTestRequest,
     SnapshotRunResponse,
     SnapshotSummary,
+    StressReportResponse,
     ValidationRunSummary,
 )
 from var_project.api.service import DeskApiService
@@ -128,6 +130,24 @@ def latest_risk_budget(
     if budget is None:
         raise HTTPException(status_code=404, detail="No risk budget available.")
     return RiskBudgetResponse.model_validate(budget)
+
+
+@router.post("/snapshots/stress", response_model=StressReportResponse)
+def run_stress_test(payload: RunStressTestRequest, service: DeskApiService = Depends(get_service)) -> StressReportResponse:
+    try:
+        scenarios = [s.model_dump() for s in payload.scenarios] if payload.scenarios else None
+        result = service.run_stress_test(
+            portfolio_slug=payload.portfolio_slug,
+            scenarios=scenarios,
+            alpha=payload.alpha,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return StressReportResponse.model_validate(result)
 
 
 @router.get("/artifacts/latest/{artifact_type}", response_model=ArtifactSummary)

@@ -44,6 +44,7 @@ class DeskReadService:
             "dependencies": {
                 "database": self.runtime.database_dependency(),
                 "mt5": self.runtime.mt5_dependency(),
+                "mt5_live": self.runtime.mt5_live_dependency(self.runtime.portfolio["slug"]),
                 "market_data": self.runtime.market_data.market_data_status(portfolio_slug=self.runtime.portfolio["slug"]),
             },
         }
@@ -105,10 +106,16 @@ class DeskReadService:
         bundle = self.runtime._compute_portfolio_state(portfolio_slug=resolved_slug)
         return bundle["capital"]
 
-    def capital_history(self, *, limit: int = 25, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
+    def capital_history(
+        self,
+        *,
+        limit: int = 25,
+        source: str | None = None,
+        portfolio_slug: str | None = None,
+    ) -> list[dict[str, Any]]:
         if not self.runtime.storage_ready:
             return []
-        return self.runtime.storage.capital_history(limit=limit, portfolio_slug=portfolio_slug)
+        return self.runtime.storage.capital_history(limit=limit, source=source, portfolio_slug=portfolio_slug)
 
     def recent_execution_results(self, *, limit: int = 25, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
         if not self.runtime.storage_ready:
@@ -128,8 +135,14 @@ class DeskReadService:
     def report_decision_history(self, *, limit: int = 25, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
         return self.recent_decisions(limit=limit, portfolio_slug=portfolio_slug)
 
-    def report_capital_history(self, *, limit: int = 25, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
-        return self.capital_history(limit=limit, portfolio_slug=portfolio_slug)
+    def report_capital_history(
+        self,
+        *,
+        limit: int = 25,
+        source: str | None = None,
+        portfolio_slug: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.capital_history(limit=limit, source=source, portfolio_slug=portfolio_slug)
 
     def portfolio_capital(self, portfolio_slug: str) -> dict[str, Any]:
         return self.latest_capital(portfolio_slug=portfolio_slug)

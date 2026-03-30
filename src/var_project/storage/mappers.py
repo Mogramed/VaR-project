@@ -17,6 +17,7 @@ from var_project.storage.models import (
     MarketBarRecord,
     MarketDataSyncRecord,
     PortfolioRecord,
+    ReconciliationAcknowledgementRecord,
     SnapshotRecord,
     ValidationRunRecord,
 )
@@ -186,6 +187,19 @@ def execution_fill_to_dict(record: ExecutionFillRecord) -> dict[str, Any]:
     payload.setdefault("slippage_points", record.slippage_points)
     payload.setdefault("time_utc", to_iso(record.time_utc))
     payload.setdefault("created_at", to_iso(record.created_at))
+    return payload
+
+
+def reconciliation_acknowledgement_to_dict(record: ReconciliationAcknowledgementRecord) -> dict[str, Any]:
+    payload = dict(record.payload_json or {})
+    payload.setdefault("id", int(record.id))
+    payload.setdefault("portfolio_id", record.portfolio_id)
+    payload.setdefault("symbol", record.symbol)
+    payload.setdefault("reason", record.reason)
+    payload.setdefault("operator_note", record.operator_note)
+    payload.setdefault("mismatch_status", record.mismatch_status)
+    payload.setdefault("acknowledged_at", to_iso(record.acknowledged_at))
+    payload.setdefault("updated_at", to_iso(record.updated_at))
     return payload
 
 

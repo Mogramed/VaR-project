@@ -1,18 +1,12 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Mono, Manrope } from "next/font/google";
+import type { CSSProperties } from "react";
 import { QueryProvider } from "@/components/providers/query-provider";
 import "./globals.css";
 
-const manrope = Manrope({
-  variable: "--font-ui",
-  subsets: ["latin"],
-});
-
-const plexMono = IBM_Plex_Mono({
-  variable: "--font-ui-mono",
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-});
+const rootFontStyle = {
+  "--font-ui": '"Aptos", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif',
+  "--font-ui-mono": '"Cascadia Code", "IBM Plex Mono", "Consolas", monospace',
+} as CSSProperties;
 
 export const metadata: Metadata = {
   title: {
@@ -31,7 +25,8 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${manrope.variable} ${plexMono.variable} h-full scroll-smooth`}
+      className="h-full scroll-smooth"
+      style={rootFontStyle}
       suppressHydrationWarning
     >
       <body className="min-h-full bg-[var(--color-bg)] text-[var(--color-text)] antialiased">

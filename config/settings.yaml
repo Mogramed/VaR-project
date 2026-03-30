@@ -7,8 +7,7 @@ symbols:
 portfolio:
   name: "FX_EUR_20k"
   mode: "hybrid"
-  pnl_mode: "notional_return_approx"
-  positions_eur:
+  configured_exposure:
     EURUSD: 10000
     USDJPY: 10000
 
@@ -38,10 +37,6 @@ risk:
     q: 1
     dist: "t"
     mean: "constant"
-
-live:
-  interval_seconds: 30
-  n_update_bars: 1500
 
 mt5:
   login: null

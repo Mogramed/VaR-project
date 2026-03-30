@@ -11,9 +11,11 @@ import { formatCurrency, formatPercent } from "@/lib/utils";
 export function CapitalRebalancePanel({
   portfolioSlug,
   referenceModel,
+  onRebalanced,
 }: {
   portfolioSlug: string;
   referenceModel: string;
+  onRebalanced?: (result: CapitalUsageSnapshotResponse) => void;
 }) {
   const router = useRouter();
   const [budget, setBudget] = useState("12000000");
@@ -27,7 +29,12 @@ export function CapitalRebalancePanel({
         reserve_ratio: Number(reserveRatio),
         reference_model: referenceModel,
       }),
-    onSuccess: () => router.refresh(),
+    onSuccess: (result) => {
+      onRebalanced?.(result);
+      if (!onRebalanced) {
+        router.refresh();
+      }
+    },
   });
 
   return (

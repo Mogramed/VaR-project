@@ -102,6 +102,31 @@ class DeskServiceRuntime:
             window=window,
         )
 
+    def _compute_portfolio_state_for_exposure(
+        self,
+        *,
+        portfolio: Mapping[str, Any],
+        exposure_by_symbol: Mapping[str, Any],
+        timeframe: str | None = None,
+        days: int | None = None,
+        min_coverage: float | None = None,
+        config: RiskModelConfig | None = None,
+        window: int | None = None,
+        snapshot_source: str = "historical",
+        snapshot_timestamp: str | None = None,
+    ) -> dict[str, Any]:
+        return self.risk.compute_portfolio_state_for_exposure(
+            portfolio=portfolio,
+            exposure_by_symbol=exposure_by_symbol,
+            timeframe=timeframe,
+            days=days,
+            min_coverage=min_coverage,
+            config=config,
+            window=window,
+            snapshot_source=snapshot_source,
+            snapshot_timestamp=snapshot_timestamp,
+        )
+
     def _compute_portfolio_state_for_positions(
         self,
         *,
@@ -115,9 +140,9 @@ class DeskServiceRuntime:
         snapshot_source: str = "historical",
         snapshot_timestamp: str | None = None,
     ) -> dict[str, Any]:
-        return self.risk.compute_portfolio_state_for_positions(
+        return self._compute_portfolio_state_for_exposure(
             portfolio=portfolio,
-            positions_eur=positions_eur,
+            exposure_by_symbol=positions_eur,
             timeframe=timeframe,
             days=days,
             min_coverage=min_coverage,
@@ -160,7 +185,8 @@ class DeskServiceRuntime:
         *,
         bundle: Mapping[str, Any],
         symbol: str,
-        delta_position_eur: float,
+        exposure_change: float | None = None,
+        delta_position_eur: float | None = None,
         note: str | None,
         persist: bool,
         audit_action: str = "decision.evaluate",
@@ -168,6 +194,7 @@ class DeskServiceRuntime:
         return self.decisions.evaluate_trade_decision_from_bundle(
             bundle=bundle,
             symbol=symbol,
+            exposure_change=exposure_change,
             delta_position_eur=delta_position_eur,
             note=note,
             persist=persist,
@@ -179,12 +206,14 @@ class DeskServiceRuntime:
         *,
         bundle: Mapping[str, Any],
         symbol: str,
-        approved_delta_position_eur: float,
+        approved_exposure_change: float | None = None,
+        approved_delta_position_eur: float | None = None,
         snapshot_source: str,
     ) -> dict[str, Any]:
         return self.decisions.post_capital_after_trade(
             bundle=bundle,
             symbol=symbol,
+            approved_exposure_change=approved_exposure_change,
             approved_delta_position_eur=approved_delta_position_eur,
             snapshot_source=snapshot_source,
         )
@@ -221,8 +250,24 @@ class DeskServiceRuntime:
             fill_candidates=fill_candidates,
         )
 
-    def _persist_live_bundle(self, *, bundle: Mapping[str, Any], portfolio_id: int, source: str) -> None:
-        self.governance.persist_live_bundle(bundle=bundle, portfolio_id=portfolio_id, source=source)
+    def _persist_live_bundle(
+        self,
+        *,
+        bundle: Mapping[str, Any],
+        portfolio_id: int,
+        source: str,
+        metadata: Mapping[str, Any] | None = None,
+        persist_alerts: bool = True,
+        persist_audit: bool = True,
+    ) -> None:
+        self.governance.persist_live_bundle(
+            bundle=bundle,
+            portfolio_id=portfolio_id,
+            source=source,
+            metadata=metadata,
+            persist_alerts=persist_alerts,
+            persist_audit=persist_audit,
+        )
 
     def _mt5_gateway(self):
         return self.execution.mt5_gateway()
@@ -257,6 +302,9 @@ class DeskServiceRuntime:
     def mt5_dependency(self) -> dict[str, Any]:
         return self.execution.mt5_dependency()
 
+    def mt5_live_dependency(self, portfolio_slug: str | None = None) -> dict[str, Any]:
+        return self.execution.mt5_live_dependency(portfolio_slug)
+
     def _positions_json(self, positions: Mapping[str, Any] | None = None) -> str:
         return self.risk.exposures_json(positions)
 
@@ -288,5 +336,15 @@ class DeskServiceRuntime:
     def _resolve_compare_path(self, compare_path: str | None, *, portfolio_slug: str | None = None) -> Path | None:
         return self.governance.resolve_compare_path(compare_path, portfolio_slug=portfolio_slug)
 
-    def _append_governance_sections(self, report_path: Path) -> None:
-        self.governance.append_governance_sections(report_path)
+    def _append_governance_sections(
+        self,
+        report_path: Path,
+        *,
+        portfolio_slug: str | None = None,
+        capital_source: str | None = None,
+    ) -> None:
+        self.governance.append_governance_sections(
+            report_path,
+            portfolio_slug=portfolio_slug,
+            capital_source=capital_source,
+        )
