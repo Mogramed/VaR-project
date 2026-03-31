@@ -7,18 +7,18 @@ import { cn } from "@/lib/utils";
 
 function resolveHeight(mode: ChartMode, dataCount: number) {
   if (mode === "trace") {
-    return dataCount > 120 ? 500 : 460;
+    return dataCount > 120 ? 440 : 380;
   }
   if (mode === "dense") {
-    return 420;
+    return 360;
   }
   if (mode === "comparison") {
-    return dataCount <= 4 ? 320 : 380;
+    return dataCount <= 4 ? 280 : 340;
   }
   if (mode === "sparse") {
-    return 300;
+    return 260;
   }
-  return 360;
+  return 320;
 }
 
 export function ChartSurface({
@@ -54,10 +54,6 @@ export function ChartSurface({
   surface?: "panel" | "bare";
   className?: string;
 }) {
-  const wrapperClassName =
-    surface === "panel"
-      ? "surface overflow-hidden rounded-[1.6rem] border border-white/8"
-      : "overflow-hidden rounded-[1.6rem] border border-white/8 bg-black/18";
   const resolvedHeight = height ?? resolveHeight(mode, dataCount);
   const sparseMode = mode === "sparse" || (mode === "comparison" && dataCount <= 4);
   const hasData = dataCount > 0;
@@ -65,50 +61,49 @@ export function ChartSurface({
     insightLayout === "stack"
       ? "grid-cols-1"
       : insightLayout === "side"
-        ? "xl:grid-cols-[minmax(260px,430px)_minmax(0,1fr)]"
-        : "min-[1500px]:grid-cols-[minmax(260px,430px)_minmax(0,1fr)]";
+        ? "xl:grid-cols-[minmax(220px,360px)_minmax(0,1fr)]"
+        : "min-[1400px]:grid-cols-[minmax(220px,360px)_minmax(0,1fr)]";
 
   return (
-    <section data-chart-surface className={cn(wrapperClassName, className)}>
-      {eyebrow || title || description || toolbar || meta ? (
-        <header className="border-b border-white/8 px-5 py-4">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="max-w-3xl">
-              {eyebrow ? (
-                <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
-                  {eyebrow}
-                </div>
-              ) : null}
-              {title ? (
-                <h3 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-white">
-                  {title}
-                </h3>
-              ) : null}
-              {description ? (
-                <p className="mt-2 text-sm leading-6 text-[var(--color-text-soft)]">
-                  {description}
-                </p>
-              ) : null}
-            </div>
-            {(toolbar || meta) ? (
-              <div className="flex shrink-0 flex-col items-start gap-3 lg:items-end">
-                {toolbar}
-                {meta ? (
-                  <div className="mono text-[11px] uppercase tracking-[0.24em] text-[var(--color-text-muted)]">
-                    {meta}
-                  </div>
-                ) : null}
-              </div>
+    <section
+      data-chart-surface
+      className={cn(
+        "overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)]",
+        className,
+      )}
+    >
+      {/* Header */}
+      {(eyebrow || title || toolbar || meta) ? (
+        <header className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-3.5 py-2.5">
+          <div className="flex items-center gap-3 min-w-0">
+            {title ? (
+              <h3 className="truncate text-[13px] font-semibold text-[var(--color-text)]">
+                {title}
+              </h3>
+            ) : null}
+            {eyebrow ? (
+              <span className="hidden shrink-0 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] sm:inline">
+                {eyebrow}
+              </span>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {toolbar}
+            {meta ? (
+              <span className="mono text-[10px] text-[var(--color-text-muted)]">
+                {meta}
+              </span>
             ) : null}
           </div>
         </header>
       ) : null}
 
+      {/* Chart body */}
       {!hasData && emptyState ? (
-        <div className="px-5 py-6">{emptyState}</div>
+        <div className="px-3.5 py-4">{emptyState}</div>
       ) : sparseMode && insight ? (
-        <div className={cn("grid gap-6 px-4 py-4 lg:px-5", insightGridClass)}>
-          <div className="mx-auto w-full max-w-[430px]">
+        <div className={cn("grid gap-4 p-3.5", insightGridClass)}>
+          <div className="mx-auto w-full max-w-[380px]">
             <ReactECharts
               option={option}
               style={{ height: `${resolvedHeight}px`, width: "100%" }}
@@ -119,20 +114,8 @@ export function ChartSurface({
           </div>
           <div className="min-w-0">{insight}</div>
         </div>
-      ) : sparseMode ? (
-        <div className="px-4 py-4 lg:px-5">
-          <div className="mx-auto w-full max-w-[520px]">
-            <ReactECharts
-              option={option}
-              style={{ height: `${resolvedHeight}px`, width: "100%" }}
-              opts={{ renderer: "svg" }}
-              notMerge
-              lazyUpdate
-            />
-          </div>
-        </div>
       ) : (
-        <div className="px-3 py-3 sm:px-4 sm:py-4">
+        <div className="px-1 py-1">
           <ReactECharts
             option={option}
             style={{ height: `${resolvedHeight}px`, width: "100%" }}
@@ -143,7 +126,10 @@ export function ChartSurface({
         </div>
       )}
 
-      {footer ? <div className="border-t border-white/8 px-5 py-4">{footer}</div> : null}
+      {/* Footer */}
+      {footer ? (
+        <div className="border-t border-[var(--color-border)] px-3.5 py-2.5">{footer}</div>
+      ) : null}
     </section>
   );
 }

@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-
 import { PageHeader } from "@/components/app-shell/page-header";
 import { FormMetaTile, FieldInput, FieldLabel } from "@/components/forms/shared";
 import { StatusBadge } from "@/components/ui/primitives";
@@ -10,177 +9,78 @@ import { api } from "@/lib/api/client";
 import type { StressReportResponse, StressScenarioRequest } from "@/lib/api/types";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 
-const defaultScenarios: StressScenarioRequest[] = [
+const defaults: StressScenarioRequest[] = [
   { name: "2008 Crisis", vol_multiplier: 3.0, shock_pnl: 0.0 },
-  { name: "COVID March 2020", vol_multiplier: 4.0, shock_pnl: 0.0 },
+  { name: "COVID Mar 2020", vol_multiplier: 4.0, shock_pnl: 0.0 },
   { name: "ECB Rate Shock", vol_multiplier: 2.0, shock_pnl: 0.0 },
   { name: "Mild Stress", vol_multiplier: 1.5, shock_pnl: 0.0 },
 ];
 
-export function StressLiveSurface({
-  portfolioSlug,
-}: {
-  portfolioSlug: string;
-}) {
-  const [scenarios, setScenarios] = useState<StressScenarioRequest[]>(defaultScenarios);
-  const [customName, setCustomName] = useState("Custom");
-  const [customVol, setCustomVol] = useState("2.0");
-  const [customShock, setCustomShock] = useState("0");
+export function StressLiveSurface({ portfolioSlug }: { portfolioSlug: string }) {
+  const [scenarios, setScenarios] = useState(defaults);
+  const [name, setName] = useState("Custom");
+  const [vol, setVol] = useState("2.0");
+  const [shock, setShock] = useState("0");
 
   const mutation = useMutation({
-    mutationFn: async () =>
-      api.runStressTest({
-        portfolio_slug: portfolioSlug,
-        scenarios: scenarios.length > 0 ? scenarios : undefined,
-      }),
+    mutationFn: () => api.runStressTest({ portfolio_slug: portfolioSlug, scenarios: scenarios.length > 0 ? scenarios : undefined }),
   });
 
-  const report = mutation.data;
-
   return (
-    <div className="space-y-6">
-      <PageHeader
-        eyebrow="Stress Testing"
-        title="Multi-scenario VaR stress analysis"
-        description="Apply volatility multipliers and additive PnL shocks to the portfolio, then compare stressed VaR/ES against the baseline."
-      />
+    <div className="desk-page space-y-4">
+      <PageHeader eyebrow="Stress" title="Multi-scenario VaR stress analysis" />
 
-      <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
-        {/* Scenario configuration */}
-        <div className="surface rounded-[1.8rem] p-6">
-          <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
-            Scenarios
-          </div>
-
-          <div className="mt-4 space-y-3">
+      <div className="grid gap-4 xl:grid-cols-2">
+        {/* Config */}
+        <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+          <h3 className="text-[13px] font-semibold text-[var(--color-text)]">Scenarios</h3>
+          <div className="mt-3 space-y-1.5">
             {scenarios.map((sc, i) => (
-              <div
-                key={sc.name}
-                className="flex items-center gap-3 rounded-[1.2rem] border border-white/8 bg-white/[0.03] px-4 py-3"
-              >
-                <div className="flex-1 text-sm font-semibold text-white">{sc.name}</div>
-                <div className="text-xs text-[var(--color-text-muted)]">
-                  vol &times;{sc.vol_multiplier.toFixed(1)}
+              <div key={sc.name} className="flex items-center justify-between rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-xs">
+                <span className="font-semibold text-[var(--color-text)]">{sc.name}</span>
+                <div className="flex items-center gap-3">
+                  <span className="text-[var(--color-text-muted)]">×{sc.vol_multiplier.toFixed(1)}</span>
+                  {sc.shock_pnl !== 0 && <span className="text-[var(--color-text-muted)]">{sc.shock_pnl > 0 ? "+" : ""}{sc.shock_pnl.toFixed(0)}</span>}
+                  <button type="button" className="text-[var(--color-text-muted)] hover:text-[var(--color-red)]" onClick={() => setScenarios((p) => p.filter((_, j) => j !== i))}>×</button>
                 </div>
-                {sc.shock_pnl !== 0 && (
-                  <div className="text-xs text-[var(--color-text-muted)]">
-                    shock {sc.shock_pnl > 0 ? "+" : ""}{sc.shock_pnl.toFixed(2)}
-                  </div>
-                )}
-                <button
-                  type="button"
-                  className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-red)] transition-colors"
-                  onClick={() => setScenarios((prev) => prev.filter((_, j) => j !== i))}
-                >
-                  Remove
-                </button>
               </div>
             ))}
           </div>
 
-          <div className="mt-5 border-t border-white/8 pt-5">
-            <div className="mono text-[11px] uppercase tracking-[0.24em] text-[var(--color-text-muted)]">
-              Add custom scenario
+          <div className="mt-4 border-t border-[var(--color-border)] pt-4">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Add scenario</div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-3">
+              <div><FieldLabel htmlFor="s-name">Name</FieldLabel><FieldInput id="s-name" value={name} onChange={(e) => setName(e.target.value)} /></div>
+              <div><FieldLabel htmlFor="s-vol">Vol mult</FieldLabel><FieldInput id="s-vol" type="number" min="0.1" step="0.1" value={vol} onChange={(e) => setVol(e.target.value)} /></div>
+              <div><FieldLabel htmlFor="s-shock">Shock EUR</FieldLabel><FieldInput id="s-shock" type="number" step="100" value={shock} onChange={(e) => setShock(e.target.value)} /></div>
             </div>
-            <div className="mt-3 grid gap-3 sm:grid-cols-3">
-              <div>
-                <FieldLabel htmlFor="stress-custom-name">Name</FieldLabel>
-                <FieldInput
-                  id="stress-custom-name"
-                  value={customName}
-                  onChange={(e) => setCustomName(e.target.value)}
-                />
-              </div>
-              <div>
-                <FieldLabel htmlFor="stress-custom-vol">Vol multiplier</FieldLabel>
-                <FieldInput
-                  id="stress-custom-vol"
-                  type="number"
-                  min="0.1"
-                  step="0.1"
-                  value={customVol}
-                  onChange={(e) => setCustomVol(e.target.value)}
-                />
-              </div>
-              <div>
-                <FieldLabel htmlFor="stress-custom-shock">Shock PnL (EUR)</FieldLabel>
-                <FieldInput
-                  id="stress-custom-shock"
-                  type="number"
-                  step="100"
-                  value={customShock}
-                  onChange={(e) => setCustomShock(e.target.value)}
-                />
-              </div>
-            </div>
-            <div className="mt-3 flex gap-3">
-              <button
-                type="button"
-                className="inline-flex h-10 items-center justify-center rounded-full border border-white/12 bg-white/5 px-4 text-sm font-semibold text-[var(--color-text)] transition hover:bg-white/8"
-                onClick={() => {
-                  if (!customName.trim()) return;
-                  setScenarios((prev) => [
-                    ...prev,
-                    {
-                      name: customName.trim(),
-                      vol_multiplier: Number(customVol) || 1.0,
-                      shock_pnl: Number(customShock) || 0.0,
-                    },
-                  ]);
-                  setCustomName("Custom");
-                  setCustomVol("2.0");
-                  setCustomShock("0");
-                }}
-              >
-                Add scenario
+            <div className="mt-2 flex gap-2">
+              <button type="button" className="h-7 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-3 text-[11px] font-medium text-[var(--color-text)] transition hover:bg-[var(--color-surface-hover)]"
+                onClick={() => { if (!name.trim()) return; setScenarios((p) => [...p, { name: name.trim(), vol_multiplier: Number(vol) || 1, shock_pnl: Number(shock) || 0 }]); setName("Custom"); setVol("2.0"); setShock("0"); }}>
+                Add
               </button>
-              <button
-                type="button"
-                className="inline-flex h-10 items-center justify-center rounded-full border border-white/12 bg-white/5 px-4 text-xs text-[var(--color-text-muted)] transition hover:bg-white/8"
-                onClick={() => setScenarios(defaultScenarios)}
-              >
-                Reset to defaults
-              </button>
+              <button type="button" className="h-7 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-3 text-[11px] text-[var(--color-text-muted)] transition hover:bg-[var(--color-surface-hover)]"
+                onClick={() => setScenarios(defaults)}>Reset</button>
             </div>
           </div>
 
-          <div className="mt-6">
-            <button
-              type="button"
-              className="inline-flex h-12 items-center justify-center rounded-full bg-[var(--color-accent)] px-5 text-sm font-semibold text-[#1a1206] transition duration-300 motion-safe:hover:-translate-y-[1px] hover:shadow-[0_18px_44px_rgba(216,155,73,0.22)] disabled:opacity-50"
-              disabled={mutation.isPending || scenarios.length === 0}
+          <div className="mt-4">
+            <button type="button" disabled={mutation.isPending || scenarios.length === 0}
               onClick={() => mutation.mutate()}
-            >
-              {mutation.isPending ? "Running stress test..." : "Run stress test"}
+              className="h-8 rounded-[var(--radius-md)] bg-[var(--color-accent)] px-4 text-[12px] font-semibold text-[#1a1206] transition hover:brightness-110 disabled:opacity-50">
+              {mutation.isPending ? "Running..." : "Run stress test"}
             </button>
-            {mutation.error && (
-              <div className="mt-3 text-sm text-[var(--color-red)]">
-                {mutation.error instanceof Error ? mutation.error.message : "Stress test failed."}
-              </div>
-            )}
+            {mutation.error && <div className="mt-2 text-[11px] text-[var(--color-red)]">{mutation.error instanceof Error ? mutation.error.message : "Failed"}</div>}
           </div>
         </div>
 
         {/* Results */}
-        <div className="surface-strong rounded-[1.8rem] p-6">
-          <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
-            Stress Report
-          </div>
-
-          {!report ? (
-            <div className="mt-8 max-w-xl">
-              <h3 className="text-2xl font-semibold text-white">No stress results yet.</h3>
-              <p className="mt-3 text-sm leading-7 text-[var(--color-text-soft)]">
-                Configure scenarios and run the stress test to see VaR/ES under each scenario compared to the baseline.
-              </p>
-              <div className="mt-6 grid gap-4 sm:grid-cols-3">
-                <FormMetaTile label="Baseline VaR" value="---" hint="Current portfolio" />
-                <FormMetaTile label="Worst VaR" value="---" hint="Max stressed VaR" />
-                <FormMetaTile label="VaR increase" value="---" hint="Worst vs baseline" />
-              </div>
-            </div>
+        <div className="rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[var(--color-surface-strong)] p-4">
+          <h3 className="text-[13px] font-semibold text-[var(--color-text)]">Stress Report</h3>
+          {!mutation.data ? (
+            <p className="mt-3 text-xs text-[var(--color-text-muted)]">Configure scenarios and run the test to compare stressed VaR/ES vs baseline.</p>
           ) : (
-            <StressResults report={report} />
+            <StressResults report={mutation.data} />
           )}
         </div>
       </div>
@@ -189,89 +89,45 @@ export function StressLiveSurface({
 }
 
 function StressResults({ report }: { report: StressReportResponse }) {
-  const worstScenario = useMemo(() => {
-    if (report.scenarios.length === 0) return null;
-    return report.scenarios.reduce((a, b) => (a.var > b.var ? a : b));
-  }, [report.scenarios]);
-
-  const varIncrease = worstScenario
-    ? ((worstScenario.var - report.baseline_var) / report.baseline_var)
-    : null;
+  const worst = useMemo(() => report.scenarios.length === 0 ? null : report.scenarios.reduce((a, b) => a.var > b.var ? a : b), [report.scenarios]);
+  const increase = worst ? (worst.var - report.baseline_var) / report.baseline_var : null;
 
   return (
     <div>
-      <div className="mt-4 grid gap-4 sm:grid-cols-3">
-        <FormMetaTile
-          label="Baseline VaR"
-          value={formatCurrency(report.baseline_var)}
-          hint={`ES: ${formatCurrency(report.baseline_es)}`}
-          tone="accent"
-        />
-        <FormMetaTile
-          label="Worst VaR"
-          value={worstScenario ? formatCurrency(worstScenario.var) : "n/a"}
-          hint={worstScenario?.name ?? "n/a"}
-          tone="danger"
-        />
-        <FormMetaTile
-          label="VaR increase"
-          value={varIncrease != null ? formatPercent(varIncrease, 0) : "n/a"}
-          hint="Worst vs baseline"
-          tone={varIncrease != null && varIncrease > 1.0 ? "danger" : "warning"}
-        />
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        <FormMetaTile label="Baseline VaR" value={formatCurrency(report.baseline_var)} hint={`ES: ${formatCurrency(report.baseline_es)}`} tone="accent" />
+        <FormMetaTile label="Worst VaR" value={worst ? formatCurrency(worst.var) : "n/a"} hint={worst?.name ?? "n/a"} tone="danger" />
+        <FormMetaTile label="VaR increase" value={increase != null ? formatPercent(increase, 0) : "n/a"} tone={increase != null && increase > 1.0 ? "danger" : "warning"} />
       </div>
 
-      <div className="mt-6">
-        <div className="mono text-[11px] uppercase tracking-[0.24em] text-[var(--color-text-muted)]">
-          Scenario breakdown
-        </div>
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/8 text-left text-xs text-[var(--color-text-muted)]">
-                <th className="pb-3 pr-4 font-medium">Scenario</th>
-                <th className="pb-3 pr-4 font-medium text-right">Vol mult.</th>
-                <th className="pb-3 pr-4 font-medium text-right">Shock</th>
-                <th className="pb-3 pr-4 font-medium text-right">VaR</th>
-                <th className="pb-3 pr-4 font-medium text-right">ES</th>
-                <th className="pb-3 font-medium text-right">vs Baseline</th>
-              </tr>
-            </thead>
-            <tbody>
-              {report.scenarios.map((sc) => {
-                const ratio = report.baseline_var > 0 ? sc.var / report.baseline_var : 0;
-                return (
-                  <tr key={sc.name} className="border-b border-white/6">
-                    <td className="py-3 pr-4 font-semibold text-white">{sc.name}</td>
-                    <td className="py-3 pr-4 text-right text-[var(--color-text-soft)]">
-                      &times;{sc.vol_multiplier.toFixed(1)}
-                    </td>
-                    <td className="py-3 pr-4 text-right text-[var(--color-text-soft)]">
-                      {sc.shock_pnl !== 0 ? formatCurrency(sc.shock_pnl) : "—"}
-                    </td>
-                    <td className="py-3 pr-4 text-right font-semibold text-white">
-                      {formatCurrency(sc.var)}
-                    </td>
-                    <td className="py-3 pr-4 text-right text-[var(--color-text-soft)]">
-                      {formatCurrency(sc.es)}
-                    </td>
-                    <td className="py-3 text-right">
-                      <StatusBadge
-                        label={formatPercent(ratio, 0)}
-                        tone={ratio > 3 ? "danger" : ratio > 2 ? "warning" : "success"}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead>
+            <tr className="border-b border-[var(--color-border)] text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+              <th className="pb-2 pr-3">Scenario</th>
+              <th className="pb-2 pr-3 text-right">Vol</th>
+              <th className="pb-2 pr-3 text-right">VaR</th>
+              <th className="pb-2 pr-3 text-right">ES</th>
+              <th className="pb-2 text-right">vs Base</th>
+            </tr>
+          </thead>
+          <tbody>
+            {report.scenarios.map((sc) => {
+              const ratio = report.baseline_var > 0 ? sc.var / report.baseline_var : 0;
+              return (
+                <tr key={sc.name} className="border-b border-[var(--color-border)]">
+                  <td className="py-2 pr-3 font-semibold text-[var(--color-text)]">{sc.name}</td>
+                  <td className="py-2 pr-3 text-right text-[var(--color-text-soft)]">×{sc.vol_multiplier.toFixed(1)}</td>
+                  <td className="py-2 pr-3 text-right font-semibold text-[var(--color-text)]">{formatCurrency(sc.var)}</td>
+                  <td className="py-2 pr-3 text-right text-[var(--color-text-soft)]">{formatCurrency(sc.es)}</td>
+                  <td className="py-2 text-right"><StatusBadge label={formatPercent(ratio, 0)} tone={ratio > 3 ? "danger" : ratio > 2 ? "warning" : "success"} /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
-
-      <div className="mt-4 text-xs text-[var(--color-text-muted)]">
-        Alpha: {formatPercent(report.alpha, 0)} — Portfolio: {report.portfolio_slug}
-      </div>
+      <div className="mt-3 text-[10px] text-[var(--color-text-muted)]">Alpha: {formatPercent(report.alpha, 0)} — {report.portfolio_slug}</div>
     </div>
   );
 }

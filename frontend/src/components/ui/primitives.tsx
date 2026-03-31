@@ -3,20 +3,15 @@ import Link, { type LinkProps } from "next/link";
 import { cn } from "@/lib/utils";
 
 const badgeStyles = cva(
-  "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] transition duration-300",
+  "inline-flex items-center rounded-[3px] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
   {
     variants: {
       tone: {
-        neutral:
-          "border-white/10 bg-white/5 text-[var(--color-text-soft)]",
-        accent:
-          "border-[var(--color-border-strong)] bg-[var(--color-accent-soft)] text-[var(--color-accent)]",
-        success:
-          "border-emerald-400/20 bg-emerald-400/10 text-[var(--color-green)]",
-        warning:
-          "border-amber-400/20 bg-amber-400/10 text-[var(--color-amber)]",
-        danger:
-          "border-red-400/20 bg-red-400/10 text-[var(--color-red)]",
+        neutral: "bg-white/5 text-[var(--color-text-muted)]",
+        accent: "bg-[var(--color-accent-soft)] text-[var(--color-accent)]",
+        success: "bg-[var(--color-green-soft)] text-[var(--color-green)]",
+        warning: "bg-[var(--color-amber-soft)] text-[var(--color-amber)]",
+        danger: "bg-[var(--color-red-soft)] text-[var(--color-red)]",
       },
     },
     defaultVariants: {
@@ -34,16 +29,16 @@ export function Eyebrow({
 }
 
 const buttonStyles = cva(
-  "inline-flex items-center justify-center rounded-full transition duration-300 will-change-transform",
+  "inline-flex items-center justify-center rounded-[var(--radius-md)] font-medium transition-colors duration-150",
   {
     variants: {
       variant: {
         primary:
-          "bg-[var(--color-accent)] px-5 py-3 text-sm font-semibold text-[#1c1408] motion-safe:hover:-translate-y-[1px] hover:shadow-[0_18px_44px_rgba(216,155,73,0.22)]",
+          "bg-[var(--color-accent)] px-4 py-2 text-[13px] text-[#1a1206] hover:brightness-110",
         secondary:
-          "border border-white/12 bg-white/5 px-5 py-3 text-sm font-semibold text-[var(--color-text)] motion-safe:hover:-translate-y-[1px] hover:border-[var(--color-border-strong)] hover:bg-white/8",
+          "border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-4 py-2 text-[13px] text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]",
         ghost:
-          "px-0 py-0 text-sm font-medium text-[var(--color-text-soft)] hover:text-[var(--color-text)]",
+          "px-2 py-1 text-[13px] text-[var(--color-text-soft)] hover:text-[var(--color-text)]",
       },
     },
     defaultVariants: {
@@ -79,12 +74,12 @@ export function SectionHeading({
   align?: "left" | "center";
 }) {
   return (
-    <div className={cn("max-w-3xl space-y-4", align === "center" && "mx-auto text-center")}>
-      <h2 className="text-balance text-3xl font-semibold tracking-[-0.04em] text-white md:text-5xl">
+    <div className={cn("max-w-3xl space-y-2", align === "center" && "mx-auto text-center")}>
+      <h2 className="text-balance text-2xl font-semibold tracking-tight text-[var(--color-text)] md:text-4xl">
         {title}
       </h2>
       {copy ? (
-        <p className="max-w-2xl text-sm leading-7 text-[var(--color-text-soft)] md:text-base">
+        <p className="max-w-2xl text-sm text-[var(--color-text-soft)]">
           {copy}
         </p>
       ) : null}

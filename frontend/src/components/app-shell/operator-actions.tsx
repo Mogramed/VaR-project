@@ -4,17 +4,51 @@ import { useMutation } from "@tanstack/react-query";
 import { Activity, FileText, Radar, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api/client";
+import { cn } from "@/lib/utils";
 
+function ActionButton({
+  icon: Icon,
+  label,
+  pending,
+  disabled,
+  accent,
+  onClick,
+}: {
+  icon: React.ElementType;
+  label: string;
+  pending?: boolean;
+  disabled?: boolean;
+  accent?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        "flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border px-2 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+        accent
+          ? "border-[var(--color-accent)]/30 bg-[var(--color-accent)] text-[#1a1206] hover:brightness-110"
+          : "border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-soft)]",
+      )}
+    >
+      <Icon className={cn("size-3", pending && "animate-spin")} />
+      <span className="hidden sm:inline">{label}</span>
+    </button>
+  );
+}
 
 export function OperatorActions({ portfolioSlug }: { portfolioSlug: string }) {
   const router = useRouter();
 
-  const snapshot = useMutation({
-    mutationFn: async () => api.runSnapshot({ portfolio_slug: portfolioSlug }),
-    onSuccess: () => router.refresh(),
-  });
   const sync = useMutation({
     mutationFn: async () => api.syncMarketData({ portfolio_slug: portfolioSlug }),
+    onSuccess: () => router.refresh(),
+  });
+  const snapshot = useMutation({
+    mutationFn: async () => api.runSnapshot({ portfolio_slug: portfolioSlug }),
     onSuccess: () => router.refresh(),
   });
   const backtest = useMutation({
@@ -27,51 +61,18 @@ export function OperatorActions({ portfolioSlug }: { portfolioSlug: string }) {
   });
 
   const busy = sync.isPending || snapshot.isPending || backtest.isPending || report.isPending;
-  const error =
-    sync.error ?? snapshot.error ?? backtest.error ?? report.error ?? null;
+  const error = sync.error ?? snapshot.error ?? backtest.error ?? report.error ?? null;
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <button
-        type="button"
-        onClick={() => sync.mutate()}
-        disabled={busy}
-        className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 text-xs uppercase tracking-[0.22em] text-[var(--color-text-soft)] transition duration-300 motion-safe:hover:-translate-y-[1px] hover:border-[var(--color-border-strong)] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        <RefreshCw className={`size-4 ${sync.isPending ? "animate-spin" : ""}`} />
-        Sync MT5
-      </button>
-      <button
-        type="button"
-        onClick={() => snapshot.mutate()}
-        disabled={busy}
-        className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 text-xs uppercase tracking-[0.22em] text-[var(--color-text-soft)] transition duration-300 motion-safe:hover:-translate-y-[1px] hover:border-[var(--color-border-strong)] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        <Activity className={`size-4 ${snapshot.isPending ? "animate-spin" : ""}`} />
-        Snapshot
-      </button>
-      <button
-        type="button"
-        onClick={() => backtest.mutate()}
-        disabled={busy}
-        className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 text-xs uppercase tracking-[0.22em] text-[var(--color-text-soft)] transition duration-300 motion-safe:hover:-translate-y-[1px] hover:border-[var(--color-border-strong)] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        <Radar className={`size-4 ${backtest.isPending ? "animate-spin" : ""}`} />
-        Backtest
-      </button>
-      <button
-        type="button"
-        onClick={() => report.mutate()}
-        disabled={busy}
-        className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-[var(--color-accent)] px-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#1a1206] transition duration-300 motion-safe:hover:-translate-y-[1px] hover:shadow-[0_16px_34px_rgba(216,155,73,0.24)] disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        <FileText className={`size-4 ${report.isPending ? "animate-spin" : ""}`} />
-        Report
-      </button>
+    <div className="flex items-center gap-1">
+      <ActionButton icon={RefreshCw} label="Sync" pending={sync.isPending} disabled={busy} onClick={() => sync.mutate()} />
+      <ActionButton icon={Activity} label="Snap" pending={snapshot.isPending} disabled={busy} onClick={() => snapshot.mutate()} />
+      <ActionButton icon={Radar} label="Backtest" pending={backtest.isPending} disabled={busy} onClick={() => backtest.mutate()} />
+      <ActionButton icon={FileText} label="Report" pending={report.isPending} disabled={busy} accent onClick={() => report.mutate()} />
       {error ? (
-        <div className="w-full text-xs text-[var(--color-red)]">
-          {error instanceof Error ? error.message : "Operator action failed."}
-        </div>
+        <span className="text-[10px] text-[var(--color-red)]">
+          {error instanceof Error ? error.message : "Failed"}
+        </span>
       ) : null}
     </div>
   );

@@ -1,7 +1,6 @@
 "use client";
 
 import { startTransition, useEffect, useState } from "react";
-
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { ChartSurface } from "@/components/charts/chart-surface";
@@ -11,28 +10,17 @@ import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
 import { makeLineOption } from "@/lib/chart-options";
-import type {
-  CapitalUsageSnapshotResponse,
-  MT5LiveStateResponse,
-} from "@/lib/api/types";
+import type { CapitalUsageSnapshotResponse, MT5LiveStateResponse } from "@/lib/api/types";
 import { useMt5LiveState } from "@/lib/use-mt5-live-state";
 import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
-import {
-  buildCapitalHistorySeries,
-  flattenCapitalAllocations,
-} from "@/lib/view-models";
+import { buildCapitalHistorySeries, flattenCapitalAllocations } from "@/lib/view-models";
 
-function preferredHistorySource(liveState: MT5LiveStateResponse | null) {
-  return liveState?.capital_usage?.snapshot_source === "mt5_live_bridge"
-    ? "mt5_live_bridge"
-    : undefined;
+function preferredSource(ls: MT5LiveStateResponse | null) {
+  return ls?.capital_usage?.snapshot_source === "mt5_live_bridge" ? "mt5_live_bridge" : undefined;
 }
 
 export function CapitalLiveSurface({
-  portfolioSlug,
-  initialLiveState,
-  initialCapital,
-  initialHistory,
+  portfolioSlug, initialLiveState, initialCapital, initialHistory,
 }: {
   portfolioSlug: string;
   initialLiveState: MT5LiveStateResponse | null;
@@ -40,266 +28,104 @@ export function CapitalLiveSurface({
   initialHistory: CapitalUsageSnapshotResponse[];
 }) {
   const { liveState, transport } = useMt5LiveState(portfolioSlug, initialLiveState);
-  const [capital, setCapital] = useState<CapitalUsageSnapshotResponse | null>(initialCapital);
-  const [history, setHistory] = useState<CapitalUsageSnapshotResponse[]>(initialHistory);
-  const historySource = preferredHistorySource(liveState);
+  const [capital, setCapital] = useState(initialCapital);
+  const [history, setHistory] = useState(initialHistory);
+  const src = preferredSource(liveState);
 
   useEffect(() => {
-    const nextCapital = liveState?.capital_usage;
-    if (!nextCapital) {
-      return;
-    }
-    startTransition(() => {
-      setCapital(nextCapital);
-    });
+    const next = liveState?.capital_usage;
+    if (next) startTransition(() => setCapital(next));
   }, [liveState?.sequence, liveState?.capital_usage]);
 
   useEffect(() => {
-    let cancelled = false;
-
-    const refreshHistory = async () => {
+    let c = false;
+    (async () => {
       try {
-        let nextHistory = await api.capitalHistory(portfolioSlug, 18, historySource);
-        if (historySource && nextHistory.length === 0) {
-          nextHistory = await api.capitalHistory(portfolioSlug, 18);
-        }
-        if (cancelled) {
-          return;
-        }
-        startTransition(() => {
-          setHistory(nextHistory);
-        });
-      } catch {
-        // Keep the current capital history on transient failures.
-      }
-    };
-
-    void refreshHistory();
-    return () => {
-      cancelled = true;
-    };
-  }, [historySource, portfolioSlug, liveState?.sequence]);
+        let h = await api.capitalHistory(portfolioSlug, 18, src);
+        if (src && h.length === 0) h = await api.capitalHistory(portfolioSlug, 18);
+        if (!c) startTransition(() => setHistory(h));
+      } catch { /* keep */ }
+    })();
+    return () => { c = true; };
+  }, [src, portfolioSlug, liveState?.sequence]);
 
   useEffect(() => {
-    let cancelled = false;
-    const timer = window.setInterval(() => {
-      void (async () => {
-        const source = preferredHistorySource(liveState);
+    let c = false;
+    const t = window.setInterval(() => {
+      (async () => {
         try {
-          let nextHistory = await api.capitalHistory(portfolioSlug, 18, source);
-          if (source && nextHistory.length === 0) {
-            nextHistory = await api.capitalHistory(portfolioSlug, 18);
-          }
-          if (cancelled) {
-            return;
-          }
-          startTransition(() => {
-            setHistory(nextHistory);
-          });
-        } catch {
-          // Keep the current capital history on transient failures.
-        }
+          let h = await api.capitalHistory(portfolioSlug, 18, preferredSource(liveState));
+          if (preferredSource(liveState) && h.length === 0) h = await api.capitalHistory(portfolioSlug, 18);
+          if (!c) startTransition(() => setHistory(h));
+        } catch { /* keep */ }
       })();
     }, 15000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
+    return () => { c = true; window.clearInterval(t); };
   }, [portfolioSlug, liveState]);
 
-  const resolvedCapital = liveState?.capital_usage ?? capital;
-  const allocations = resolvedCapital ? flattenCapitalAllocations(resolvedCapital) : [];
-  const topAllocation = allocations[0];
-  const topRecommendation = resolvedCapital?.recommendations?.[0];
+  const resolved = liveState?.capital_usage ?? capital;
+  const allocations = resolved ? flattenCapitalAllocations(resolved) : [];
   const capitalSeries = buildCapitalHistorySeries(history);
-  const operatorAlerts = liveState?.operator_alerts ?? [];
 
   return (
-    <div className="desk-page space-y-8">
-      <PageHeader
-        eyebrow="Capital Management"
-        title="Budget usage, headroom and rebalance recommendations."
-        description="This surface now follows the MT5 bridge cadence: live capital posture stays front and center, while the persisted history updates from mt5_live_bridge snapshots instead of feeling frozen between manual runs."
-        aside={
-          <div className="flex flex-wrap items-center gap-2">
-            {resolvedCapital ? (
-              <StatusBadge label={resolvedCapital.status} tone="accent" />
-            ) : null}
-            <StatusBadge
-              label={transport === "stream" ? "stream" : transport === "polling" ? "polling" : "connecting"}
-              tone={transport === "stream" ? "success" : transport === "polling" ? "warning" : "neutral"}
-            />
-          </div>
-        }
+    <div className="desk-page space-y-4">
+      <PageHeader eyebrow="Capital" title="Budget usage, headroom and rebalance"
+        aside={<>
+          {resolved ? <StatusBadge label={resolved.status} tone="accent" /> : null}
+          <StatusBadge label={transport} tone={transport === "stream" ? "success" : "warning"} />
+        </>}
       />
 
-      <section className="grid gap-4 xl:grid-cols-5">
-        <MetricBlock
-          label="Budget"
-          value={resolvedCapital ? formatCurrency(resolvedCapital.total_capital_budget_eur) : "n/a"}
-          hint="Total allowed capital"
-        />
-        <MetricBlock
-          label="Consumed"
-          value={resolvedCapital ? formatCurrency(resolvedCapital.total_capital_consumed_eur) : "n/a"}
-          hint="Capital currently in use"
-          tone="warning"
-        />
-        <MetricBlock
-          label="Reserved"
-          value={resolvedCapital ? formatCurrency(resolvedCapital.total_capital_reserved_eur) : "n/a"}
-          hint="Capital held back"
-        />
-        <MetricBlock
-          label="Headroom"
-          value={resolvedCapital ? formatPercent(resolvedCapital.headroom_ratio ?? 0, 0) : "n/a"}
-          hint={resolvedCapital?.reference_model?.toUpperCase() ?? "No capital snapshot"}
-          tone="success"
-        />
-        <MetricBlock
-          label="Bridge"
-          value={(liveState?.status ?? "pending").toUpperCase()}
-          hint={
-            liveState?.generated_at
-              ? `Seq ${liveState.sequence} · ${formatTimestamp(liveState.generated_at)}`
-              : "Waiting for MT5 live state"
-          }
-          tone={
-            liveState?.status === "ok"
-              ? "success"
-              : liveState?.degraded || liveState?.stale
-                ? "warning"
-                : "neutral"
-          }
-        />
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <MetricBlock label="Budget" value={resolved ? formatCurrency(resolved.total_capital_budget_eur) : "n/a"} />
+        <MetricBlock label="Consumed" value={resolved ? formatCurrency(resolved.total_capital_consumed_eur) : "n/a"} tone="warning" />
+        <MetricBlock label="Reserved" value={resolved ? formatCurrency(resolved.total_capital_reserved_eur) : "n/a"} />
+        <MetricBlock label="Headroom" value={resolved ? formatPercent(resolved.headroom_ratio ?? 0, 0) : "n/a"} tone="success" />
+        <MetricBlock label="Bridge" value={(liveState?.status ?? "pending").toUpperCase()} hint={liveState?.generated_at ? formatTimestamp(liveState.generated_at) : undefined}
+          tone={liveState?.status === "ok" ? "success" : liveState?.degraded ? "warning" : "neutral"} />
       </section>
 
-      <LiveOperatorAlerts
-        alerts={operatorAlerts}
-        title="Capital watchlist"
-        copy="Capital pressure, bridge health and reconciliation incidents are surfaced here while the budget history keeps updating from live snapshots."
-      />
+      <LiveOperatorAlerts alerts={liveState?.operator_alerts ?? []} />
 
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.12fr)_360px]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_300px]">
         <ChartSurface
-          option={makeLineOption(capitalSeries, "#5fd4a6", { mode: "standard" })}
-          mode="standard"
-          dataCount={capitalSeries.length}
-          eyebrow="Capital history"
-          title="Consumed capital through time"
-          description="The chart now follows the live bridge persistence path, so the capital curve keeps moving as the desk posture changes."
-          meta={
-            resolvedCapital?.snapshot_timestamp
-              ? `Live ${formatTimestamp(resolvedCapital.snapshot_timestamp)}`
-              : resolvedCapital
-                ? resolvedCapital.reference_model.toUpperCase()
-                : "No capital snapshot"
-          }
-          emptyState={
-            <div className="rounded-[1.3rem] border border-white/8 bg-black/16 px-4 py-4 text-sm text-[var(--color-text-muted)]">
-              No capital history is available yet.
-            </div>
-          }
+          option={makeLineOption(capitalSeries, "#0ecb81", { mode: "standard" })}
+          mode="standard" dataCount={capitalSeries.length}
+          title="Capital history" meta={resolved?.snapshot_timestamp ? formatTimestamp(resolved.snapshot_timestamp) : undefined}
+          emptyState={<p className="text-xs text-[var(--color-text-muted)]">No capital history available.</p>}
         />
-
-        <div className="space-y-6">
-          <div className="surface rounded-[1.7rem] p-6">
-            <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
-              Allocation pressure
-            </div>
-            {topAllocation ? (
-              <div className="mt-5 space-y-4">
-                <div className="rounded-[1.35rem] border border-white/8 bg-black/18 p-4">
-                  <div className="text-sm text-[var(--color-text-soft)]">
-                    Most utilized symbol
-                  </div>
-                  <div className="mt-2 text-2xl font-semibold text-white">
-                    {topAllocation.symbol}
-                  </div>
-                  <div className="mt-2 text-sm leading-6 text-[var(--color-text-soft)]">
-                    {formatPercent(topAllocation.utilization)} utilized with{" "}
-                    {formatCurrency(topAllocation.consumedCapital)} consumed.
-                  </div>
-                </div>
-                <MetricBlock
-                  label="Remaining capital"
-                  value={
-                    resolvedCapital
-                      ? formatCurrency(resolvedCapital.total_capital_remaining_eur)
-                      : "n/a"
-                  }
-                  hint="Budget still available"
-                  tone="success"
-                  className="bg-transparent"
-                />
-              </div>
-            ) : (
-              <div className="mt-5 text-sm text-[var(--color-text-muted)]">
-                No allocation pressure data available.
-              </div>
-            )}
-          </div>
-
-          <div className="surface rounded-[1.7rem] p-6">
-            <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
-              Rebalance signal
-            </div>
-            <div className="mt-5 rounded-[1.35rem] border border-white/8 bg-black/18 p-4">
-              {topRecommendation ? (
-                <>
-                  <div className="text-lg font-semibold text-white">
-                    {topRecommendation.symbol_from} {"->"} {topRecommendation.symbol_to}
-                  </div>
-                  <div className="mt-2 text-sm leading-7 text-[var(--color-text-soft)]">
-                    Move {formatCurrency(topRecommendation.amount_eur)}.{" "}
-                    {topRecommendation.reason}
-                  </div>
-                </>
-              ) : (
-                <div className="text-sm text-[var(--color-text-muted)]">
-                  No rebalance recommendation is currently persisted.
-                </div>
-              )}
-            </div>
-            <div className="mt-4 text-sm leading-7 text-[var(--color-text-soft)]">
-              {liveState?.generated_at
-                ? `Bridge refreshed ${formatTimestamp(liveState.generated_at)}.`
-                : "Bridge refresh pending."}{" "}
-              {resolvedCapital?.snapshot_source
-                ? `Current capital source: ${resolvedCapital.snapshot_source}.`
-                : "No live capital source available yet."}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_390px]">
         <div className="space-y-3">
-          <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
-            Allocations
-          </div>
-          {resolvedCapital ? (
-            <CapitalAllocationTable rows={allocations} />
-          ) : (
-            <div className="surface rounded-[1.7rem] p-6 text-sm text-[var(--color-text-muted)]">
-              No capital snapshot available yet.
+          {allocations[0] ? (
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5">
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Top allocation</div>
+              <div className="text-lg font-semibold text-[var(--color-text)]">{allocations[0].symbol}</div>
+              <div className="mt-1 text-xs text-[var(--color-text-muted)]">
+                {formatPercent(allocations[0].utilization)} util · {formatCurrency(allocations[0].consumedCapital)} consumed
+              </div>
             </div>
-          )}
+          ) : null}
+          {resolved?.recommendations?.[0] ? (
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5">
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Rebalance signal</div>
+              <div className="text-xs font-semibold text-[var(--color-text)]">
+                {resolved.recommendations[0].symbol_from} → {resolved.recommendations[0].symbol_to}
+              </div>
+              <div className="mt-1 text-[11px] text-[var(--color-text-muted)]">
+                {formatCurrency(resolved.recommendations[0].amount_eur)} · {resolved.recommendations[0].reason}
+              </div>
+            </div>
+          ) : null}
         </div>
+      </div>
 
-        {resolvedCapital ? (
-          <CapitalRebalancePanel
-            portfolioSlug={resolvedCapital.portfolio_slug}
-            referenceModel={resolvedCapital.reference_model}
-            onRebalanced={(nextCapital) => {
-              startTransition(() => {
-                setCapital(nextCapital);
-                setHistory((current) => [nextCapital, ...current].slice(0, 18));
-              });
-            }}
-          />
-        ) : null}
-      </section>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+        <div className="space-y-2">
+          <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Allocations</h4>
+          {resolved ? <CapitalAllocationTable rows={allocations} /> : <p className="text-xs text-[var(--color-text-muted)]">No capital snapshot.</p>}
+        </div>
+        {resolved ? <CapitalRebalancePanel portfolioSlug={resolved.portfolio_slug} referenceModel={resolved.reference_model}
+          onRebalanced={(r) => startTransition(() => { setCapital(r); setHistory((h) => [r, ...h].slice(0, 18)); })} /> : null}
+      </div>
     </div>
   );
 }

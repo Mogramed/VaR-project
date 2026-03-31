@@ -39,11 +39,10 @@ export default async function DeskOverviewPage({
   const alertCounts = buildAlertSeverityCounts(alerts);
 
   return (
-    <div className="desk-page space-y-8">
+    <div className="desk-page space-y-4">
       <PageHeader
-        eyebrow="Desk Overview"
-        title="Current risk posture across the FX desk."
-        description="A denser operator view: portfolio load, model leadership, capital headroom and alert pressure all read in a few seconds."
+        eyebrow="Overview"
+        title="Risk posture across the FX desk"
         aside={capital ? <StatusBadge label={capital.status} tone="accent" /> : null}
       />
 

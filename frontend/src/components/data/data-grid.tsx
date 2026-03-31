@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 export function DataGrid<TData extends object>({
   data,
   columns,
-  emptyMessage = "No rows available.",
+  emptyMessage = "No data available.",
   maxHeight,
   density = "compact",
   className,
@@ -33,7 +33,7 @@ export function DataGrid<TData extends object>({
     return (
       <div
         className={cn(
-          "surface rounded-[1.6rem] px-5 py-8 text-sm text-[var(--color-text-muted)]",
+          "rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-6 text-xs text-[var(--color-text-muted)]",
           className,
         )}
       >
@@ -42,10 +42,12 @@ export function DataGrid<TData extends object>({
     );
   }
 
+  const cellPad = density === "compact" ? "px-3 py-[7px]" : "px-3 py-2.5";
+
   return (
     <div
       className={cn(
-        "surface overflow-hidden rounded-[1.6rem] border border-white/8 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]",
+        "overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)]",
         className,
       )}
     >
@@ -53,16 +55,16 @@ export function DataGrid<TData extends object>({
         className="overflow-auto"
         style={maxHeight ? { maxHeight } : undefined}
       >
-        <table className="min-w-full border-collapse">
-          <thead className="sticky top-0 z-10 bg-[linear-gradient(180deg,rgba(18,22,28,0.98),rgba(16,20,26,0.92))] backdrop-blur-xl">
+        <table className="min-w-full border-collapse text-[12px]">
+          <thead className="sticky top-0 z-10 bg-[var(--color-surface-strong)]">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
                   <th
                     key={header.id}
                     className={cn(
-                      "mono border-b border-white/8 text-left text-[11px] font-medium uppercase tracking-[0.24em] text-[var(--color-text-muted)]",
-                      density === "compact" ? "px-4 py-3" : "px-4 py-3.5",
+                      "border-b border-[var(--color-border)] text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]",
+                      cellPad,
                     )}
                   >
                     {header.isPlaceholder
@@ -77,14 +79,14 @@ export function DataGrid<TData extends object>({
             {table.getRowModel().rows.map((row) => (
               <tr
                 key={row.id}
-                className="group border-b border-white/6 transition odd:bg-white/[0.012] hover:bg-white/[0.03] last:border-b-0"
+                className="border-b border-[var(--color-border)] transition-colors last:border-b-0 hover:bg-[var(--color-surface-hover)]"
               >
                 {row.getVisibleCells().map((cell) => (
                   <td
                     key={cell.id}
                     className={cn(
-                      "align-top text-sm text-[var(--color-text-soft)] transition group-hover:text-[var(--color-text)]",
-                      density === "compact" ? "px-4 py-3" : "px-4 py-3.5",
+                      "align-top text-[var(--color-text-soft)]",
+                      cellPad,
                     )}
                   >
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}

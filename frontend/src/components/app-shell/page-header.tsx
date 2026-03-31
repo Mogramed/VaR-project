@@ -9,24 +9,23 @@ export function PageHeader({
 }: {
   eyebrow: string;
   title: string;
-  description: string;
+  description?: string;
   aside?: React.ReactNode;
   className?: string;
 }) {
   return (
-    <div className={cn("flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between", className)}>
-      <div className="max-w-3xl">
-        <div className="mono text-[11px] uppercase tracking-[0.3em] text-[var(--color-accent)]">
-          {eyebrow}
+    <div className={cn("flex items-center justify-between gap-4", className)}>
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-accent)]">
+            {eyebrow}
+          </span>
         </div>
-        <h1 className="mt-4 text-balance text-4xl font-semibold tracking-[-0.05em] text-white md:text-5xl">
+        <h1 className="mt-0.5 truncate text-lg font-semibold tracking-tight text-[var(--color-text)]">
           {title}
         </h1>
-        <p className="mt-4 max-w-2xl text-sm leading-7 text-[var(--color-text-soft)] md:text-base">
-          {description}
-        </p>
       </div>
-      {aside ? <div className="shrink-0">{aside}</div> : null}
+      {aside ? <div className="flex shrink-0 items-center gap-2">{aside}</div> : null}
     </div>
   );
 }

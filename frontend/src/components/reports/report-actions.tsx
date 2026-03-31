@@ -18,37 +18,36 @@ export function ReportActions({
     mutationFn: async () => api.runReport(undefined, portfolioSlug),
     onSuccess: (result) => {
       onGenerated?.(result);
-      if (!onGenerated) {
-        router.refresh();
-      }
+      if (!onGenerated) router.refresh();
     },
   });
+
   const pdfUrl = portfolioSlug
     ? `/api/reports/pdf?portfolio=${encodeURIComponent(portfolioSlug)}`
     : "/api/reports/pdf";
 
   return (
-    <div className="flex flex-wrap items-center gap-3 print:hidden">
+    <div className="flex items-center gap-2 print:hidden">
       <button
         type="button"
         onClick={() => mutation.mutate()}
         disabled={mutation.isPending}
-        className="inline-flex h-11 items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-white transition hover:border-[var(--color-border-strong)] hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-60"
+        className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2.5 text-[11px] font-medium text-[var(--color-text-soft)] transition-colors hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)] disabled:opacity-50"
       >
-        <RefreshCw className={`size-4 ${mutation.isPending ? "animate-spin" : ""}`} />
-        {mutation.isPending ? "Generating..." : "Generate fresh report"}
+        <RefreshCw className={`size-3 ${mutation.isPending ? "animate-spin" : ""}`} />
+        Generate
       </button>
       <a
         href={pdfUrl}
-        className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-[var(--color-accent)] px-4 text-sm font-semibold text-[#1a1206] transition hover:translate-y-[-1px] hover:shadow-[0_16px_34px_rgba(216,155,73,0.24)]"
+        className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] bg-[var(--color-accent)] px-2.5 text-[11px] font-semibold text-[#1a1206] transition hover:brightness-110"
       >
-        <FileDown className="size-4" />
-        Download PDF
+        <FileDown className="size-3" />
+        PDF
       </a>
       {mutation.error ? (
-        <div className="w-full text-sm text-[var(--color-red)]">
-          {mutation.error instanceof Error ? mutation.error.message : "Could not generate report."}
-        </div>
+        <span className="text-[10px] text-[var(--color-red)]">
+          {mutation.error instanceof Error ? mutation.error.message : "Failed"}
+        </span>
       ) : null}
     </div>
   );
