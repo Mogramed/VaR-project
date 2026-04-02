@@ -19,12 +19,13 @@ def _write_settings(
     portfolios: list[dict[str, object]] | None = None,
     desk_name: str = "FX Risk Desk",
     portfolio_mode: str | None = None,
+    market_history_days: int | None = None,
 ) -> None:
     config_dir = root / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     default_portfolio = {
         "name": "FX_EUR_20k",
-        "positions_eur": {"EURUSD": 10_000, "USDJPY": 10_000},
+        "configured_exposure": {"EURUSD": 10_000, "USDJPY": 10_000},
     }
     if portfolio_mode is not None:
         default_portfolio["mode"] = portfolio_mode
@@ -35,6 +36,7 @@ def _write_settings(
         "data": {
             "timeframes": ["H1"],
             "history_days_list": [60],
+            **({} if market_history_days is None else {"market_history_days": int(market_history_days)}),
             "storage_format": "csv",
             "timezone": "Europe/Paris",
             "min_coverage": 0.90,
@@ -153,7 +155,7 @@ def test_api_runs_snapshot_backtest_and_report(tmp_path: Path):
 
     initial_decision = client.post(
         "/decisions/evaluate",
-        json={"symbol": "EURUSD", "delta_position_eur": 1_000.0, "note": "pre-validation"},
+        json={"symbol": "EURUSD", "exposure_change": 1_000.0, "note": "pre-validation"},
     )
     assert initial_decision.status_code == 200
     initial_decision_body = initial_decision.json()
@@ -227,7 +229,7 @@ def test_api_runs_snapshot_backtest_and_report(tmp_path: Path):
 
     decision = client.post(
         "/decisions/evaluate",
-        json={"symbol": "EURUSD", "delta_position_eur": 2_500.0, "note": "post-validation"},
+        json={"symbol": "EURUSD", "exposure_change": 2_500.0, "note": "post-validation"},
     )
     assert decision.status_code == 200
     decision_body = decision.json()
@@ -280,8 +282,8 @@ def test_api_supports_multi_portfolio_desk_overview(tmp_path: Path):
     _write_settings(
         root,
         portfolios=[
-            {"name": "FX_ALPHA", "symbols": ["EURUSD", "USDJPY"], "positions_eur": {"EURUSD": 8_000, "USDJPY": 12_000}},
-            {"name": "FX_BETA", "symbols": ["EURUSD", "USDJPY"], "positions_eur": {"EURUSD": 15_000, "USDJPY": -4_000}},
+            {"name": "FX_ALPHA", "symbols": ["EURUSD", "USDJPY"], "configured_exposure": {"EURUSD": 8_000, "USDJPY": 12_000}},
+            {"name": "FX_BETA", "symbols": ["EURUSD", "USDJPY"], "configured_exposure": {"EURUSD": 15_000, "USDJPY": -4_000}},
         ],
         desk_name="Desk Paris",
     )
@@ -398,6 +400,7 @@ def test_api_exposes_mt5_market_sync_and_reconciliation(tmp_path: Path):
     assert acknowledge_body["acknowledged"] is True
     assert acknowledge_body["symbol"] == mismatch_symbol
     assert acknowledge_body["acknowledgement"]["reason"] == "operator_reviewed"
+    assert acknowledge_body["incident_status"] == "acknowledged"
 
     reconciliation_after_ack = client.get("/reconciliation/summary")
     assert reconciliation_after_ack.status_code == 200
@@ -407,12 +410,123 @@ def test_api_exposes_mt5_market_sync_and_reconciliation(tmp_path: Path):
     assert acknowledged_row["acknowledged"] is True
     assert acknowledged_row["acknowledged_reason"] == "operator_reviewed"
     assert acknowledged_row["acknowledged_note"] == "known broker drift"
+    assert acknowledged_row["incident_status"] == "acknowledged"
+    assert reconciliation_after_ack.json()["incident_status_counts"]["acknowledged"] >= 1
+    assert reconciliation_after_ack.json()["incidents"]
+
+    incidents = client.get("/reconciliation/incidents")
+    assert incidents.status_code == 200
+    incident_row = next(item for item in incidents.json() if item["symbol"] == mismatch_symbol)
+    assert incident_row["incident_status"] == "acknowledged"
+
+    filtered_incidents = client.get(
+        "/reconciliation/incidents",
+        params={"symbol": mismatch_symbol, "incident_status": "acknowledged", "include_resolved": False},
+    )
+    assert filtered_incidents.status_code == 200
+    assert len(filtered_incidents.json()) == 1
+    assert filtered_incidents.json()[0]["symbol"] == mismatch_symbol
+
+    investigating = client.post(
+        "/reconciliation/incidents/update",
+        json={
+            "symbol": mismatch_symbol,
+            "reason": "broker_fill_in_progress",
+            "operator_note": "desk is waiting for broker reconciliation",
+            "incident_status": "investigating",
+        },
+    )
+    assert investigating.status_code == 200
+    assert investigating.json()["incident_status"] == "investigating"
+
+    FakeMT5Connector.positions_lots[mismatch_symbol] = 0.0
+
+    resolved = client.post(
+        "/reconciliation/incidents/update",
+        json={
+            "symbol": mismatch_symbol,
+            "reason": "resolved_after_reconciliation",
+            "operator_note": "desk confirmed final broker state",
+            "incident_status": "resolved",
+            "resolution_note": "broker and desk are now aligned",
+        },
+    )
+    assert resolved.status_code == 200
+    assert resolved.json()["incident_status"] == "resolved"
+    assert resolved.json()["acknowledgement"]["resolution_note"] == "broker and desk are now aligned"
+    assert resolved.json()["baseline_snapshot_id"] is not None
+
+    reconciliation_after_resolve = client.get("/reconciliation/summary")
+    assert reconciliation_after_resolve.status_code == 200
+    resolved_row = next(
+        item for item in reconciliation_after_resolve.json()["mismatches"] if item["symbol"] == mismatch_symbol
+    )
+    assert resolved_row["status"] == "match"
+    assert resolved_row["incident_status"] is None
+    assert resolved_row["resolution_note"] is None
+    assert resolved_row["resolved_at"] is None
+
+    incidents_after_resolve = client.get("/reconciliation/incidents")
+    assert incidents_after_resolve.status_code == 200
+    resolved_incident = next(item for item in incidents_after_resolve.json() if item["symbol"] == mismatch_symbol)
+    assert resolved_incident["incident_status"] == "resolved"
+    assert resolved_incident["resolution_note"] == "broker and desk are now aligned"
+    assert resolved_incident["resolved_at"] is not None
+
+    unresolved_after_resolve = client.get(
+        "/reconciliation/incidents",
+        params={"symbol": mismatch_symbol, "include_resolved": False},
+    )
+    assert unresolved_after_resolve.status_code == 200
+    assert unresolved_after_resolve.json() == []
+
+    latest_live_snapshot = client.get("/snapshots/latest", params={"source": "mt5_live_bridge"})
+    assert latest_live_snapshot.status_code == 200
+    assert latest_live_snapshot.json()["payload"]["metadata"]["reconciliation_baseline_accepted"] is True
 
     snapshot = client.post("/snapshots/run", json={})
     assert snapshot.status_code == 200
-    latest_snapshot = client.get("/snapshots/latest", params={"source": "historical"})
+
+
+def test_live_state_backfills_market_data_without_manual_sync(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    FakeMT5Connector.reset()
+
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True))
+
+    live_state = client.get("/mt5/live/state")
+    assert live_state.status_code == 200
+    assert live_state.json()["connected"] is True
+
+    status = client.get("/market-data/status")
+    assert status.status_code == 200
+    status_body = status.json()
+    assert status_body["instrument_count"] >= 2
+    assert status_body["missing_symbols"] == []
+    assert status_body["missing_bars"] == []
+    assert status_body["retention_tiers"]["H1"] >= 60
+    assert status_body["tick_archive"]["row_count"] >= 1
+    assert status_body["coverage_status"] in {"healthy", "thin_history", "stale", "incomplete"}
+
+    risk_summary = client.get("/risk/summary")
+    assert risk_summary.status_code == 200
+    risk_summary_body = risk_summary.json()
+    assert risk_summary_body["headline_risk"]
+    assert risk_summary_body["risk_nowcast"]["live_1d_99"]["nowcast_var"] is not None
+
+    risk_contributions = client.get("/risk/contributions")
+    assert risk_contributions.status_code == 200
+    risk_contributions_body = risk_contributions.json()
+    assert risk_contributions_body["models"]
+    assert risk_contributions_body["models"]["hist"]["asset_classes"]
+
+    instruments = client.get("/instruments")
+    assert instruments.status_code == 200
+    assert {item["symbol"] for item in instruments.json()} == {"EURUSD", "USDJPY"}
+    latest_snapshot = client.get("/snapshots/latest", params={"source": "mt5_live"})
     assert latest_snapshot.status_code == 200
-    assert latest_snapshot.json()["source"] == "historical"
+    assert latest_snapshot.json()["source"] == "mt5_live"
 
     backtest = client.post("/backtests/run", json={})
     assert backtest.status_code == 200
@@ -487,3 +601,76 @@ def test_live_stress_uses_mt5_holdings(tmp_path: Path):
     assert stress_body["portfolio_slug"] == "fx_eur_20k"
     assert stress_body["baseline_var"] == expected.var
     assert stress_body["baseline_es"] == expected.es
+    assert stress_body["headline_risk"]
+    assert stress_body["historical_extremes"]
+    assert stress_body["scenarios"][0]["risk_surface"]
+    assert stress_body["attribution"]["models"]["hist"]["asset_classes"]
+    assert stress_body["scenarios"][0]["attribution"]["models"]["hist"]["positions"]
+
+
+def test_live_stress_baseline_respects_requested_alpha(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+    FakeMT5Connector.reset()
+    FakeMT5Connector.positions_lots = {"EURUSD": 0.01, "USDJPY": 0.01}
+
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True))
+    stress = client.post(
+        "/snapshots/stress",
+        json={
+            "alpha": 0.99,
+            "scenarios": [
+                {"name": "Small shock", "vol_multiplier": 1.2, "shock_pnl": -5.0},
+            ],
+        },
+    )
+    assert stress.status_code == 200
+    stress_body = stress.json()
+
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+    portfolio = service.runtime._resolve_portfolio_context(None)
+    with service.runtime._mt5_gateway() as live:
+        holdings = [item.to_dict() for item in live.holdings(symbols=None)]
+    bundle = service.runtime._compute_portfolio_state_for_holdings(
+        portfolio=portfolio,
+        holdings=holdings,
+        timeframe=service.runtime._default_timeframe(),
+        days=service.runtime._default_days(),
+        min_coverage=float(service.runtime.data_defaults["min_coverage"]),
+        config=service.runtime._build_risk_model_config(0.99, None, None, None, None),
+        window=int(service.runtime.risk_defaults["window"]),
+        snapshot_source="mt5_live_bridge",
+    )
+    expected = historical_var_es(bundle["sample"]["pnl"], 0.99)
+
+    assert stress_body["alpha"] == 0.99
+    assert stress_body["baseline_var"] == expected.var
+    assert stress_body["baseline_es"] == expected.es
+
+
+def test_market_data_sync_backfills_richer_history_for_var(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5", market_history_days=365)
+    FakeMT5Connector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+    portfolio_slug = service.runtime.portfolio["slug"]
+
+    status = service.runtime.market_data.sync_market_data(
+        portfolio_slug=portfolio_slug,
+        days=60,
+        timeframes=["H1"],
+    )
+    latest_sync = service.runtime.storage.latest_market_data_sync(portfolio_slug=portfolio_slug)
+    assert latest_sync is not None
+    details = dict(latest_sync.get("details") or {})
+
+    assert details["requested_days"] == 60
+    assert details["stored_history_days"] == 365
+    assert status["stored_history_days"] == 365
+    assert details["coverage"]["EURUSD"]["H1"]["bars"] >= 365 * 24
+    assert details["coverage"]["USDJPY"]["H1"]["bars"] >= 365 * 24
+    assert details["tick_archive"]["summary"]["row_count"] >= 1
+    assert status["tick_archive"]["row_count"] >= 1

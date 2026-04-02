@@ -69,7 +69,6 @@ class PositionRiskBudget:
             "symbol": self.symbol,
             "current_exposure": self.current_exposure,
             "exposure_base_ccy": self.current_exposure,
-            "position_eur": self.position_eur,
             "weight": self.weight,
             "target_var_budget": self.target_var_budget,
             "target_es_budget": self.target_es_budget,
@@ -83,8 +82,6 @@ class PositionRiskBudget:
             "headroom_es": self.headroom_es,
             "max_exposure": self.max_exposure,
             "recommended_exposure": self.recommended_exposure,
-            "max_position_eur": self.max_position_eur,
-            "recommended_position_eur": self.recommended_position_eur,
             "action": self.action,
             "status": self.status,
         }
@@ -104,10 +101,18 @@ class ModelRiskBudget:
     scale_to_var_budget: float | None
     scale_to_es_budget: float | None
     recommended_scale: float | None
-    current_gross_notional: float
-    recommended_gross_notional: float | None
+    current_gross_exposure: float
+    recommended_gross_exposure: float | None
     status: str
     positions: dict[str, PositionRiskBudget]
+
+    @property
+    def current_gross_notional(self) -> float:
+        return self.current_gross_exposure
+
+    @property
+    def recommended_gross_notional(self) -> float | None:
+        return self.recommended_gross_exposure
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "ModelRiskBudget":
@@ -125,10 +130,12 @@ class ModelRiskBudget:
             scale_to_var_budget=None if payload.get("scale_to_var_budget") is None else float(payload.get("scale_to_var_budget")),
             scale_to_es_budget=None if payload.get("scale_to_es_budget") is None else float(payload.get("scale_to_es_budget")),
             recommended_scale=None if payload.get("recommended_scale") is None else float(payload.get("recommended_scale")),
-            current_gross_notional=float(payload.get("current_gross_notional", 0.0)),
-            recommended_gross_notional=None
-            if payload.get("recommended_gross_notional") is None
-            else float(payload.get("recommended_gross_notional")),
+            current_gross_exposure=float(
+                payload.get("current_gross_exposure", payload.get("current_gross_notional", 0.0))
+            ),
+            recommended_gross_exposure=None
+            if payload.get("recommended_gross_exposure", payload.get("recommended_gross_notional")) is None
+            else float(payload.get("recommended_gross_exposure", payload.get("recommended_gross_notional"))),
             status=str(payload.get("status", "OK")),
             positions={symbol: PositionRiskBudget.from_dict(item) for symbol, item in positions_payload.items()},
         )
@@ -147,8 +154,8 @@ class ModelRiskBudget:
             "scale_to_var_budget": self.scale_to_var_budget,
             "scale_to_es_budget": self.scale_to_es_budget,
             "recommended_scale": self.recommended_scale,
-            "current_gross_notional": self.current_gross_notional,
-            "recommended_gross_notional": self.recommended_gross_notional,
+            "current_gross_exposure": self.current_gross_exposure,
+            "recommended_gross_exposure": self.recommended_gross_exposure,
             "status": self.status,
             "positions": {symbol: item.to_dict() for symbol, item in self.positions.items()},
         }
@@ -332,7 +339,7 @@ def build_risk_budget_snapshot(
         }
     symbols = list(inferred_exposure.keys())
     weights = _normalize_budget_weights(symbols, inferred_exposure, configured=budget_cfg.get("symbol_weights"))
-    current_gross_notional = float(sum(abs(value) for value in inferred_exposure.values()))
+    current_gross_exposure = float(sum(abs(value) for value in inferred_exposure.values()))
 
     budget_models: dict[str, ModelRiskBudget] = {}
     for model_name in model_names:
@@ -352,7 +359,7 @@ def build_risk_budget_snapshot(
         scale_to_es_budget = None if total_es <= 0.0 or total_es_budget <= 0.0 else float(total_es_budget / total_es)
         scale_candidates = [value for value in (scale_to_var_budget, scale_to_es_budget) if value is not None]
         recommended_scale = None if not scale_candidates else float(min(scale_candidates) * target_buffer)
-        recommended_gross_notional = None if recommended_scale is None else float(current_gross_notional * recommended_scale)
+        recommended_gross_exposure = None if recommended_scale is None else float(current_gross_exposure * recommended_scale)
 
         position_budgets: dict[str, PositionRiskBudget] = {}
         for symbol in symbols:
@@ -426,8 +433,8 @@ def build_risk_budget_snapshot(
             scale_to_var_budget=scale_to_var_budget,
             scale_to_es_budget=scale_to_es_budget,
             recommended_scale=recommended_scale,
-            current_gross_notional=current_gross_notional,
-            recommended_gross_notional=recommended_gross_notional,
+            current_gross_exposure=current_gross_exposure,
+            recommended_gross_exposure=recommended_gross_exposure,
             status=_status_from_utilization(utilization_var, utilization_es, warn=warn, breach=breach),
             positions=position_budgets,
         )

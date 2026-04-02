@@ -240,6 +240,59 @@ class DeskApiService:
             return dict(live_state["exposure"])
         return self.market.live_exposure(portfolio_slug=portfolio_slug)
 
+    def risk_summary(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        try:
+            live_state = self.mt5.live_state(portfolio_slug=portfolio["slug"])
+        except Exception:
+            live_state = None
+        if live_state is not None and live_state.get("risk_summary") is not None:
+            return dict(live_state["risk_summary"])
+
+        snapshot = None
+        for source in ("mt5_live_bridge", "mt5_live", "historical"):
+            snapshot = self.reads.latest_snapshot(source=source, portfolio_slug=portfolio["slug"])
+            if snapshot is not None:
+                break
+        if snapshot is None:
+            return None
+        payload = dict(snapshot.get("payload") or {})
+        return {
+            "generated_at": payload.get("time_utc") or snapshot.get("created_at"),
+            "portfolio_slug": portfolio["slug"],
+            "portfolio_mode": portfolio.get("mode"),
+            "source": snapshot.get("source") or "historical",
+            "reference_model": payload.get("model") or self.runtime._decision_reference_model(portfolio["slug"]),
+            "preferred_model": payload.get("preferred_model"),
+            "alpha": payload.get("alpha") or self.runtime.risk_defaults["alpha"],
+            "sample_size": int(payload.get("sample_size") or 0),
+            "timeframe": payload.get("timeframe"),
+            "days": payload.get("days"),
+            "window": payload.get("window"),
+            "latest_observation": payload.get("time_utc"),
+            "var": dict(payload.get("var") or {}),
+            "es": dict(payload.get("es") or {}),
+            "risk_surface": dict(payload.get("risk_surface") or {}),
+            "headline_risk": list(payload.get("headline_risk") or []),
+            "stress_surface": dict(payload.get("stress_surface") or {}),
+            "data_quality": dict(payload.get("data_quality") or {}),
+            "model_diagnostics": dict(payload.get("model_diagnostics") or {}),
+            "risk_nowcast": dict(payload.get("risk_nowcast") or {}),
+            "microstructure": dict(payload.get("microstructure") or {}),
+            "tick_quality": dict(payload.get("tick_quality") or {}),
+            "pnl_explain": dict(payload.get("pnl_explain") or {}),
+        }
+
+    def risk_contributions(self, *, portfolio_slug: str | None = None, source: str | None = None) -> dict[str, Any] | None:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        if source:
+            return self.reads.latest_risk_attribution(source=source, portfolio_slug=portfolio["slug"])
+        for candidate in ("mt5_live_bridge", "mt5_live", "historical"):
+            payload = self.reads.latest_risk_attribution(source=candidate, portfolio_slug=portfolio["slug"])
+            if payload is not None:
+                return payload
+        return None
+
     def market_data_status(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
         payload = self.market.market_data_status(portfolio_slug=portfolio_slug)
         try:
@@ -412,11 +465,59 @@ class DeskApiService:
         symbol: str,
         reason: str = "",
         operator_note: str = "",
+        incident_status: str | None = None,
+        resolution_note: str = "",
+    ) -> dict[str, Any]:
+        return self.update_reconciliation_incident(
+            portfolio_slug=portfolio_slug,
+            symbol=symbol,
+            reason=reason,
+            operator_note=operator_note,
+            incident_status=incident_status or "acknowledged",
+            resolution_note=resolution_note,
+            audit_action="reconciliation.acknowledge",
+        )
+
+    def reconciliation_incidents(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        symbol: str | None = None,
+        incident_status: str | None = None,
+        include_resolved: bool = True,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        normalized_symbol = None if symbol is None else str(symbol).upper().strip()
+        normalized_status = None if incident_status is None else str(incident_status).strip().lower()
+        if normalized_status is not None and normalized_status not in {"acknowledged", "investigating", "resolved"}:
+            raise ValueError(f"Unsupported reconciliation incident status '{incident_status}'.")
+        return self.storage.reconciliation_acknowledgements(
+            portfolio_slug=portfolio["slug"],
+            symbol=normalized_symbol,
+            incident_status=normalized_status,
+            include_resolved=include_resolved,
+            limit=limit,
+        )
+
+    def update_reconciliation_incident(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        symbol: str,
+        reason: str = "",
+        operator_note: str = "",
+        incident_status: str = "acknowledged",
+        resolution_note: str = "",
+        audit_action: str = "reconciliation.incident.update",
     ) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         portfolio_id = self.portfolio_ids.get(portfolio["slug"])
         normalized_symbol = str(symbol or "").upper().strip()
+        normalized_incident_status = str(incident_status or "acknowledged").strip().lower()
+        if normalized_incident_status not in {"acknowledged", "investigating", "resolved"}:
+            raise ValueError(f"Unsupported reconciliation incident status '{incident_status}'.")
         summary = self.reconciliation_summary(portfolio_slug=portfolio["slug"])
         mismatch = next(
             (
@@ -426,9 +527,17 @@ class DeskApiService:
             ),
             None,
         )
-        if mismatch is None:
+        existing_incident = next(
+            (
+                item
+                for item in self.storage.reconciliation_acknowledgements(portfolio_slug=portfolio["slug"])
+                if str(item.get("symbol") or "").upper() == normalized_symbol
+            ),
+            None,
+        )
+        if mismatch is None and existing_incident is None:
             raise ValueError(f"No reconciliation entry exists for symbol {normalized_symbol}.")
-        if str(mismatch.get("status") or "").lower() == "match":
+        if mismatch is not None and str(mismatch.get("status") or "").lower() == "match" and existing_incident is None:
             raise ValueError(f"Symbol {normalized_symbol} is already reconciled.")
 
         acknowledgement_id = self.storage.upsert_reconciliation_acknowledgement(
@@ -436,31 +545,43 @@ class DeskApiService:
             symbol=normalized_symbol,
             reason=reason,
             operator_note=operator_note,
-            mismatch_status=str(mismatch.get("status") or ""),
+            mismatch_status=None if mismatch is None else str(mismatch.get("status") or ""),
+            incident_status=normalized_incident_status,
+            resolution_note=resolution_note,
             payload={
                 "portfolio_slug": portfolio["slug"],
-                "desk_exposure_eur": mismatch.get("desk_exposure_eur"),
-                "live_exposure_eur": mismatch.get("live_exposure_eur"),
-                "difference_eur": mismatch.get("difference_eur"),
-                "order_ticket": mismatch.get("order_ticket"),
-                "deal_ticket": mismatch.get("deal_ticket"),
-                "position_id": mismatch.get("position_id"),
+                "desk_exposure_eur": None if mismatch is None else mismatch.get("desk_exposure_eur"),
+                "live_exposure_eur": None if mismatch is None else mismatch.get("live_exposure_eur"),
+                "difference_eur": None if mismatch is None else mismatch.get("difference_eur"),
+                "order_ticket": None if mismatch is None else mismatch.get("order_ticket"),
+                "deal_ticket": None if mismatch is None else mismatch.get("deal_ticket"),
+                "position_id": None if mismatch is None else mismatch.get("position_id"),
             },
         )
         audit_id = self.storage.record_audit_event(
             actor="operator",
-            action_type="reconciliation.acknowledge",
+            action_type=audit_action,
             object_type="reconciliation_mismatch",
             payload={
                 "symbol": normalized_symbol,
                 "reason": reason,
                 "operator_note": operator_note,
+                "incident_status": normalized_incident_status,
+                "resolution_note": resolution_note,
                 "portfolio_slug": portfolio["slug"],
-                "mismatch_status": mismatch.get("status"),
+                "mismatch_status": None if mismatch is None else mismatch.get("status"),
                 "acknowledgement_id": acknowledgement_id,
             },
             portfolio_id=portfolio_id,
         )
+        baseline_snapshot_id = None
+        if normalized_incident_status == "resolved":
+            baseline_snapshot_id = self.mt5.accept_reconciliation_baseline(
+                portfolio_slug=portfolio["slug"],
+                symbol=normalized_symbol,
+                reason=reason,
+                operator_note=resolution_note or operator_note,
+            )
         acknowledgement = next(
             (
                 item
@@ -474,7 +595,9 @@ class DeskApiService:
             "symbol": normalized_symbol,
             "audit_event_id": audit_id,
             "acknowledgement_id": acknowledgement_id,
-            "mismatch_status": mismatch.get("status"),
+            "mismatch_status": None if mismatch is None else mismatch.get("status"),
+            "incident_status": normalized_incident_status,
+            "baseline_snapshot_id": baseline_snapshot_id,
             "acknowledgement": acknowledgement,
         }
 

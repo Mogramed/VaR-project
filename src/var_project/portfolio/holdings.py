@@ -52,7 +52,6 @@ class PortfolioHolding:
             "market_value_base_ccy": self.market_value_base_ccy,
             "exposure_base_ccy": self.exposure_base_ccy,
             "signed_exposure_base_ccy": self.exposure_base_ccy,
-            "signed_position_eur": self.exposure_base_ccy,
             "unrealized_pnl_base_ccy": self.unrealized_pnl_base_ccy,
             "profit": self.unrealized_pnl_base_ccy,
             "source": self.source,

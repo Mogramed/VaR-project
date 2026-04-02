@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 import pandas as pd
@@ -44,7 +44,6 @@ class TradeProposal:
         return {
             "symbol": self.symbol,
             "exposure_change": self.exposure_change,
-            "delta_position_eur": self.delta_position_eur,
             "note": self.note,
         }
 
@@ -60,6 +59,8 @@ class DecisionRiskState:
     gross_exposure: float
     symbol_exposure: float
     status: str
+    headline_risk: list[dict[str, Any]] = field(default_factory=list)
+    data_quality: dict[str, Any] | None = None
 
     @property
     def gross_notional(self) -> float:
@@ -85,6 +86,8 @@ class DecisionRiskState:
             gross_exposure=float(payload.get("gross_exposure", payload.get("gross_notional", 0.0))),
             symbol_exposure=float(payload.get("symbol_exposure", payload.get("position_eur", 0.0))),
             status=str(payload.get("status", "OK")),
+            headline_risk=[dict(item) for item in payload.get("headline_risk") or []],
+            data_quality=None if payload.get("data_quality") is None else dict(payload.get("data_quality") or {}),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -96,10 +99,10 @@ class DecisionRiskState:
             "headroom_var": self.headroom_var,
             "headroom_es": self.headroom_es,
             "gross_exposure": self.gross_exposure,
-            "gross_notional": self.gross_notional,
             "symbol_exposure": self.symbol_exposure,
-            "position_eur": self.position_eur,
             "status": self.status,
+            "headline_risk": list(self.headline_risk),
+            "data_quality": self.data_quality,
         }
 
 
@@ -163,10 +166,6 @@ class RiskDecisionResult:
             "approved_exposure_change": self.approved_exposure_change,
             "suggested_exposure_change": self.suggested_exposure_change,
             "resulting_exposure": self.resulting_exposure,
-            "requested_delta_position_eur": self.requested_delta_position_eur,
-            "approved_delta_position_eur": self.approved_delta_position_eur,
-            "suggested_delta_position_eur": self.suggested_delta_position_eur,
-            "resulting_position_eur": self.resulting_position_eur,
             "model_used": self.model_used,
             "reasons": list(self.reasons),
             "note": self.note,
@@ -204,7 +203,7 @@ def _resolve_model(reference_model: str | None, budget: RiskBudgetSnapshot) -> s
     return "hist" if "hist" in budget.models else next(iter(budget.models), "hist")
 
 
-def _gross_notional(exposure_by_symbol: Mapping[str, Any]) -> float:
+def _gross_exposure(exposure_by_symbol: Mapping[str, Any]) -> float:
     return float(sum(abs(float(value)) for value in exposure_by_symbol.values()))
 
 
@@ -214,6 +213,8 @@ def _build_state(
     model_name: str,
     exposure_by_symbol: Mapping[str, Any],
     symbol: str,
+    headline_risk: list[dict[str, Any]] | None = None,
+    data_quality: Mapping[str, Any] | None = None,
 ) -> DecisionRiskState:
     model_budget = budget.models[model_name]
     position_budget = model_budget.positions.get(symbol)
@@ -225,9 +226,11 @@ def _build_state(
         budget_utilization_es=None if model_budget.utilization_es is None else float(model_budget.utilization_es),
         headroom_var=float(model_budget.headroom_var),
         headroom_es=float(model_budget.headroom_es),
-        gross_exposure=_gross_notional(exposure_by_symbol),
+        gross_exposure=_gross_exposure(exposure_by_symbol),
         symbol_exposure=symbol_exposure,
         status=str(model_budget.status),
+        headline_risk=[dict(item) for item in (headline_risk or [])],
+        data_quality=None if data_quality is None else dict(data_quality),
     )
 
 
@@ -239,6 +242,8 @@ def _evaluate_positions(
     limits_cfg: Mapping[str, Any] | None,
     reference_model: str | None,
     symbol: str,
+    headline_risk: list[dict[str, Any]] | None = None,
+    data_quality: Mapping[str, Any] | None = None,
 ) -> _DecisionEvaluation:
     engine = RiskEngine({str(name): float(value) for name, value in exposure_by_symbol.items()})
     snapshot = engine.snapshot_from_returns(returns_wide, config)
@@ -252,7 +257,14 @@ def _evaluate_positions(
     model_name = _resolve_model(reference_model, budget)
     return _DecisionEvaluation(
         budget=budget,
-        state=_build_state(budget, model_name=model_name, exposure_by_symbol=exposure_by_symbol, symbol=symbol),
+        state=_build_state(
+            budget,
+            model_name=model_name,
+            exposure_by_symbol=exposure_by_symbol,
+            symbol=symbol,
+            headline_risk=headline_risk,
+            data_quality=data_quality,
+        ),
     )
 
 
@@ -469,7 +481,7 @@ def evaluate_trade_proposal(
             model_used=model_used,
             reasons=[
                 f"Requested trade would exceed the advisory thresholds under {model_used.upper()}.",
-                f"A reduced trade of {approved_delta:,.2f} EUR remains admissible.",
+                f"A reduced exposure change of {approved_delta:,.2f} remains admissible.",
             ],
             note=proposal.note,
             pre_trade=pre_eval.state,

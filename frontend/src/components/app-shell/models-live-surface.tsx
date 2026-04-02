@@ -9,8 +9,9 @@ import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
 import type { BacktestFrameResponse, MT5LiveStateResponse, ModelComparisonResponse, ValidationRunSummary } from "@/lib/api/types";
-import { makeBacktestOption, makeBarOption } from "@/lib/chart-options";
+import { CHART_PALETTE, makeBacktestOption, makeBarOption } from "@/lib/chart-options";
 import { useMt5LiveState } from "@/lib/use-mt5-live-state";
+import { preferredHeadlineRisk } from "@/lib/risk-surface";
 import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
 import { buildBacktestSeries, buildModelScoreSeries } from "@/lib/view-models";
 
@@ -46,8 +47,13 @@ export function ModelsLiveSurface({
   const backtestSeries = frame ? buildBacktestSeries(frame) : [];
   const scoreSeries = comparison ? buildModelScoreSeries(comparison) : [];
   const selectedModel = liveState?.risk_summary?.reference_model ?? comparison?.champion_model ?? validation?.best_model ?? "hist";
-  const liveVarValue = liveState?.risk_summary?.var?.[selectedModel] ?? Object.values(liveState?.risk_summary?.var ?? {})[0] ?? null;
+  const liveRisk95 = preferredHeadlineRisk(liveState?.risk_summary?.headline_risk, ["live_1d_95"]);
+  const liveRisk99 = preferredHeadlineRisk(liveState?.risk_summary?.headline_risk, ["live_1d_99"]);
   const liveCapital = liveState?.capital_usage ?? null;
+  const validationSurface = (comparison?.validation_surface ?? null) as { points?: unknown[] } | null;
+  const validationSurfacePoints = Array.isArray(validationSurface?.points)
+    ? validationSurface.points
+    : [];
 
   return (
     <div className="desk-page space-y-4">
@@ -60,10 +66,15 @@ export function ModelsLiveSurface({
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <MetricBlock label="Champion" value={(comparison?.champion_model ?? "n/a").toUpperCase()} />
-        <MetricBlock label="Challenger" value={(comparison?.challenger_model ?? "n/a").toUpperCase()} />
+        <MetricBlock label="Reporting champion" value={(comparison?.champion_model_reporting ?? comparison?.challenger_model ?? "n/a").toUpperCase()} />
         <MetricBlock label="Exception rate" value={validation ? formatPercent(validation.expected_rate) : "n/a"} tone="warning" />
         <MetricBlock label="Score gap" value={comparison?.score_gap != null ? comparison.score_gap.toFixed(1) : "n/a"} tone="accent" />
-        <MetricBlock label="Live VaR" value={liveVarValue == null ? "n/a" : formatCurrency(liveVarValue)} hint={liveState?.risk_summary?.latest_observation ? formatTimestamp(liveState.risk_summary.latest_observation) : undefined} tone="warning" />
+        <MetricBlock
+          label="Live VaR / ES"
+          value={liveRisk95 == null ? "n/a" : formatCurrency(liveRisk95.var)}
+          hint={liveRisk99 ? `99% ES ${formatCurrency(liveRisk99.es)}` : liveState?.risk_summary?.latest_observation ? formatTimestamp(liveState.risk_summary.latest_observation) : undefined}
+          tone="warning"
+        />
       </section>
 
       <LiveOperatorAlerts alerts={liveState?.operator_alerts ?? []} />
@@ -82,6 +93,10 @@ export function ModelsLiveSurface({
               <div className="flex items-center justify-between text-xs">
                 <span className="text-[var(--color-text-muted)]">Best model</span>
                 <span className="mono font-semibold text-[var(--color-text)]">{(validation?.best_model ?? selectedModel).toUpperCase()}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-[var(--color-text-muted)]">Reporting champion</span>
+                <span className="mono text-[var(--color-text)]">{(comparison?.champion_model_reporting ?? "n/a").toUpperCase()}</span>
               </div>
               <div className="flex items-center justify-between text-xs">
                 <span className="text-[var(--color-text-muted)]">Alpha</span>
@@ -110,7 +125,7 @@ export function ModelsLiveSurface({
 
       <div className="grid gap-4 xl:grid-cols-[minmax(280px,0.85fr)_minmax(0,1.15fr)]">
         <ChartSurface
-          option={makeBarOption(scoreSeries, { color: "#d89b49", negativeColor: "#0ecb81", mode: ranking.length <= 5 ? "sparse" : "standard" })}
+          option={makeBarOption(scoreSeries, { color: CHART_PALETTE.gold, negativeColor: CHART_PALETTE.green, mode: ranking.length <= 5 ? "sparse" : "standard" })}
           mode={ranking.length <= 5 ? "sparse" : "standard"} dataCount={ranking.length}
           title="Model scores"
           emptyState={<p className="text-xs text-[var(--color-text-muted)]">No ranking available.</p>}
@@ -118,6 +133,11 @@ export function ModelsLiveSurface({
         <div className="space-y-2">
           <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Ranking table</h4>
           <ModelRankingTable rows={ranking} />
+          {validationSurfacePoints.length > 0 ? (
+            <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-[11px] text-[var(--color-text-soft)]">
+              Validation surface loaded with {validationSurfacePoints.length} model / alpha / horizon points.
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

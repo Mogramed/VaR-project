@@ -35,7 +35,7 @@ def seed_demo_environment(root: Path, *, portfolio_slug: str | None = None) -> d
             service.evaluate_trade_decision(
                 portfolio_slug=slug,
                 symbol=primary_symbol,
-                delta_position_eur=decision_delta,
+                exposure_change=decision_delta,
                 note="demo bootstrap decision",
             )
             if primary_symbol
@@ -46,7 +46,7 @@ def seed_demo_environment(root: Path, *, portfolio_slug: str | None = None) -> d
             preview = service.preview_execution(
                 portfolio_slug=slug,
                 symbol=secondary_symbol or primary_symbol,
-                delta_position_eur=-decision_delta if secondary_symbol else decision_delta,
+                exposure_change=-decision_delta if secondary_symbol else decision_delta,
                 note="demo bootstrap execution preview",
             )
         report = service.run_report(compare_path=backtest["compare_csv"], portfolio_slug=slug)

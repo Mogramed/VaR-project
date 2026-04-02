@@ -1,6 +1,5 @@
 "use client";
 
-import { useMemo } from "react";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { ExecutionFillsTable, ExecutionHistoryTable } from "@/components/data/risk-tables";
@@ -10,16 +9,19 @@ import { StatusBadge } from "@/components/ui/primitives";
 import type { ExecutionFillResponse, ExecutionResultResponse, MT5LiveStateResponse, MT5TerminalStatusResponse } from "@/lib/api/types";
 import { useMt5LiveState } from "@/lib/use-mt5-live-state";
 import { useRecentExecutionActivity } from "@/lib/use-recent-execution-activity";
-import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
+
 
 export function ExecutionLiveSurface({
-  portfolioSlug, initialLiveState, initialTerminalStatus, initialExecutions, initialFills,
+  portfolioSlug, initialLiveState, initialTerminalStatus, initialExecutions, initialFills, initialSymbol, initialExposureChange, initialSide,
 }: {
   portfolioSlug: string;
   initialLiveState: MT5LiveStateResponse | null;
   initialTerminalStatus: MT5TerminalStatusResponse;
   initialExecutions: ExecutionResultResponse[];
   initialFills: ExecutionFillResponse[];
+  initialSymbol?: string;
+  initialExposureChange?: number | null;
+  initialSide?: "buy" | "sell";
 }) {
   const { liveState, transport } = useMt5LiveState(portfolioSlug, initialLiveState);
   const { executions, fills, pushExecutionResult } = useRecentExecutionActivity({
@@ -47,7 +49,14 @@ export function ExecutionLiveSurface({
       </section>
 
       <LiveOperatorAlerts alerts={liveState?.operator_alerts ?? []} title="Execution alerts" />
-      <ExecutionPanel portfolioSlug={portfolioSlug} terminalStatus={status} onSubmitted={pushExecutionResult} />
+      <ExecutionPanel
+        portfolioSlug={portfolioSlug}
+        terminalStatus={status}
+        onSubmitted={pushExecutionResult}
+        initialSymbol={initialSymbol}
+        initialExposureChange={initialExposureChange}
+        initialSide={initialSide}
+      />
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
         <div className="space-y-2">

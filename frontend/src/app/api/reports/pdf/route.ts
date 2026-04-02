@@ -51,10 +51,14 @@ export async function GET(request: NextRequest) {
       printBackground: true,
       margin: { top: "18mm", right: "14mm", bottom: "18mm", left: "14mm" },
       displayHeaderFooter: true,
-      headerTemplate:
-        '<div style="width:100%; font-size:9px; padding:0 12mm; color:#7e848f; text-transform:uppercase; letter-spacing:0.2em;">FX Risk Desk Platform</div>',
-      footerTemplate:
-        '<div style="width:100%; font-size:9px; padding:0 12mm; color:#7e848f; display:flex; justify-content:space-between;"><span>Confidential desk report</span><span class="pageNumber"></span>/<span class="totalPages"></span></div>',
+      headerTemplate: `<div style="width:100%;font-size:8px;padding:4px 14mm 6px;color:#7e848f;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.06)">
+          <span style="text-transform:uppercase;letter-spacing:0.22em;font-family:monospace">FX Risk Desk Platform</span>
+          <span style="color:#d89b49;font-size:6px">\u25CF</span>
+        </div>`,
+      footerTemplate: `<div style="width:100%;font-size:8px;padding:6px 14mm 4px;color:#7e848f;display:flex;justify-content:space-between;align-items:center;border-top:1px solid rgba(255,255,255,0.06)">
+          <span style="letter-spacing:0.08em">Confidential \u2014 Internal Use Only</span>
+          <span style="font-family:monospace">Page <span class="pageNumber"></span> of <span class="totalPages"></span></span>
+        </div>`,
     });
 
     return new NextResponse(Buffer.from(pdf), {

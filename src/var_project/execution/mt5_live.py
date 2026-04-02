@@ -179,7 +179,7 @@ class MT5Position:
     symbol: str
     side: str
     volume_lots: float
-    signed_position_eur: float
+    signed_exposure_base_ccy: float
     price_open: float
     price_current: float
     profit: float
@@ -188,13 +188,17 @@ class MT5Position:
     time_utc: str | None
     raw: dict[str, Any]
 
+    @property
+    def signed_position_eur(self) -> float:
+        return self.signed_exposure_base_ccy
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "ticket": self.ticket,
             "symbol": self.symbol,
             "side": self.side,
             "volume_lots": self.volume_lots,
-            "signed_position_eur": self.signed_position_eur,
+            "signed_exposure_base_ccy": self.signed_exposure_base_ccy,
             "price_open": self.price_open,
             "price_current": self.price_current,
             "profit": self.profit,
@@ -275,7 +279,7 @@ class HoldingSnapshot:
     asset_class: str
     side: str
     volume_lots: float
-    signed_position_eur: float
+    signed_exposure_base_ccy: float
     signed_units: float | None
     contract_size: float | None
     base_currency: str | None
@@ -291,13 +295,17 @@ class HoldingSnapshot:
     time_utc: str | None
     raw: dict[str, Any]
 
+    @property
+    def signed_position_eur(self) -> float:
+        return self.signed_exposure_base_ccy
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "symbol": self.symbol,
             "asset_class": self.asset_class,
             "side": self.side,
             "volume_lots": self.volume_lots,
-            "signed_position_eur": self.signed_position_eur,
+            "signed_exposure_base_ccy": self.signed_exposure_base_ccy,
             "signed_units": self.signed_units,
             "contract_size": self.contract_size,
             "base_currency": self.base_currency,
@@ -399,10 +407,10 @@ class DealHistoryEntry:
 class ExecutionGuardDecision:
     decision: str
     risk_decision: str
-    requested_delta_position_eur: float
-    approved_delta_position_eur: float
-    executable_delta_position_eur: float
-    suggested_delta_position_eur: float | None
+    requested_exposure_change: float
+    approved_exposure_change: float
+    executable_exposure_change: float
+    suggested_exposure_change: float | None
     model_used: str
     side: str | None
     volume_lots: float
@@ -416,14 +424,30 @@ class ExecutionGuardDecision:
     order_check_comment: str | None
     reasons: list[str]
 
+    @property
+    def requested_delta_position_eur(self) -> float:
+        return self.requested_exposure_change
+
+    @property
+    def approved_delta_position_eur(self) -> float:
+        return self.approved_exposure_change
+
+    @property
+    def executable_delta_position_eur(self) -> float:
+        return self.executable_exposure_change
+
+    @property
+    def suggested_delta_position_eur(self) -> float | None:
+        return self.suggested_exposure_change
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "decision": self.decision,
             "risk_decision": self.risk_decision,
-            "requested_delta_position_eur": self.requested_delta_position_eur,
-            "approved_delta_position_eur": self.approved_delta_position_eur,
-            "executable_delta_position_eur": self.executable_delta_position_eur,
-            "suggested_delta_position_eur": self.suggested_delta_position_eur,
+            "requested_exposure_change": self.requested_exposure_change,
+            "approved_exposure_change": self.approved_exposure_change,
+            "executable_exposure_change": self.executable_exposure_change,
+            "suggested_exposure_change": self.suggested_exposure_change,
             "model_used": self.model_used,
             "side": self.side,
             "volume_lots": self.volume_lots,
@@ -454,6 +478,11 @@ class ExecutionPreview:
     order_check: dict[str, Any]
     pre_capital: dict[str, Any]
     post_capital: dict[str, Any]
+    microstructure: dict[str, Any]
+    risk_nowcast: dict[str, Any]
+    pnl_explain: dict[str, Any]
+    estimated_spread_cost: float | None = None
+    expected_slippage_points: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -470,6 +499,11 @@ class ExecutionPreview:
             "order_check": dict(self.order_check),
             "pre_capital": dict(self.pre_capital),
             "post_capital": dict(self.post_capital),
+            "microstructure": dict(self.microstructure),
+            "risk_nowcast": dict(self.risk_nowcast),
+            "pnl_explain": dict(self.pnl_explain),
+            "estimated_spread_cost": self.estimated_spread_cost,
+            "expected_slippage_points": self.expected_slippage_points,
         }
 
 
@@ -479,9 +513,9 @@ class ExecutionResult:
     portfolio_slug: str
     symbol: str
     status: str
-    requested_delta_position_eur: float
-    approved_delta_position_eur: float
-    executed_delta_position_eur: float
+    requested_exposure_change: float
+    approved_exposure_change: float
+    executed_exposure_change: float
     terminal_status: MT5TerminalStatus
     account_before: MT5AccountSnapshot
     account_after: MT5AccountSnapshot | None
@@ -493,15 +527,27 @@ class ExecutionResult:
     positions_after: list[MT5Position]
     post_capital: dict[str, Any]
 
+    @property
+    def requested_delta_position_eur(self) -> float:
+        return self.requested_exposure_change
+
+    @property
+    def approved_delta_position_eur(self) -> float:
+        return self.approved_exposure_change
+
+    @property
+    def executed_delta_position_eur(self) -> float:
+        return self.executed_exposure_change
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "time_utc": self.time_utc,
             "portfolio_slug": self.portfolio_slug,
             "symbol": self.symbol,
             "status": self.status,
-            "requested_delta_position_eur": self.requested_delta_position_eur,
-            "approved_delta_position_eur": self.approved_delta_position_eur,
-            "executed_delta_position_eur": self.executed_delta_position_eur,
+            "requested_exposure_change": self.requested_exposure_change,
+            "approved_exposure_change": self.approved_exposure_change,
+            "executed_exposure_change": self.executed_exposure_change,
             "terminal_status": self.terminal_status.to_dict(),
             "account_before": self.account_before.to_dict(),
             "account_after": None if self.account_after is None else self.account_after.to_dict(),
@@ -583,7 +629,7 @@ class MT5LiveGateway:
             if allowed and symbol not in allowed:
                 continue
             side = _position_side(row.get("type"))
-            signed = _signed_from_side(side) * _coerce_float(row.get("volume")) * self.notional_eur_per_lot(symbol)
+            signed = _signed_from_side(side) * _coerce_float(row.get("volume")) * self.exposure_per_lot(symbol)
             time_epoch = row.get("time_update") or row.get("time")
             time_utc = None
             if time_epoch is not None:
@@ -594,7 +640,7 @@ class MT5LiveGateway:
                     symbol=symbol,
                     side=side,
                     volume_lots=_coerce_float(row.get("volume")),
-                    signed_position_eur=signed,
+                    signed_exposure_base_ccy=signed,
                     price_open=_coerce_float(row.get("price_open")),
                     price_current=_coerce_float(row.get("price_current")),
                     profit=_coerce_float(row.get("profit")),
@@ -668,14 +714,14 @@ class MT5LiveGateway:
             tick = self._tick(symbol)
             mark_price = _coerce_float(tick.get("bid")) if side == "BUY" else _coerce_float(tick.get("ask"))
             signed_units = _signed_from_side(side) * _coerce_float(row.get("volume")) * _coerce_float(info.contract_size, 0.0)
-            exposure_base_ccy = _signed_from_side(side) * _coerce_float(row.get("volume")) * self.notional_eur_per_lot(symbol)
+            exposure_base_ccy = _signed_from_side(side) * _coerce_float(row.get("volume")) * self.exposure_per_lot(symbol)
             holdings.append(
                 HoldingSnapshot(
                     symbol=symbol,
                     asset_class=info.asset_class,
                     side=side,
                     volume_lots=_coerce_float(row.get("volume")),
-                    signed_position_eur=_signed_from_side(side) * _coerce_float(row.get("volume")) * self.notional_eur_per_lot(symbol),
+                    signed_exposure_base_ccy=_signed_from_side(side) * _coerce_float(row.get("volume")) * self.exposure_per_lot(symbol),
                     signed_units=None if abs(signed_units) <= 1e-9 else signed_units,
                     contract_size=info.contract_size,
                     base_currency=info.base_currency,
@@ -700,11 +746,18 @@ class MT5LiveGateway:
         date_from: datetime,
         date_to: datetime,
         symbols: Iterable[str] | None = None,
+        ticket: int | None = None,
+        position: int | None = None,
     ) -> list[OrderHistoryEntry]:
         allowed = {str(symbol).upper() for symbol in symbols or []}
         prefix = self._normalized_comment_prefix()
         expected_magic = int(self.config.magic)
-        rows = self.connector.history_orders_get(date_from, date_to)
+        rows = self.connector.history_orders_get(
+            date_from,
+            date_to,
+            ticket=ticket,
+            position=position,
+        )
         entries: list[OrderHistoryEntry] = []
         for row in rows:
             symbol = str(row.get("symbol") or "").upper()
@@ -743,11 +796,18 @@ class MT5LiveGateway:
         date_from: datetime,
         date_to: datetime,
         symbols: Iterable[str] | None = None,
+        ticket: int | None = None,
+        position: int | None = None,
     ) -> list[DealHistoryEntry]:
         allowed = {str(symbol).upper() for symbol in symbols or []}
         prefix = self._normalized_comment_prefix()
         expected_magic = int(self.config.magic)
-        rows = self.connector.history_deals_get(date_from, date_to)
+        rows = self.connector.history_deals_get(
+            date_from,
+            date_to,
+            ticket=ticket,
+            position=position,
+        )
         entries: list[DealHistoryEntry] = []
         for row in rows:
             symbol = str(row.get("symbol") or "").upper()
@@ -782,37 +842,48 @@ class MT5LiveGateway:
             )
         return entries
 
-    def positions_map_eur(self, *, symbols: Iterable[str]) -> dict[str, float]:
+    def positions_map_exposure(self, *, symbols: Iterable[str]) -> dict[str, float]:
         tracked = {str(symbol).upper() for symbol in symbols}
         positions = {symbol: 0.0 for symbol in tracked}
         for item in self.positions(symbols=tracked):
-            positions[item.symbol] = float(positions.get(item.symbol, 0.0) + item.signed_position_eur)
+            positions[item.symbol] = float(positions.get(item.symbol, 0.0) + item.signed_exposure_base_ccy)
         return positions
 
-    def build_market_order(self, *, symbol: str, delta_position_eur: float, note: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    def positions_map_eur(self, *, symbols: Iterable[str]) -> dict[str, float]:
+        return self.positions_map_exposure(symbols=symbols)
+
+    def build_market_order(
+        self,
+        *,
+        symbol: str,
+        exposure_change: float | None = None,
+        delta_position_eur: float | None = None,
+        note: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         normalized_symbol = str(symbol).upper()
-        if abs(float(delta_position_eur)) <= 1e-9:
-            raise ValueError("delta_position_eur must be non-zero.")
+        selected_change = exposure_change if exposure_change is not None else delta_position_eur
+        if abs(float(selected_change or 0.0)) <= 1e-9:
+            raise ValueError("exposure_change must be non-zero.")
 
         info = self._symbol_info(normalized_symbol)
         tick = dict(self.connector.symbol_info_tick(normalized_symbol))
         mt5 = self.connector._mt5  # noqa: SLF001 - wrapper intentionally exposes underlying package after init
 
-        side = "BUY" if float(delta_position_eur) > 0.0 else "SELL"
+        side = "BUY" if float(selected_change) > 0.0 else "SELL"
         price = _coerce_float(tick.get("ask")) if side == "BUY" else _coerce_float(tick.get("bid"))
         if price <= 0.0:
             raise MT5ConnectionError(f"No tradable price available for {normalized_symbol}.")
 
-        eur_per_lot = self.notional_eur_per_lot(normalized_symbol)
-        raw_volume = abs(float(delta_position_eur)) / eur_per_lot
+        exposure_per_lot = self.exposure_per_lot(normalized_symbol)
+        raw_volume = abs(float(selected_change)) / exposure_per_lot
         volume = self._round_lot_volume(normalized_symbol, raw_volume)
 
         min_volume = _coerce_float(info.get("volume_min"), 0.0)
         if volume < min_volume - 1e-12:
-            minimum_notional = eur_per_lot * min_volume
+            minimum_exposure = exposure_per_lot * min_volume
             raise ValueError(
-                f"Requested EUR delta is below the broker minimum size for {normalized_symbol} "
-                f"({minimum_notional:,.2f} {self.base_currency})."
+                f"Requested exposure change is below the broker minimum size for {normalized_symbol} "
+                f"({minimum_exposure:,.2f} {self.base_currency})."
             )
 
         fill_candidates = self._fill_candidates(info, mt5)
@@ -830,25 +901,28 @@ class MT5LiveGateway:
             "type_filling": fill_mode,
         }
 
-        executable_delta = (_signed_from_side(side) * volume * eur_per_lot)
+        executable_exposure = (_signed_from_side(side) * volume * exposure_per_lot)
         meta = {
             "side": side,
             "price": price,
             "volume_lots": volume,
-            "eur_per_lot": eur_per_lot,
-            "executable_delta_position_eur": executable_delta,
-            "requested_delta_position_eur": float(delta_position_eur),
-            "minimum_notional_eur": eur_per_lot * min_volume if min_volume > 0 else 0.0,
+            "exposure_per_lot": exposure_per_lot,
+            "executable_exposure_change": executable_exposure,
+            "requested_exposure_change": float(selected_change),
+            "minimum_exposure_change": exposure_per_lot * min_volume if min_volume > 0 else 0.0,
             "fill_candidates": fill_candidates,
         }
         return request, meta
 
-    def notional_eur_per_lot(self, symbol: str) -> float:
+    def exposure_per_lot(self, symbol: str) -> float:
         info = self._symbol_info(symbol)
         base_ccy = str(info.get("currency_base") or str(symbol)[:3]).upper()
         contract_size = _coerce_float(info.get("trade_contract_size"), 100000.0)
         rate = self.fx_rate(base_ccy, self.base_currency)
         return contract_size * rate
+
+    def notional_eur_per_lot(self, symbol: str) -> float:
+        return self.exposure_per_lot(symbol)
 
     def fx_rate(self, from_currency: str, to_currency: str) -> float:
         source = str(from_currency).upper()

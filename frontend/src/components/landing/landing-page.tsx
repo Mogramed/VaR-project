@@ -275,7 +275,7 @@ export function LandingPage({ locale }: { locale: "en" | "fr" }) {
                 className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
                 <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Desk logic</div>
                 <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  {([["Model regime", "Champion/challenger"], ["Budgeting", "Capital + headroom"], ["Decisioning", "Accept / reduce / reject"], ["Simulation", "Paper-trade follow-through"]] as const).map(([label, value]) => (
+                  {([["Model regime", "Champion/challenger"], ["Budgeting", "Capital + headroom"], ["Decisioning", "Accept / reduce / reject"], ["Blotter", "Execution and reconciliation"]] as const).map(([label, value]) => (
                     <div key={label} className="border-t border-[var(--color-border)] pt-3">
                       <div className="text-[9px] uppercase tracking-wider text-[var(--color-text-muted)]">{label}</div>
                       <div className="mt-1 text-[13px] font-semibold text-[var(--color-text)]">{value}</div>

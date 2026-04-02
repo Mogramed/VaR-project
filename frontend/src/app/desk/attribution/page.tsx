@@ -10,7 +10,7 @@ export default async function DeskAttributionPage({
   const portfolioSlug =
     typeof query.portfolio === "string" ? query.portfolio : undefined;
   const preferredModel = typeof query.model === "string" ? query.model : undefined;
-  const health = await api.health();
+  const health = await api.safeHealth();
   const resolvedPortfolio = portfolioSlug ?? health.portfolio_slug;
 
   const [liveState, attribution, comparison] = await Promise.all([

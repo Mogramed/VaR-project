@@ -76,6 +76,7 @@ class PortfolioRiskCalculator:
         min_coverage: float | None = None,
         config: RiskModelConfig | None = None,
         window: int | None = None,
+        allow_auto_sync: bool = True,
     ) -> dict[str, Any]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         if self.runtime.market_data.should_use_mt5_market_data(portfolio):
@@ -89,6 +90,7 @@ class PortfolioRiskCalculator:
                     min_coverage=min_coverage,
                     config=config,
                     window=window,
+                    allow_auto_sync=allow_auto_sync,
                     snapshot_source="mt5_live",
                     snapshot_timestamp=datetime.now(timezone.utc).isoformat(),
                 )
@@ -100,6 +102,7 @@ class PortfolioRiskCalculator:
             min_coverage=min_coverage,
             config=config,
             window=window,
+            allow_auto_sync=allow_auto_sync,
             snapshot_source="historical",
         )
 
@@ -113,6 +116,7 @@ class PortfolioRiskCalculator:
         min_coverage: float | None = None,
         config: RiskModelConfig | None = None,
         window: int | None = None,
+        allow_auto_sync: bool = True,
         snapshot_source: str = "historical",
         snapshot_timestamp: str | None = None,
     ) -> dict[str, Any]:
@@ -124,6 +128,7 @@ class PortfolioRiskCalculator:
             min_coverage=min_coverage,
             config=config,
             window=window,
+            allow_auto_sync=allow_auto_sync,
             snapshot_source=snapshot_source,
             snapshot_timestamp=snapshot_timestamp,
         )
@@ -138,6 +143,7 @@ class PortfolioRiskCalculator:
         min_coverage: float | None = None,
         config: RiskModelConfig | None = None,
         window: int | None = None,
+        allow_auto_sync: bool = True,
         snapshot_source: str = "historical",
         snapshot_timestamp: str | None = None,
     ) -> dict[str, Any]:
@@ -149,6 +155,7 @@ class PortfolioRiskCalculator:
             min_coverage=min_coverage,
             config=config,
             window=window,
+            allow_auto_sync=allow_auto_sync,
             snapshot_source=snapshot_source,
             snapshot_timestamp=snapshot_timestamp,
         )
@@ -163,6 +170,7 @@ class PortfolioRiskCalculator:
         min_coverage: float | None = None,
         config: RiskModelConfig | None = None,
         window: int | None = None,
+        allow_auto_sync: bool = True,
         snapshot_source: str = "historical",
         snapshot_timestamp: str | None = None,
     ) -> dict[str, Any]:
@@ -170,6 +178,10 @@ class PortfolioRiskCalculator:
         selected_days = int(days or self.default_days())
         selected_min_coverage = float(min_coverage or self.runtime.data_defaults["min_coverage"])
         selected_window = int(window or self.runtime.risk_defaults["window"])
+        estimation_window_days = int(self.runtime.risk_defaults["estimation_window_days"])
+        minimum_valid_days = int(self.runtime.risk_defaults["minimum_valid_days"])
+        selected_alphas = [float(item) for item in self.runtime.risk_defaults["alphas"]]
+        selected_horizons = [int(item) for item in self.runtime.risk_defaults["horizons"]]
         risk_config = config or self.build_risk_model_config(None, None, None, None, None)
 
         normalized_holdings = normalize_holdings(
@@ -191,16 +203,48 @@ class PortfolioRiskCalculator:
             selected_timeframe,
             selected_days,
             selected_min_coverage,
+            allow_auto_sync=allow_auto_sync,
             symbols=portfolio_symbols,
         )
         engine = RiskEngine(normalized_holdings, base_currency=str(portfolio["base_currency"]))
         portfolio_frame = engine.build_portfolio_frame(daily_returns)
-        sample = portfolio_frame.iloc[-min(len(portfolio_frame), selected_window) :].copy()
+        sample = portfolio_frame.iloc[-min(len(portfolio_frame), estimation_window_days) :].copy()
         if sample.empty:
             raise ValueError("No aligned returns available for the selected portfolio.")
         sample_symbols = engine.portfolio_symbols(sample)
 
         snapshot = engine.evaluate_models(pnl=sample["pnl"], returns_wide=sample[sample_symbols], config=risk_config)
+        reference_model = self.runtime._decision_reference_model(portfolio["slug"])
+        risk_surface = engine.build_risk_surface(
+            sample[sample_symbols],
+            risk_config,
+            alphas=selected_alphas,
+            horizons=selected_horizons,
+            estimation_window_days=estimation_window_days,
+            minimum_valid_days=minimum_valid_days,
+            reference_model=reference_model,
+        )
+        stress_surface = engine.build_stress_surface(
+            sample[sample_symbols],
+            risk_config,
+            alphas=selected_alphas,
+            horizons=selected_horizons,
+            estimation_window_days=estimation_window_days,
+            minimum_valid_days=minimum_valid_days,
+        )
+        headline_risk = [dict(item) for item in risk_surface.to_dict().get("headline", [])]
+        stressed_headline = [
+            dict(item)
+            for item in list(stress_surface.get("headline_risk") or [])
+            if item.get("is_stressed")
+        ]
+        seen_headline_keys = {str(item.get("key")) for item in headline_risk}
+        for item in stressed_headline:
+            key = str(item.get("key"))
+            if key in seen_headline_keys:
+                continue
+            headline_risk.append(item)
+            seen_headline_keys.add(key)
         attribution = engine.attribute_from_returns(sample[sample_symbols], config=risk_config, base_snapshot=snapshot)
         risk_budget = build_risk_budget_snapshot(
             attribution,
@@ -213,7 +257,7 @@ class PortfolioRiskCalculator:
             self.runtime.limits_config,
             portfolio_slug=portfolio["slug"],
             base_currency=portfolio["base_currency"],
-            reference_model=self.runtime._decision_reference_model(portfolio["slug"]),
+            reference_model=reference_model,
             snapshot_source=snapshot_source,
             snapshot_timestamp=snapshot_timestamp or sample.index[-1].isoformat(),
         ).to_dict()
@@ -231,22 +275,27 @@ class PortfolioRiskCalculator:
             "portfolio_frame": portfolio_frame,
             "sample": sample,
             "snapshot": snapshot,
+            "risk_surface": risk_surface.to_dict(),
+            "headline_risk": headline_risk,
+            "stress_surface": stress_surface,
+            "data_quality": risk_surface.data_quality.to_dict(),
             "attribution": attribution,
             "risk_budget": risk_budget,
             "capital": capital,
         }
 
-    def compute_live_portfolio_state(self, *, portfolio: Mapping[str, Any], live) -> dict[str, Any]:
-        if self.runtime.market_data.should_use_mt5_market_data(portfolio):
-            self.runtime.market_data.sync_market_data(
-                portfolio_slug=str(portfolio["slug"]),
-                days=self.default_days(),
-                timeframes=[self.default_timeframe()],
-            )
+    def compute_live_portfolio_state(
+        self,
+        *,
+        portfolio: Mapping[str, Any],
+        live,
+        allow_auto_sync: bool = True,
+    ) -> dict[str, Any]:
         live_holdings = [item.to_dict() for item in live.holdings(symbols=None)]
         return self.compute_portfolio_state_for_holdings(
             portfolio=portfolio,
             holdings=live_holdings,
+            allow_auto_sync=allow_auto_sync,
             snapshot_source="mt5_live_preview",
             snapshot_timestamp=datetime.now(timezone.utc).isoformat(),
         )
@@ -261,6 +310,7 @@ class PortfolioRiskCalculator:
         days: int,
         min_coverage: float,
         *,
+        allow_auto_sync: bool = True,
         symbols: list[str] | None = None,
     ):
         if self.runtime.market_data.should_use_mt5_market_data(portfolio):
@@ -270,6 +320,7 @@ class PortfolioRiskCalculator:
                 days=days,
                 min_coverage=min_coverage,
                 ensure_sync=False,
+                allow_auto_sync=allow_auto_sync,
                 symbols=symbols,
             )
         return load_daily_simple_returns_from_processed(
@@ -314,7 +365,7 @@ class DecisionPolicyEngine:
         exposure_by_symbol = dict(bundle["exposure_by_symbol"])
         sample = bundle["sample"]
         sample_symbols = list(bundle.get("portfolio_symbols") or portfolio["symbols"])
-        selected_change = delta_position_eur if exposure_change is None else exposure_change
+        selected_change = exposure_change if exposure_change is not None else delta_position_eur
         result = evaluate_trade_proposal(
             sample[sample_symbols],
             exposure_by_symbol=exposure_by_symbol,
@@ -333,6 +384,29 @@ class DecisionPolicyEngine:
             "window": bundle["window"],
             **result.to_dict(),
         }
+        payload["pre_trade"]["headline_risk"] = list(bundle.get("headline_risk") or [])
+        payload["pre_trade"]["data_quality"] = dict(bundle.get("data_quality") or {})
+
+        approved_change = float(payload.get("approved_exposure_change", 0.0))
+        if abs(approved_change) > 1e-9 and str(symbol).upper() in exposure_by_symbol:
+            post_exposure = dict(exposure_by_symbol)
+            post_exposure[str(symbol).upper()] = float(post_exposure.get(str(symbol).upper(), 0.0) + approved_change)
+            post_bundle = self.runtime._compute_portfolio_state_for_exposure(
+                portfolio=portfolio,
+                exposure_by_symbol=post_exposure,
+                timeframe=bundle["timeframe"],
+                days=bundle["days"],
+                min_coverage=bundle["min_coverage"],
+                config=bundle["config"],
+                window=bundle["window"],
+                snapshot_source="decision_preview",
+                snapshot_timestamp=now.isoformat(),
+            )
+            payload["post_trade"]["headline_risk"] = list(post_bundle.get("headline_risk") or [])
+            payload["post_trade"]["data_quality"] = dict(post_bundle.get("data_quality") or {})
+        else:
+            payload["post_trade"]["headline_risk"] = list(bundle.get("headline_risk") or [])
+            payload["post_trade"]["data_quality"] = dict(bundle.get("data_quality") or {})
         if not persist:
             return payload
 
@@ -367,7 +441,9 @@ class DecisionPolicyEngine:
         symbol_key = str(symbol).upper()
         if symbol_key not in post_exposure:
             return dict(bundle["capital"])
-        selected_change = approved_delta_position_eur if approved_exposure_change is None else approved_exposure_change
+        selected_change = (
+            approved_exposure_change if approved_exposure_change is not None else approved_delta_position_eur
+        )
         post_exposure[symbol_key] = float(post_exposure.get(symbol_key, 0.0) + float(selected_change or 0.0))
         post_bundle = self.runtime._compute_portfolio_state_for_exposure(
             portfolio=portfolio,
@@ -511,22 +587,23 @@ class MT5ExecutionOrchestrator:
         note: str | None,
         decision: Mapping[str, Any],
     ) -> tuple[ExecutionGuardDecision, dict[str, Any], dict[str, Any]]:
-        requested_delta = float(decision.get("requested_delta_position_eur", 0.0))
-        approved_delta = float(decision.get("approved_delta_position_eur", 0.0))
+        requested_exposure_change = float(decision.get("requested_exposure_change", 0.0))
+        approved_exposure_change = float(decision.get("approved_exposure_change", 0.0))
         model_used = str(decision.get("model_used") or "hist")
         risk_decision = str(decision.get("decision") or "REJECT")
         reasons: list[str] = list(decision.get("reasons") or [])
+        suggested_exposure_change = decision.get("suggested_exposure_change")
 
-        if risk_decision == "REJECT" or abs(approved_delta) <= 1e-9 or not terminal_status.ready:
+        if risk_decision == "REJECT" or abs(approved_exposure_change) <= 1e-9 or not terminal_status.ready:
             if not terminal_status.ready:
                 reasons.append(terminal_status.message)
             guard = ExecutionGuardDecision(
                 decision="REJECT",
                 risk_decision=risk_decision,
-                requested_delta_position_eur=requested_delta,
-                approved_delta_position_eur=approved_delta,
-                executable_delta_position_eur=0.0,
-                suggested_delta_position_eur=None if decision.get("suggested_delta_position_eur") is None else float(decision.get("suggested_delta_position_eur")),
+                requested_exposure_change=requested_exposure_change,
+                approved_exposure_change=approved_exposure_change,
+                executable_exposure_change=0.0,
+                suggested_exposure_change=None if suggested_exposure_change is None else float(suggested_exposure_change),
                 model_used=model_used,
                 side=None,
                 volume_lots=0.0,
@@ -542,7 +619,11 @@ class MT5ExecutionOrchestrator:
             )
             return guard, {}, {}
 
-        order_request, meta = live.build_market_order(symbol=str(symbol).upper(), delta_position_eur=approved_delta, note=note)
+        order_request, meta = live.build_market_order(
+            symbol=str(symbol).upper(),
+            exposure_change=approved_exposure_change,
+            note=note,
+        )
         order_request = self._attach_position_target_if_reducing(
             live=live,
             symbol=str(symbol).upper(),
@@ -563,10 +644,10 @@ class MT5ExecutionOrchestrator:
         guard = ExecutionGuardDecision(
             decision=risk_decision if margin_ok else "REJECT",
             risk_decision=risk_decision,
-            requested_delta_position_eur=requested_delta,
-            approved_delta_position_eur=approved_delta,
-            executable_delta_position_eur=float(meta.get("executable_delta_position_eur", 0.0)),
-            suggested_delta_position_eur=None if decision.get("suggested_delta_position_eur") is None else float(decision.get("suggested_delta_position_eur")),
+            requested_exposure_change=requested_exposure_change,
+            approved_exposure_change=approved_exposure_change,
+            executable_exposure_change=float(meta.get("executable_exposure_change", 0.0)),
+            suggested_exposure_change=None if suggested_exposure_change is None else float(suggested_exposure_change),
             model_used=model_used,
             side=None if meta.get("side") is None else str(meta.get("side")),
             volume_lots=float(meta.get("volume_lots", 0.0)),
@@ -821,7 +902,6 @@ class GovernanceRecorder:
             "window": bundle["window"],
             "holdings": list(bundle["holdings"]),
             "exposure_by_symbol": dict(bundle["exposure_by_symbol"]),
-            "positions_eur": dict(bundle["exposure_by_symbol"]),
             "var": bundle["snapshot"].vars_dict(),
             "es": bundle["snapshot"].es_dict(),
             "attribution": bundle["attribution"].to_dict(),
@@ -829,6 +909,14 @@ class GovernanceRecorder:
             "capital_usage": dict(bundle["capital"]),
             "sample_size": bundle["snapshot"].sample_size,
             "latest_observation": sample.index[-1].isoformat(),
+            "risk_surface": dict(bundle.get("risk_surface") or {}),
+            "headline_risk": list(bundle.get("headline_risk") or []),
+            "stress_surface": dict(bundle.get("stress_surface") or {}),
+            "data_quality": dict(bundle.get("data_quality") or {}),
+            "risk_nowcast": dict(bundle.get("risk_nowcast") or {}),
+            "microstructure": dict(bundle.get("microstructure") or {}),
+            "tick_quality": dict(bundle.get("tick_quality") or {}),
+            "pnl_explain": dict(bundle.get("pnl_explain") or {}),
             "metadata": dict(metadata or {}),
         }
         snapshot_id = self.runtime.storage.record_snapshot(snapshot_payload, portfolio_id=portfolio_id, source=source)
@@ -926,7 +1014,9 @@ class GovernanceRecorder:
             for item in decisions:
                 lines.append(
                     f"- {item.get('created_at') or item.get('time_utc')}: {item.get('symbol')} -> {item.get('decision')} "
-                    f"(requested {item.get('requested_delta_position_eur')}, approved {item.get('approved_delta_position_eur')}, model {item.get('model_used')})"
+                    f"(requested {item.get('requested_exposure_change')}, "
+                    f"approved {item.get('approved_exposure_change')}, "
+                    f"model {item.get('model_used')})"
                 )
 
         lines.extend(["", "## Capital History", ""])

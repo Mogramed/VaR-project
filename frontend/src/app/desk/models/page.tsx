@@ -9,7 +9,7 @@ export default async function DeskModelsPage({
   const query = await searchParams;
   const portfolioSlug =
     typeof query.portfolio === "string" ? query.portfolio : undefined;
-  const health = await api.health();
+  const health = await api.safeHealth();
   const resolvedPortfolio = portfolioSlug ?? health.portfolio_slug;
 
   const [liveState, comparison, validation, frame] = await Promise.all([

@@ -1,20 +1,23 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
-import Link from "next/link";
+import { TrendingUp, DollarSign } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { api } from "@/lib/api/client";
 import type { RiskDecisionResponse } from "@/lib/api/types";
-import { formatCurrency, formatPercent, formatSignedCurrency } from "@/lib/utils";
+import { formatCurrency, formatPercent } from "@/lib/utils";
 import { ButtonLink, StatusBadge } from "@/components/ui/primitives";
 import {
-  FieldInput,
+  FieldInputWithIcon,
   FieldLabel,
   FieldSelect,
   FieldTextarea,
+  FormError,
   FormMetaTile,
+  FormSection,
   PresetPill,
+  SubmitButton,
 } from "@/components/forms/shared";
 
 const decisionPresets = ["500000", "1000000", "2500000", "5000000"];
@@ -29,7 +32,7 @@ export function TradeDecisionPanel({
   const router = useRouter();
   const [symbol, setSymbol] = useState("EURUSD");
   const [side, setSide] = useState("buy");
-  const [notional, setNotional] = useState("2500000");
+  const [exposureChange, setExposureChange] = useState("2500000");
   const [note, setNote] = useState("");
 
   const mutation = useMutation({
@@ -37,7 +40,7 @@ export function TradeDecisionPanel({
       api.evaluateDecision({
         portfolio_slug: portfolioSlug,
         symbol,
-        exposure_change: (side === "buy" ? 1 : -1) * Number(notional),
+        exposure_change: (side === "buy" ? 1 : -1) * Number(exposureChange),
         note,
       }),
     onSuccess: (result) => {
@@ -64,45 +67,44 @@ export function TradeDecisionPanel({
           <span className="text-[10px] text-[var(--color-text-muted)]">Advisory only</span>
         </div>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <div>
-            <FieldLabel htmlFor="dec-symbol">Symbol</FieldLabel>
-            <FieldInput id="dec-symbol" value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())} />
+        <FormSection title="Trade parameters">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <FieldLabel htmlFor="dec-symbol">Symbol</FieldLabel>
+              <FieldInputWithIcon icon={TrendingUp} id="dec-symbol" value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())} />
+            </div>
+            <div>
+              <FieldLabel htmlFor="dec-side">Side</FieldLabel>
+              <FieldSelect id="dec-side" value={side} onChange={(e) => setSide(e.target.value)}>
+                <option value="buy">Buy</option>
+                <option value="sell">Sell</option>
+              </FieldSelect>
+            </div>
           </div>
-          <div>
-            <FieldLabel htmlFor="dec-side">Side</FieldLabel>
-            <FieldSelect id="dec-side" value={side} onChange={(e) => setSide(e.target.value)}>
-              <option value="buy">Buy</option>
-              <option value="sell">Sell</option>
-            </FieldSelect>
-          </div>
-        </div>
+        </FormSection>
 
-        <div className="mt-3">
-          <FieldLabel htmlFor="dec-notional">Exposure change</FieldLabel>
-          <FieldInput id="dec-notional" type="number" min="1" step="1000" value={notional} onChange={(e) => setNotional(e.target.value)} />
+        <FormSection title="Sizing">
+          <FieldLabel htmlFor="dec-exposure">Target exposure change</FieldLabel>
+          <FieldInputWithIcon icon={DollarSign} id="dec-exposure" type="number" min="1" step="1000" value={exposureChange} onChange={(e) => setExposureChange(e.target.value)} />
           <div className="mt-2 flex flex-wrap gap-1.5">
             {decisionPresets.map((p) => (
-              <PresetPill key={p} active={p === notional} onClick={() => setNotional(p)}>{formatCurrency(Number(p))}</PresetPill>
+              <PresetPill key={p} active={p === exposureChange} onClick={() => setExposureChange(p)}>{formatCurrency(Number(p))}</PresetPill>
             ))}
           </div>
-        </div>
+          <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+            Advisory mode works from the same exposure language as execution. The desk translates this target into
+            post-trade risk, budget usage and the likely broker order footprint.
+          </p>
+        </FormSection>
 
-        <div className="mt-3">
+        <FormSection>
           <FieldLabel htmlFor="dec-note">Note</FieldLabel>
           <FieldTextarea id="dec-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional context" />
-        </div>
+        </FormSection>
 
         <div className="mt-4 flex items-center gap-2">
-          <button type="submit" disabled={mutation.isPending}
-            className="h-8 rounded-[var(--radius-md)] bg-[var(--color-accent)] px-4 text-[12px] font-semibold text-[#1a1206] transition hover:brightness-110 disabled:opacity-50">
-            {mutation.isPending ? "Evaluating..." : "Evaluate"}
-          </button>
-          {mutation.error ? (
-            <span className="text-[11px] text-[var(--color-red)]">
-              {mutation.error instanceof Error ? mutation.error.message : "Failed"}
-            </span>
-          ) : null}
+          <SubmitButton isPending={mutation.isPending} label="Evaluate" pendingLabel="Evaluating..." />
+          <FormError message={mutation.error instanceof Error ? mutation.error.message : mutation.error ? "Failed" : null} />
         </div>
       </form>
 
@@ -133,9 +135,9 @@ function DecisionResult({ result, fillRatio }: { result: RiskDecisionResponse | 
       </div>
 
       <div className="mt-4 grid gap-2 sm:grid-cols-4">
-        <FormMetaTile label="Requested" value={formatCurrency(result.requested_exposure_change)} />
-        <FormMetaTile label="Approved" value={formatCurrency(result.approved_exposure_change)} tone="success" />
-        <FormMetaTile label="Resulting" value={formatCurrency(result.resulting_exposure)} />
+        <FormMetaTile label="Requested exposure" value={formatCurrency(result.requested_exposure_change)} />
+        <FormMetaTile label="Approved exposure" value={formatCurrency(result.approved_exposure_change)} tone="success" />
+        <FormMetaTile label="Resulting exposure" value={formatCurrency(result.resulting_exposure)} />
         <FormMetaTile label="Fill" value={fillRatio == null ? "n/a" : formatPercent(fillRatio, 0)} />
       </div>
 

@@ -4,7 +4,7 @@ import { InstrumentUniverseTable } from "@/components/data/risk-tables";
 import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
-import { makeBarOption } from "@/lib/chart-options";
+import { CHART_PALETTE, makeBarOption } from "@/lib/chart-options";
 import { buildInstrumentClassCounts } from "@/lib/view-models";
 import { formatTimestamp } from "@/lib/utils";
 
@@ -16,7 +16,7 @@ export default async function DeskUniversePage({
   const query = await searchParams;
   const portfolioSlug =
     typeof query.portfolio === "string" ? query.portfolio : undefined;
-  const resolvedPortfolio = portfolioSlug ?? (await api.health()).portfolio_slug;
+  const resolvedPortfolio = portfolioSlug ?? (await api.safeHealth()).portfolio_slug;
 
   const [instruments, marketStatus, liveState] = await Promise.all([
     api.instruments(resolvedPortfolio).catch(() => []),
@@ -29,13 +29,17 @@ export default async function DeskUniversePage({
   const missingBars = marketStatus?.missing_bars ?? [];
   const trackedSymbols = marketStatus?.symbols ?? [];
   const syncedSymbols = instruments.length - missingSymbols.length;
+  const retentionTiers = marketStatus?.retention_tiers ?? {};
+  const tickArchive = marketStatus?.tick_archive ?? null;
+  const tierSummary = Object.entries(retentionTiers)
+    .map(([timeframe, days]) => `${timeframe} ${days}d`)
+    .join(" / ");
 
   return (
     <div className="desk-page space-y-8">
       <PageHeader
         eyebrow="Universe"
         title="Instrument definitions and tradability constraints from MT5."
-        description="The desk now exposes contract size, trading mode and lot granularity as first-class product data, instead of burying them inside the execution bridge."
         aside={
           <StatusBadge
             label={liveState?.status ?? marketStatus?.status ?? "unknown"}
@@ -44,7 +48,7 @@ export default async function DeskUniversePage({
         }
       />
 
-      <section className="grid gap-4 xl:grid-cols-4">
+      <section className="grid gap-4 xl:grid-cols-6">
         <MetricBlock
           label="Tracked symbols"
           value={String(trackedSymbols.length || instruments.length)}
@@ -72,13 +76,29 @@ export default async function DeskUniversePage({
           }
           tone={missingBars.length > 0 ? "warning" : "success"}
         />
+        <MetricBlock
+          label="Retention tiers"
+          value={tierSummary || "n/a"}
+          hint={marketStatus?.coverage_status ?? "coverage"}
+          tone="accent"
+        />
+        <MetricBlock
+          label="Tick archive"
+          value={String(tickArchive?.row_count ?? 0)}
+          hint={
+            typeof tickArchive?.latest_tick_at === "string"
+              ? `Latest ${formatTimestamp(tickArchive.latest_tick_at)}`
+              : "No ticks archived yet"
+          }
+          tone={tickArchive?.row_count ? "success" : "warning"}
+        />
       </section>
 
       <section className="grid gap-6 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
         <ChartSurface
           option={makeBarOption(classCounts, {
-            color: "#d89b49",
-            negativeColor: "#5fd4a6",
+            color: CHART_PALETTE.gold,
+            negativeColor: CHART_PALETTE.green,
             mode: classCounts.length <= 3 ? "sparse" : "comparison",
           })}
           mode={classCounts.length <= 3 ? "sparse" : "comparison"}

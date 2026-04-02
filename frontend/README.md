@@ -11,10 +11,17 @@ Next.js operator frontend for the VaR Risk Desk Platform.
 - `/desk/attribution`
 - `/desk/capital`
 - `/desk/decisions`
-- `/desk/simulation`
+- `/desk/blotter`
+- `/desk/incidents`
 - `/desk/reports`
 - `/desk/live`
 - `/desk/execution`
+- `/desk/stress`
+- `/desk/universe`
+
+Deprecated compatibility redirect only:
+
+- `/desk/simulation` -> `/desk/blotter`
 
 ## Environment
 

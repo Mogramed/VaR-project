@@ -9,22 +9,32 @@ import yaml
 from fastapi.testclient import TestClient
 
 from var_project.api import create_app
+from var_project.api.service import DeskApiService
 from var_project.core.exceptions import MT5ConnectionError
 
 
-def _write_settings(root: Path) -> None:
+def _write_settings(
+    root: Path,
+    *,
+    portfolio_mode: str | None = None,
+    market_history_days: int | None = None,
+) -> None:
     config_dir = root / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
+    portfolio = {
+        "name": "FX_EUR_20k",
+        "configured_exposure": {"EURUSD": 10_000, "USDJPY": 10_000},
+    }
+    if portfolio_mode is not None:
+        portfolio["mode"] = portfolio_mode
     settings = {
         "base_currency": "EUR",
         "symbols": ["EURUSD", "USDJPY"],
-        "portfolio": {
-            "name": "FX_EUR_20k",
-            "positions_eur": {"EURUSD": 10_000, "USDJPY": 10_000},
-        },
+        "portfolio": portfolio,
         "data": {
             "timeframes": ["H1"],
             "history_days_list": [60],
+            **({} if market_history_days is None else {"market_history_days": int(market_history_days)}),
             "storage_format": "csv",
             "timezone": "Europe/Paris",
             "min_coverage": 0.90,
@@ -249,15 +259,26 @@ class FakeMT5Connector:
         return {"bid": 156.18, "ask": 156.22, "time": 1_711_620_000}
 
     def bars_per_day(self, timeframe: str) -> int:
-        if timeframe.upper() != "H1":
+        normalized = timeframe.upper()
+        mapping = {"M1": 1440, "H1": 24, "D1": 1}
+        if normalized not in mapping:
             raise ValueError(f"Unsupported timeframe {timeframe}")
-        return 24
+        return mapping[normalized]
 
     def fetch_last_n_bars(self, symbol: str, timeframe: str, n_bars: int, chunk_size: int = 5000) -> pd.DataFrame:
         self._ensure_initialized()
         self.ensure_symbol(symbol)
-        count = max(int(n_bars), 24 * 40)
-        times = pd.date_range("2026-01-01", periods=count, freq="h", tz="UTC")
+        normalized_timeframe = timeframe.upper()
+        freq = "h"
+        minimum = 24 * 40
+        if normalized_timeframe == "M1":
+            freq = "min"
+            minimum = 24 * 2 * 60
+        elif normalized_timeframe == "D1":
+            freq = "D"
+            minimum = 90
+        count = max(int(n_bars), minimum)
+        times = pd.date_range("2026-01-01", periods=count, freq=freq, tz="UTC")
         x = np.arange(count)
         if symbol.upper() == "EURUSD":
             close = 1.08 + 0.0004 * np.sin(x / 7.0) + x * 0.00001
@@ -277,6 +298,44 @@ class FakeMT5Connector:
                 "tick_volume": np.full(count, 120.0),
                 "spread": np.full(count, 2.0),
                 "real_volume": np.full(count, 0.0),
+            }
+        )
+
+    def fetch_ticks_range(
+        self,
+        symbol: str,
+        date_from: datetime,
+        date_to: datetime,
+        *,
+        flags: int | None = None,
+    ) -> pd.DataFrame:
+        self._ensure_initialized()
+        self.ensure_symbol(symbol)
+        start = pd.Timestamp(date_from).tz_convert("UTC") if pd.Timestamp(date_from).tzinfo else pd.Timestamp(date_from, tz="UTC")
+        end = pd.Timestamp(date_to).tz_convert("UTC") if pd.Timestamp(date_to).tzinfo else pd.Timestamp(date_to, tz="UTC")
+        if end <= start:
+            return pd.DataFrame(columns=["time_utc", "bid", "ask", "last", "volume", "time_msc", "flags"])
+        times = pd.date_range(start, end, freq="2min", inclusive="left", tz="UTC")
+        if len(times) == 0:
+            return pd.DataFrame(columns=["time_utc", "bid", "ask", "last", "volume", "time_msc", "flags"])
+        x = np.arange(len(times))
+        if symbol.upper() == "EURUSD":
+            mid = 1.0895 + 0.00015 * np.sin(x / 9.0)
+            spread = 0.0002 + 0.00003 * (1.0 + np.cos(x / 17.0))
+        else:
+            mid = 156.20 + 0.04 * np.cos(x / 11.0)
+            spread = 0.04 + 0.01 * (1.0 + np.sin(x / 13.0))
+        bid = mid - spread / 2.0
+        ask = mid + spread / 2.0
+        return pd.DataFrame(
+            {
+                "time_utc": times,
+                "bid": bid,
+                "ask": ask,
+                "last": mid,
+                "volume": np.full(len(times), 1.0),
+                "time_msc": (times.view("int64") // 1_000_000).astype("int64"),
+                "flags": np.full(len(times), 0, dtype="int64"),
             }
         )
 
@@ -309,21 +368,41 @@ class FakeMT5Connector:
         self._ensure_initialized()
         return []
 
-    def history_orders_get(self, date_from: datetime, date_to: datetime, *, symbol: str | None = None) -> list[dict[str, object]]:
+    def history_orders_get(
+        self,
+        date_from: datetime,
+        date_to: datetime,
+        *,
+        symbol: str | None = None,
+        ticket: int | None = None,
+        position: int | None = None,
+    ) -> list[dict[str, object]]:
         self._ensure_initialized()
         normalized = None if symbol is None else symbol.upper()
         return [
             dict(item)
             for item in type(self).order_history
+            if (ticket is None or int(item.get("ticket") or -1) == int(ticket))
+            and (position is None or int(item.get("position_id") or -1) == int(position))
             if normalized is None or str(item.get("symbol")).upper() == normalized
         ]
 
-    def history_deals_get(self, date_from: datetime, date_to: datetime, *, symbol: str | None = None) -> list[dict[str, object]]:
+    def history_deals_get(
+        self,
+        date_from: datetime,
+        date_to: datetime,
+        *,
+        symbol: str | None = None,
+        ticket: int | None = None,
+        position: int | None = None,
+    ) -> list[dict[str, object]]:
         self._ensure_initialized()
         normalized = None if symbol is None else symbol.upper()
         return [
             dict(item)
             for item in type(self).deal_history
+            if (ticket is None or int(item.get("ticket") or -1) == int(ticket))
+            and (position is None or int(item.get("position_id") or -1) == int(position))
             if normalized is None or str(item.get("symbol")).upper() == normalized
         ]
 
@@ -427,6 +506,10 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     assert live_state_body["reconciliation"]["mismatches"]
     assert live_state_body["risk_summary"]["reference_model"] in {"hist", "param", "mc", "ewma", "garch", "fhs"}
     assert live_state_body["capital_usage"]["snapshot_source"] == "mt5_live_bridge"
+    assert live_state_body["microstructure"]["items"]
+    assert live_state_body["tick_quality"]["status"] in {"healthy", "stale", "incomplete"}
+    assert live_state_body["risk_nowcast"]["live_1d_99"]["nowcast_var"] is not None
+    assert live_state_body["pnl_explain"]["unrealized"] is not None
     assert live_state_body["operator_alerts"]
     assert {item["code"] for item in live_state_body["operator_alerts"]} & {
         "MT5_MANUAL_EVENTS",
@@ -450,6 +533,10 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     assert preview_body["guard"]["margin_ok"] is True
     assert preview_body["guard"]["submit_allowed"] is True
     assert preview_body["guard"]["volume_lots"] > 0.0
+    assert preview_body["microstructure"]["items"]
+    assert preview_body["risk_nowcast"]["pre_trade"]["live_1d_99"]["nowcast_var"] is not None
+    assert preview_body["estimated_spread_cost"] is not None
+    assert preview_body["expected_slippage_points"] is not None
 
     submit = client.post(
         "/execution/submit",
@@ -516,6 +603,42 @@ def test_mt5_execution_guard_blocks_on_margin_reject(tmp_path: Path):
     assert submit_body["executed_exposure_change"] == 0.0
 
 
+def test_preview_execution_uses_warm_market_cache_without_blocking_sync(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    FakeMT5Connector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+    portfolio_slug = service.runtime.portfolio["slug"]
+    service.runtime.market_data.sync_market_data(
+        portfolio_slug=portfolio_slug,
+        days=service.runtime._default_days(),
+        timeframes=[service.runtime._default_timeframe()],
+    )
+
+    original_sync = service.runtime.market_data.sync_market_data
+
+    def fail_sync(*args, **kwargs):
+        raise AssertionError("preview_execution should use the warm market-data cache on the fast path.")
+
+    service.runtime.market_data.sync_market_data = fail_sync
+    try:
+        preview = service.preview_execution(
+            symbol="EURUSD",
+            exposure_change=1_000.0,
+            note="warm cache fast path",
+            portfolio_slug=portfolio_slug,
+        )
+    finally:
+        service.runtime.market_data.sync_market_data = original_sync
+
+    assert preview["guard"]["margin_ok"] is True
+    assert preview["guard"]["submit_allowed"] is True
+    assert preview["guard"]["volume_lots"] > 0.0
+    assert preview["microstructure"]["items"]
+    assert preview["estimated_spread_cost"] is not None
+
+
 class FillingModeFallbackConnector(FakeMT5Connector):
     def symbol_info(self, symbol: str) -> dict[str, object]:
         payload = dict(super().symbol_info(symbol))
@@ -548,3 +671,157 @@ def test_mt5_execution_preview_recovers_with_fill_mode_fallback(tmp_path: Path):
     assert payload["guard"]["submit_allowed"] is True
     assert payload["order_request"]["type_filling"] == 0
     assert payload["order_check"]["retcode"] == 0
+
+
+class DelayedBrokerHistoryConnector(FakeMT5Connector):
+    hidden_order_tickets: set[int] = set()
+    hidden_deal_tickets: set[int] = set()
+    hidden_position_ids: set[int] = set()
+
+    @classmethod
+    def reset(cls) -> None:
+        super().reset()
+        cls.hidden_order_tickets = set()
+        cls.hidden_deal_tickets = set()
+        cls.hidden_position_ids = set()
+
+    def order_send(self, request: dict[str, object]) -> dict[str, object]:
+        result = super().order_send(request)
+        latest_order = type(self).order_history[-1]
+        if result.get("order") is not None:
+            type(self).hidden_order_tickets.add(int(result["order"]))
+        if result.get("deal") is not None:
+            type(self).hidden_deal_tickets.add(int(result["deal"]))
+        if latest_order.get("position_id") is not None:
+            type(self).hidden_position_ids.add(int(latest_order["position_id"]))
+        return result
+
+    def history_orders_get(
+        self,
+        date_from: datetime,
+        date_to: datetime,
+        *,
+        symbol: str | None = None,
+        ticket: int | None = None,
+        position: int | None = None,
+    ) -> list[dict[str, object]]:
+        rows = super().history_orders_get(
+            date_from,
+            date_to,
+            symbol=symbol,
+            ticket=ticket,
+            position=position,
+        )
+        return [
+            row
+            for row in rows
+            if int(row.get("ticket") or -1) not in type(self).hidden_order_tickets
+            and int(row.get("position_id") or -1) not in type(self).hidden_position_ids
+        ]
+
+    def history_deals_get(
+        self,
+        date_from: datetime,
+        date_to: datetime,
+        *,
+        symbol: str | None = None,
+        ticket: int | None = None,
+        position: int | None = None,
+    ) -> list[dict[str, object]]:
+        rows = super().history_deals_get(
+            date_from,
+            date_to,
+            symbol=symbol,
+            ticket=ticket,
+            position=position,
+        )
+        return [
+            row
+            for row in rows
+            if int(row.get("ticket") or -1) not in type(self).hidden_deal_tickets
+            and int(row.get("order") or -1) not in type(self).hidden_order_tickets
+            and int(row.get("position_id") or -1) not in type(self).hidden_position_ids
+        ]
+
+
+def test_mt5_submit_uses_provisional_fill_when_broker_history_lags(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+    DelayedBrokerHistoryConnector.reset()
+
+    client = TestClient(
+        create_app(
+            repo_root=root,
+            mt5_connector_factory=DelayedBrokerHistoryConnector,
+            bootstrap_storage=True,
+        )
+    )
+
+    submit = client.post(
+        "/execution/submit",
+        json={"symbol": "EURUSD", "exposure_change": 1_000.0, "note": "lagged history"},
+    )
+    assert submit.status_code == 200
+    payload = submit.json()
+    assert payload["status"] == "EXECUTED"
+    assert payload["filled_volume_lots"] > 0.0
+    assert payload["fill_ratio"] > 0.0
+    assert payload["fills"]
+    assert payload["fills"][0]["raw"]["source"] == "mt5_result_provisional"
+
+
+class PositionHistoryNoiseConnector(FakeMT5Connector):
+    def order_send(self, request: dict[str, object]) -> dict[str, object]:
+        result = super().order_send(request)
+        latest_order = dict(type(self).order_history[-1])
+        latest_deal = dict(type(self).deal_history[-1])
+        type(self).deal_history.append(
+            {
+                "ticket": int(latest_deal["ticket"]) + 10_000,
+                "order": int(latest_deal["order"]) + 10_000,
+                "position_id": latest_order["position_id"],
+                "symbol": latest_deal["symbol"],
+                "type": latest_deal["type"],
+                "entry": latest_deal["entry"],
+                "volume": latest_deal["volume"],
+                "price": latest_deal["price"],
+                "profit": 0.0,
+                "commission": 0.0,
+                "swap": 0.0,
+                "fee": 0.0,
+                "reason": 0,
+                "comment": "older position event",
+                "time": latest_deal["time"] - 1,
+            }
+        )
+        return result
+
+
+def test_mt5_submit_does_not_double_count_position_scoped_history(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+    PositionHistoryNoiseConnector.reset()
+
+    client = TestClient(
+        create_app(
+            repo_root=root,
+            mt5_connector_factory=PositionHistoryNoiseConnector,
+            bootstrap_storage=True,
+        )
+    )
+
+    submit = client.post(
+        "/execution/submit",
+        json={"symbol": "EURUSD", "exposure_change": 1_000.0, "note": "position noise"},
+    )
+    assert submit.status_code == 200
+    payload = submit.json()
+    assert payload["status"] == "EXECUTED"
+    assert payload["filled_volume_lots"] == payload["submitted_volume_lots"]
+    assert payload["fill_ratio"] == 1.0
+    assert len(payload["fills"]) == 1
+    assert payload["reconciliation_status"] == "match"

@@ -10,7 +10,7 @@ import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
 import type { MT5LiveStateResponse, RiskDecisionResponse } from "@/lib/api/types";
-import { makeBarOption, makeGroupedBarOption } from "@/lib/chart-options";
+import { CHART_PALETTE, makeBarOption, makeGroupedBarOption } from "@/lib/chart-options";
 import { useMt5LiveState } from "@/lib/use-mt5-live-state";
 import { averageDecisionFillRatio, buildDecisionDeltaComparison, buildDecisionImpactSeries, buildDecisionVerdictCounts } from "@/lib/view-models";
 import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
@@ -65,8 +65,8 @@ export function DecisionsLiveSurface({
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_280px]">
         <ChartSurface
           option={makeGroupedBarOption(sizeComparison.labels, [
-            { name: "Requested", data: sizeComparison.requested, color: "#d89b49" },
-            { name: "Approved", data: sizeComparison.approved, color: "#0ecb81" },
+            { name: "Requested", data: sizeComparison.requested, color: CHART_PALETTE.gold },
+            { name: "Approved", data: sizeComparison.approved, color: CHART_PALETTE.green },
           ], { mode: "comparison" })}
           mode="comparison" dataCount={sizeComparison.labels.length}
           title="Requested vs approved" meta={`${decisions.length} decisions`}
@@ -97,7 +97,7 @@ export function DecisionsLiveSurface({
 
       <div className="grid gap-4 xl:grid-cols-[minmax(280px,0.78fr)_minmax(0,1.22fr)]">
         <ChartSurface
-          option={makeBarOption(impactSeries, { color: "#d89b49", negativeColor: "#0ecb81", mode: impactSeries.length <= 5 ? "sparse" : "standard" })}
+          option={makeBarOption(impactSeries, { color: CHART_PALETTE.gold, negativeColor: CHART_PALETTE.green, mode: impactSeries.length <= 5 ? "sparse" : "standard" })}
           mode={impactSeries.length <= 5 ? "sparse" : "standard"} dataCount={impactSeries.length}
           title="Post-trade VaR delta"
           emptyState={<p className="text-xs text-[var(--color-text-muted)]">No impact data.</p>}

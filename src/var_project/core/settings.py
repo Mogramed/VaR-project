@@ -103,9 +103,31 @@ def get_data_defaults(raw_cfg: Mapping[str, Any]) -> dict[str, Any]:
     days_list = data.get("history_days_list") or []
     if isinstance(days_list, int):
         days_list = [days_list]
+    market_history_days = data.get("market_history_days")
+    if market_history_days in {None, "", "null"}:
+        market_history_days = max([int(item) for item in days_list], default=365)
+    retention_cfg = dict(data.get("market_retention_days") or {})
+    retention_days = {
+        str(timeframe).upper(): int(days)
+        for timeframe, days in retention_cfg.items()
+        if timeframe not in {None, ""} and days not in {None, "", "null"}
+    }
+    if not retention_days:
+        default_backfill = int(market_history_days)
+        retention_days = {
+            "M1": min(default_backfill, 180),
+            "H1": default_backfill,
+            "D1": default_backfill,
+        }
+    tick_retention_days = data.get("tick_retention_days", 30)
     return {
         "timeframes": [str(item) for item in timeframes],
         "history_days_list": [int(item) for item in days_list],
+        "market_history_days": int(market_history_days),
+        "market_retention_days": retention_days,
+        "tick_retention_days": int(tick_retention_days),
+        "tick_archive_dir": str(data.get("tick_archive_dir", "data/market_ticks")),
+        "tick_archive_format": str(data.get("tick_archive_format", "parquet")).lower(),
         "min_coverage": float(data.get("min_coverage", 0.90)),
         "storage_format": str(data.get("storage_format", "csv")),
     }
@@ -117,9 +139,16 @@ def get_risk_defaults(raw_cfg: Mapping[str, Any]) -> dict[str, Any]:
     fhs = dict(risk.get("fhs") or {})
     mc = dict(risk.get("mc") or {})
     garch = dict(risk.get("garch") or {})
+    alphas = risk.get("alphas") or [risk.get("alpha", 0.95), 0.975, 0.99]
+    horizons = risk.get("horizons") or [1, 5, 10]
     return {
         "alpha": float(risk.get("alpha", 0.95)),
         "window": int(risk.get("window", 250)),
+        "alphas": [float(item) for item in alphas],
+        "horizons": [int(item) for item in horizons],
+        "estimation_window_days": int(risk.get("estimation_window_days", 500)),
+        "minimum_valid_days": int(risk.get("minimum_valid_days", 250)),
+        "validation_window_days": int(risk.get("validation_window_days", max(int(risk.get("window", 250)), 500))),
         "ewma_lambda": float(ewma.get("lambda", 0.94)),
         "fhs_lambda": float(fhs.get("lambda", 0.94)),
         "mc": {

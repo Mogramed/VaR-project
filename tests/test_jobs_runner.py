@@ -22,7 +22,7 @@ def _write_settings(
     config_dir.mkdir(parents=True, exist_ok=True)
     portfolio = {
         "name": "FX_EUR_20k",
-        "positions_eur": {"EURUSD": 10_000, "USDJPY": 10_000},
+        "configured_exposure": {"EURUSD": 10_000, "USDJPY": 10_000},
     }
     if portfolio_mode is not None:
         portfolio["mode"] = portfolio_mode

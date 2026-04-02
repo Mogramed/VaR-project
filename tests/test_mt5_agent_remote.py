@@ -61,6 +61,14 @@ def test_mt5_agent_endpoints_with_api_key(tmp_path: Path, monkeypatch) -> None:
     assert history_orders.status_code == 200
     assert history_orders.json()
 
+    history_orders_by_ticket = client.get(
+        "/history/orders",
+        headers=headers,
+        params={"date_from": "2026-03-28T00:00:00+00:00", "date_to": "2026-03-29T00:00:00+00:00", "ticket": 901},
+    )
+    assert history_orders_by_ticket.status_code == 200
+    assert history_orders_by_ticket.json()[0]["ticket"] == 901
+
     history_deals = client.get(
         "/history/deals",
         headers=headers,
@@ -68,6 +76,30 @@ def test_mt5_agent_endpoints_with_api_key(tmp_path: Path, monkeypatch) -> None:
     )
     assert history_deals.status_code == 200
     assert history_deals.json()
+
+    history_deals_by_ticket = client.get(
+        "/history/deals",
+        headers=headers,
+        params={"date_from": "2026-03-28T00:00:00+00:00", "date_to": "2026-03-29T00:00:00+00:00", "ticket": 801},
+    )
+    assert history_deals_by_ticket.status_code == 200
+    assert history_deals_by_ticket.json()[0]["ticket"] == 801
+
+    bars = client.get(
+        "/bars/EURUSD",
+        headers=headers,
+        params={"timeframe": "H1", "n_bars": 48},
+    )
+    assert bars.status_code == 200
+    assert len(bars.json()) >= 48
+
+    ticks = client.get(
+        "/ticks/EURUSD",
+        headers=headers,
+        params={"date_from": "2026-03-29T08:00:00+00:00", "date_to": "2026-03-29T09:00:00+00:00"},
+    )
+    assert ticks.status_code == 200
+    assert ticks.json()
 
     order_check = client.post(
         "/order-check",
@@ -177,6 +209,25 @@ def test_remote_mt5_connector_uses_agent_contract(tmp_path: Path, monkeypatch) -
                 ],
             )
         if path == "/history/orders":
+            if request.url.params.get("ticket") == "901":
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "ticket": 901,
+                            "symbol": "EURUSD",
+                            "type": 0,
+                            "state": 4,
+                            "volume_initial": 0.05,
+                            "volume_current": 0.0,
+                            "price_open": 1.0890,
+                            "price_current": 1.0890,
+                            "comment": "manual rebalance",
+                            "time_setup": 1_711_620_000,
+                            "time_done": 1_711_620_060,
+                        }
+                    ],
+                )
             return httpx.Response(
                 200,
                 json=[
@@ -196,6 +247,28 @@ def test_remote_mt5_connector_uses_agent_contract(tmp_path: Path, monkeypatch) -
                 ],
             )
         if path == "/history/deals":
+            if request.url.params.get("ticket") == "801":
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "ticket": 801,
+                            "order": 901,
+                            "symbol": "EURUSD",
+                            "type": 0,
+                            "entry": 1,
+                            "volume": 0.05,
+                            "price": 1.0890,
+                            "profit": 12.0,
+                            "commission": -0.5,
+                            "swap": 0.0,
+                            "fee": 0.0,
+                            "reason": 0,
+                            "comment": "manual rebalance",
+                            "time": 1_711_620_060,
+                        }
+                    ],
+                )
             return httpx.Response(
                 200,
                 json=[
@@ -215,6 +288,52 @@ def test_remote_mt5_connector_uses_agent_contract(tmp_path: Path, monkeypatch) -
                         "comment": "manual rebalance",
                         "time": 1_711_620_060,
                     }
+                ],
+            )
+        if path == "/bars/EURUSD":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "time": "2026-03-29T08:00:00+00:00",
+                        "open": 1.0890,
+                        "high": 1.0894,
+                        "low": 1.0887,
+                        "close": 1.0892,
+                        "tick_volume": 120.0,
+                        "spread": 2.0,
+                        "real_volume": 0.0,
+                    },
+                    {
+                        "time": "2026-03-29T09:00:00+00:00",
+                        "open": 1.0892,
+                        "high": 1.0895,
+                        "low": 1.0889,
+                        "close": 1.0893,
+                        "tick_volume": 118.0,
+                        "spread": 2.0,
+                        "real_volume": 0.0,
+                    },
+                ],
+            )
+        if path == "/ticks/EURUSD":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "time_utc": "2026-03-29T08:55:00+00:00",
+                        "bid": 1.0898,
+                        "ask": 1.0900,
+                        "last": 1.0899,
+                        "volume": 1.0,
+                    },
+                    {
+                        "time_utc": "2026-03-29T08:57:00+00:00",
+                        "bid": 1.0899,
+                        "ask": 1.0901,
+                        "last": 1.0900,
+                        "volume": 1.0,
+                    },
                 ],
             )
         if path == "/order-check":
@@ -238,7 +357,12 @@ def test_remote_mt5_connector_uses_agent_contract(tmp_path: Path, monkeypatch) -
         assert connector.live_state()["status"] == "ok"
         assert connector.live_events(after=0, limit=5, wait_seconds=0.1)[0]["kind"] == "snapshot"
         assert connector.history_orders_get(datetime.fromisoformat("2026-03-28T00:00:00+00:00"), datetime.fromisoformat("2026-03-29T00:00:00+00:00"))[0]["ticket"] == 901
+        assert connector.history_orders_get(datetime.fromisoformat("2026-03-28T00:00:00+00:00"), datetime.fromisoformat("2026-03-29T00:00:00+00:00"), ticket=901)[0]["ticket"] == 901
         assert connector.history_deals_get(datetime.fromisoformat("2026-03-28T00:00:00+00:00"), datetime.fromisoformat("2026-03-29T00:00:00+00:00"))[0]["ticket"] == 801
+        assert connector.history_deals_get(datetime.fromisoformat("2026-03-28T00:00:00+00:00"), datetime.fromisoformat("2026-03-29T00:00:00+00:00"), ticket=801)[0]["ticket"] == 801
+        assert connector.bars_per_day("H1") == 24
+        assert len(connector.fetch_last_n_bars("EURUSD", "H1", 2)) == 2
+        assert len(connector.fetch_ticks_range("EURUSD", datetime.fromisoformat("2026-03-29T08:00:00+00:00"), datetime.fromisoformat("2026-03-29T09:00:00+00:00"))) == 2
         assert connector.order_check({"symbol": "EURUSD", "volume": 0.05})["retcode"] == 0
         assert connector.order_send({"symbol": "EURUSD", "volume": 0.05})["retcode"] == 10009
     finally:

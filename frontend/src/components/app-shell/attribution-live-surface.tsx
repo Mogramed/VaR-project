@@ -9,9 +9,9 @@ import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
 import type { ModelComparisonResponse, MT5LiveStateResponse, RiskAttributionResponse } from "@/lib/api/types";
-import { makeBarOption } from "@/lib/chart-options";
+import { CHART_PALETTE, makeBarOption } from "@/lib/chart-options";
 import { useMt5LiveState } from "@/lib/use-mt5-live-state";
-import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
+import { formatCurrency, formatTimestamp } from "@/lib/utils";
 import { flattenAttribution } from "@/lib/view-models";
 
 function preferredSource(liveState: MT5LiveStateResponse | null) {
@@ -91,7 +91,7 @@ export function AttributionLiveSurface({
       <LiveOperatorAlerts alerts={liveState?.operator_alerts ?? []} />
 
       <ChartSurface
-        option={makeBarOption(rows.map((r) => ({ label: r.symbol, value: r.componentVar })), { color: "#d89b49", negativeColor: "#0ecb81", mode: rows.length <= 5 ? "sparse" : "standard" })}
+        option={makeBarOption(rows.map((r) => ({ label: r.symbol, value: r.componentVar })), { color: CHART_PALETTE.gold, negativeColor: CHART_PALETTE.green, mode: rows.length <= 5 ? "sparse" : "standard" })}
         mode={rows.length <= 5 ? "sparse" : "standard"}
         dataCount={rows.length}
         title="Component VaR by symbol"

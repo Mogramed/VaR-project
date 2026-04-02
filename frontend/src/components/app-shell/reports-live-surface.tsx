@@ -10,10 +10,10 @@ import { ReportDocument, ReportTableOfContents } from "@/components/reports/repo
 import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
-import { makeBacktestOption, makeGroupedBarOption, makeLineOption } from "@/lib/chart-options";
+import { CHART_PALETTE, makeBacktestOption, makeGroupedBarOption, makeLineOption } from "@/lib/chart-options";
 import { type DeskReportViewModel, loadDeskReportViewModel } from "@/lib/report-view-model";
 import { useMt5LiveState } from "@/lib/use-mt5-live-state";
-import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
+import { formatCurrency, formatPercent } from "@/lib/utils";
 import { averageDecisionFillRatio, buildCapitalHistorySeries, buildDecisionDeltaComparison } from "@/lib/view-models";
 
 function reportSrc(view: DeskReportViewModel) {
@@ -98,18 +98,18 @@ export function ReportsLiveSurface({ portfolioSlug, initialView }: { portfolioSl
         <ChartSurface option={makeBacktestOption(view.derived.backtestSeries)} mode="trace" dataCount={view.derived.backtestSeries.length}
           title="Backtest trace" meta={view.derived.backtestSeries.length ? `${view.derived.backtestSeries.length} rows` : undefined}
           emptyState={<p className="text-xs text-[var(--color-text-muted)]">No backtest data.</p>} />
-        <ChartSurface option={makeLineOption(capitalSeries, "#0ecb81", { mode: "standard" })} mode="standard" dataCount={capitalSeries.length}
+        <ChartSurface option={makeLineOption(capitalSeries, CHART_PALETTE.green, { mode: "standard" })} mode="standard" dataCount={capitalSeries.length}
           title="Capital trajectory" meta={liveCapital?.reference_model?.toUpperCase()}
           emptyState={<p className="text-xs text-[var(--color-text-muted)]">No capital history.</p>} />
       </div>
 
       <ChartSurface
         option={makeGroupedBarOption(decisionSeries.labels, [
-          { name: "Requested", data: decisionSeries.requested, color: "#d89b49" },
-          { name: "Approved", data: decisionSeries.approved, color: "#0ecb81" },
+          { name: "Requested", data: decisionSeries.requested, color: CHART_PALETTE.gold },
+          { name: "Approved", data: decisionSeries.approved, color: CHART_PALETTE.green },
         ], { mode: "comparison" })}
         mode="comparison" dataCount={decisionSeries.labels.length}
-        title="Requested vs approved notional" meta={`${decisions.length} decisions`}
+        title="Requested vs approved exposure" meta={`${decisions.length} decisions`}
         emptyState={<p className="text-xs text-[var(--color-text-muted)]">No decisions.</p>}
       />
 

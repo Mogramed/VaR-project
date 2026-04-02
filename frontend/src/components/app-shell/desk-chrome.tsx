@@ -12,13 +12,12 @@ import {
   Landmark,
   Orbit,
   Radar,
-  RefreshCw,
   ShieldCheck,
   X,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type {
   AlertSummary,
   AuditEventResponse,
@@ -34,6 +33,7 @@ import { cn, formatTimestamp } from "@/lib/utils";
 const navItems = [
   { href: "/desk", label: "Overview", icon: Gauge },
   { href: "/desk/live", label: "MT5 Ops", icon: Activity },
+  { href: "/desk/incidents", label: "Incidents", icon: AlertTriangle },
   { href: "/desk/universe", label: "Universe", icon: Orbit },
   { href: "/desk/models", label: "Models", icon: Radar },
   { href: "/desk/attribution", label: "Attribution", icon: BarChart3 },

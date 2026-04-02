@@ -209,11 +209,9 @@ def alerts_from_risk_budget(snapshot: Mapping[str, Any]) -> List[AlertEvent]:
                     "model": model.model,
                     "symbol": item.symbol,
                     "current_exposure": item.current_exposure,
-                    "position_eur": item.position_eur,
                     "utilization_var": item.utilization_var,
                     "utilization_es": item.utilization_es,
                     "recommended_exposure": item.recommended_exposure,
-                    "recommended_position_eur": item.recommended_position_eur,
                     "action": item.action,
                 },
             )
@@ -241,9 +239,6 @@ def alerts_from_risk_decision(result: Mapping[str, Any]) -> List[AlertEvent]:
                 "requested_exposure_change": decision.requested_exposure_change,
                 "approved_exposure_change": decision.approved_exposure_change,
                 "resulting_exposure": decision.resulting_exposure,
-                "requested_delta_position_eur": decision.requested_delta_position_eur,
-                "approved_delta_position_eur": decision.approved_delta_position_eur,
-                "resulting_position_eur": decision.resulting_position_eur,
                 "reasons": list(decision.reasons),
             },
         )
@@ -340,9 +335,15 @@ def alerts_from_execution_result(result: Mapping[str, Any]) -> List[AlertEvent]:
             context={
                 "symbol": symbol,
                 "status": status,
-                "requested_delta_position_eur": payload.get("requested_delta_position_eur"),
-                "approved_delta_position_eur": payload.get("approved_delta_position_eur"),
-                "executed_delta_position_eur": payload.get("executed_delta_position_eur"),
+                "requested_exposure_change": payload.get(
+                    "requested_exposure_change", payload.get("requested_delta_position_eur")
+                ),
+                "approved_exposure_change": payload.get(
+                    "approved_exposure_change", payload.get("approved_delta_position_eur")
+                ),
+                "executed_exposure_change": payload.get(
+                    "executed_exposure_change", payload.get("executed_delta_position_eur")
+                ),
                 "reasons": reasons,
                 "mt5_result": dict(payload.get("mt5_result") or {}),
             },

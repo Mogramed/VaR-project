@@ -34,6 +34,21 @@ def test_validation_summary_picks_best_model():
     assert summary.best_model == "param"
 
 
+def test_validation_summary_ignores_surface_suffixes():
+    frame = _compare_frame().assign(
+        var_hist_a95_h1=[10] * 10,
+        es_hist_a95_h1=[12] * 10,
+        exc_hist_a95_h1=[1, 0, 1, 0, 1, 0, 1, 0, 0, 0],
+        var_param_a99_h5=[16] * 10,
+        es_param_a99_h5=[18] * 10,
+        exc_param_a99_h5=[0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    )
+
+    summary = validate_compare_frame(frame, alpha=0.95)
+
+    assert set(summary.model_results) == {"hist", "param"}
+
+
 def test_validation_alerts_flag_rejected_models():
     summary = validate_compare_frame(_compare_frame(), alpha=0.95)
     alerts = alerts_from_validation_summary(summary)

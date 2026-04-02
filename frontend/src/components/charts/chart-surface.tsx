@@ -7,18 +7,18 @@ import { cn } from "@/lib/utils";
 
 function resolveHeight(mode: ChartMode, dataCount: number) {
   if (mode === "trace") {
-    return dataCount > 120 ? 440 : 380;
+    return dataCount > 120 ? 460 : 400;
   }
   if (mode === "dense") {
-    return 360;
+    return 380;
   }
   if (mode === "comparison") {
-    return dataCount <= 4 ? 280 : 340;
+    return dataCount <= 4 ? 300 : 360;
   }
   if (mode === "sparse") {
-    return 260;
+    return 280;
   }
-  return 320;
+  return 340;
 }
 
 export function ChartSurface({
@@ -35,7 +35,7 @@ export function ChartSurface({
   insight,
   insightLayout = "auto",
   emptyState,
-  surface = "panel",
+  showDescription = false,
   className,
 }: {
   option: Record<string, unknown>;
@@ -51,7 +51,7 @@ export function ChartSurface({
   insight?: ReactNode;
   insightLayout?: "auto" | "side" | "stack";
   emptyState?: ReactNode;
-  surface?: "panel" | "bare";
+  showDescription?: boolean;
   className?: string;
 }) {
   const resolvedHeight = height ?? resolveHeight(mode, dataCount);
@@ -68,29 +68,32 @@ export function ChartSurface({
     <section
       data-chart-surface
       className={cn(
-        "overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)]",
+        "group/chart relative overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)]",
         className,
       )}
     >
+      {/* Subtle top-edge glow */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[rgba(240,185,11,0.15)] to-transparent" />
+
       {/* Header */}
       {(eyebrow || title || toolbar || meta) ? (
-        <header className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-3.5 py-2.5">
-          <div className="flex items-center gap-3 min-w-0">
-            {title ? (
-              <h3 className="truncate text-[13px] font-semibold text-[var(--color-text)]">
-                {title}
-              </h3>
-            ) : null}
+        <header className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-4 py-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
             {eyebrow ? (
-              <span className="hidden shrink-0 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] sm:inline">
+              <span className="shrink-0 rounded-[3px] bg-[rgba(240,185,11,0.08)] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-[#f0b90b]">
                 {eyebrow}
               </span>
+            ) : null}
+            {title ? (
+              <h3 className="truncate text-[13px] font-semibold tracking-[-0.01em] text-[var(--color-text)]">
+                {title}
+              </h3>
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {toolbar}
             {meta ? (
-              <span className="mono text-[10px] text-[var(--color-text-muted)]">
+              <span className="font-mono text-[10px] text-[var(--color-text-muted)]">
                 {meta}
               </span>
             ) : null}
@@ -98,11 +101,18 @@ export function ChartSurface({
         </header>
       ) : null}
 
+      {/* Description */}
+      {showDescription && description ? (
+        <div className="border-b border-[var(--color-border)] px-4 pb-2.5 pt-1.5 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+          {description}
+        </div>
+      ) : null}
+
       {/* Chart body */}
       {!hasData && emptyState ? (
-        <div className="px-3.5 py-4">{emptyState}</div>
+        <div className="px-4 py-6">{emptyState}</div>
       ) : sparseMode && insight ? (
-        <div className={cn("grid gap-4 p-3.5", insightGridClass)}>
+        <div className={cn("grid gap-4 p-4", insightGridClass)}>
           <div className="mx-auto w-full max-w-[380px]">
             <ReactECharts
               option={option}
@@ -115,7 +125,7 @@ export function ChartSurface({
           <div className="min-w-0">{insight}</div>
         </div>
       ) : (
-        <div className="px-1 py-1">
+        <div className="relative px-1 py-1">
           <ReactECharts
             option={option}
             style={{ height: `${resolvedHeight}px`, width: "100%" }}
@@ -128,7 +138,7 @@ export function ChartSurface({
 
       {/* Footer */}
       {footer ? (
-        <div className="border-t border-[var(--color-border)] px-3.5 py-2.5">{footer}</div>
+        <div className="border-t border-[var(--color-border)] px-4 py-2.5">{footer}</div>
       ) : null}
     </section>
   );

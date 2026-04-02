@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import re
 from typing import Iterable
 
 
 CANONICAL_MODEL_ORDER: tuple[str, ...] = ("hist", "param", "mc", "ewma", "garch", "fhs")
+_MODEL_COLUMN_RE = re.compile(r"^(?:var|es|exc)_(?P<model>[a-z0-9]+?)(?:_a\d+_h\d+)?$", re.IGNORECASE)
 
 
 def ordered_model_names(names: Iterable[str]) -> list[str]:
@@ -15,7 +17,7 @@ def ordered_model_names(names: Iterable[str]) -> list[str]:
 def infer_model_names_from_columns(columns: Iterable[str]) -> list[str]:
     models: set[str] = set()
     for column in columns:
-        name = str(column)
-        if name.startswith(("var_", "es_", "exc_")):
-            models.add(name.split("_", 1)[1])
+        match = _MODEL_COLUMN_RE.match(str(column).strip().lower())
+        if match is not None:
+            models.add(match.group("model"))
     return ordered_model_names(models)

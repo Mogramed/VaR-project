@@ -3,13 +3,11 @@ import { cn } from "@/lib/utils";
 export function PageHeader({
   eyebrow,
   title,
-  description,
   aside,
   className,
 }: {
   eyebrow: string;
   title: string;
-  description?: string;
   aside?: React.ReactNode;
   className?: string;
 }) {

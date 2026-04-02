@@ -36,9 +36,14 @@ class DeskReadService:
             "defaults": {
                 "timeframes": self.runtime.data_defaults["timeframes"],
                 "history_days_list": self.runtime.data_defaults["history_days_list"],
+                "market_history_days": self.runtime.data_defaults["market_history_days"],
                 "min_coverage": self.runtime.data_defaults["min_coverage"],
                 "alpha": self.runtime.risk_defaults["alpha"],
+                "alphas": self.runtime.risk_defaults["alphas"],
+                "horizons": self.runtime.risk_defaults["horizons"],
                 "window": self.runtime.risk_defaults["window"],
+                "estimation_window_days": self.runtime.risk_defaults["estimation_window_days"],
+                "minimum_valid_days": self.runtime.risk_defaults["minimum_valid_days"],
                 "garch": self.runtime.risk_defaults["garch"],
             },
             "dependencies": {

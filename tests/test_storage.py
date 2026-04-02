@@ -6,7 +6,12 @@ import pandas as pd
 
 from var_project.alerts.engine import alerts_from_validation_summary
 from var_project.storage import AppStorage
-from var_project.validation.model_validation import validate_compare_frame
+from var_project.validation.model_validation import (
+    BacktestModelValidation,
+    ValidationSummary,
+    validate_compare_frame,
+)
+from var_project.validation.workflows import persist_validation_summary
 
 
 def _compare_frame() -> pd.DataFrame:
@@ -369,3 +374,105 @@ def test_app_storage_persists_mt5_market_cache(tmp_path: Path):
     assert orders[0]["ticket"] == 901
     assert orders[0]["is_manual"] is True
     assert deals[0]["ticket"] == 801
+
+
+def test_persist_validation_summary_keeps_requested_best_model(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    storage = AppStorage.from_root(root, {"storage": {"database_path": "data/app/test_validation_workflow.db"}})
+    storage.initialize(create_schema=True)
+
+    compare = _compare_frame()
+    compare_path = root / "reports" / "backtests" / "compare_test.csv"
+    compare_path.parent.mkdir(parents=True, exist_ok=True)
+    compare.to_csv(compare_path, index=False)
+
+    summary = ValidationSummary(
+        alpha=0.99,
+        expected_rate=0.01,
+        model_results={
+            "hist": BacktestModelValidation(
+                model="hist",
+                n=10,
+                exceptions=3,
+                expected_rate=0.01,
+                actual_rate=0.30,
+                lr_uc=0.0,
+                p_uc=0.01,
+                lr_ind=0.0,
+                p_ind=0.5,
+                lr_cc=0.0,
+                p_cc=0.1,
+                exceptions_last_250=3,
+                traffic_light=None,
+                score=40.0,
+            ),
+            "param": BacktestModelValidation(
+                model="param",
+                n=10,
+                exceptions=1,
+                expected_rate=0.01,
+                actual_rate=0.10,
+                lr_uc=0.0,
+                p_uc=0.2,
+                lr_ind=0.0,
+                p_ind=0.5,
+                lr_cc=0.0,
+                p_cc=0.3,
+                exceptions_last_250=1,
+                traffic_light=None,
+                score=80.0,
+            ),
+        },
+        best_model="param",
+    )
+
+    monkeypatch.setattr("var_project.validation.workflows.validate_compare_frame", lambda frame, alpha: summary)
+    monkeypatch.setattr(
+        "var_project.validation.workflows.validate_compare_surface",
+        lambda frame, alphas, horizons: {
+            "alphas": list(alphas),
+            "horizons": list(horizons),
+            "points": [],
+            "current_metrics": {},
+            "champion_model_live": "hist",
+            "champion_model_reporting": "hist",
+        },
+    )
+
+    result = persist_validation_summary(storage=storage, compare_csv=compare_path, alpha=0.99)
+    latest_validation = storage.latest_validation_run()
+
+    assert result["best_model"] == "param"
+    assert latest_validation is not None
+    assert latest_validation["best_model"] == "param"
+
+
+def test_reconciliation_acknowledgements_include_legacy_null_status_when_unresolved(tmp_path: Path) -> None:
+    root = tmp_path
+    storage = AppStorage.from_root(root, {"storage": {"database_path": "data/app/test_reconciliation.db"}})
+    storage.initialize(create_schema=True)
+
+    portfolio_id = storage.upsert_portfolio(
+        name="FX_EUR_20k",
+        base_currency="EUR",
+        symbols=["EURUSD"],
+        positions={"EURUSD": 10_000.0},
+        slug="fx_eur_20k",
+    )
+
+    storage.writes.upsert_reconciliation_acknowledgement(
+        portfolio_id=portfolio_id,
+        symbol="EURUSD",
+        reason="legacy_incident",
+        operator_note="pre-workflow row",
+        mismatch_status="desk_vs_broker_drift",
+        incident_status=None,
+    )
+
+    unresolved = storage.reads.reconciliation_acknowledgements(
+        portfolio_slug="fx_eur_20k",
+        include_resolved=False,
+    )
+
+    assert len(unresolved) == 1
+    assert unresolved[0]["symbol"] == "EURUSD"

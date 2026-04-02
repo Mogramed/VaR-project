@@ -4,10 +4,9 @@ import { startTransition, useEffect, useState } from "react";
 
 import { OverviewLiveStripPanel } from "@/components/app-shell/overview-live-strip";
 import { ChartSurface } from "@/components/charts/chart-surface";
-import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
-import { makeBarOption } from "@/lib/chart-options";
+import { CHART_PALETTE, makeBarOption } from "@/lib/chart-options";
 import type { CapitalUsageSnapshotResponse, DeskSnapshotResponse, MT5LiveStateResponse } from "@/lib/api/types";
 import { useMt5LiveState } from "@/lib/use-mt5-live-state";
 import { formatCurrency, formatPercent, formatTimestamp, humanizeIdentifier } from "@/lib/utils";
@@ -85,8 +84,8 @@ export function OverviewLiveDashboard({
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_300px]">
         <ChartSurface
           option={makeBarOption(deskSeries, {
-            color: "#d89b49",
-            negativeColor: "#0ecb81",
+            color: CHART_PALETTE.gold,
+            negativeColor: CHART_PALETTE.green,
             mode: deskSeries.length <= 3 ? "sparse" : "comparison",
           })}
           mode={deskSeries.length <= 3 ? "sparse" : "comparison"}

@@ -14,7 +14,7 @@ export default async function DeskOverviewPage({
     typeof query.portfolio === "string" ? query.portfolio : undefined;
 
   const [health, alerts, capital, comparison, snapshot] = await Promise.all([
-    api.health(),
+    api.safeHealth(),
     api.recentAlerts(12).catch(() => []),
     api.latestCapital(portfolioSlug).catch(() => null),
     api.latestModelComparison(portfolioSlug).catch(() => null),

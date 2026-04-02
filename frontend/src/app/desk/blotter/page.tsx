@@ -9,12 +9,13 @@ export default async function DeskBlotterPage({
   const query = await searchParams;
   const portfolioSlug =
     typeof query.portfolio === "string" ? query.portfolio : undefined;
-  const resolvedPortfolio = portfolioSlug ?? (await api.health()).portfolio_slug;
+  const resolvedPortfolio = portfolioSlug ?? (await api.safeHealth()).portfolio_slug;
 
-  const [liveState, executions, fills] = await Promise.all([
+  const [liveState, executions, fills, audit] = await Promise.all([
     api.mt5LiveState(resolvedPortfolio).catch(() => null),
     api.recentExecutionResults(resolvedPortfolio, 20).catch(() => []),
     api.recentExecutionFills(resolvedPortfolio, 20).catch(() => []),
+    api.recentAudit(resolvedPortfolio, 120).catch(() => []),
   ]);
 
   return (
@@ -24,6 +25,7 @@ export default async function DeskBlotterPage({
       initialLiveState={liveState}
       initialExecutions={executions}
       initialFills={fills}
+      initialAudit={audit}
     />
   );
 }

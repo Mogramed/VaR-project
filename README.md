@@ -139,3 +139,9 @@ Notes:
 - MT5 execution remains demo-only and risk-guarded.
 - Rebuild `api` and `worker` after changing `config/` or tracked fixture data.
 - Rebuild `frontend` after changing code under `frontend/`.
+
+## V1 Acceptance Runbook
+
+The internal MT5 acceptance recipe and soak checklist live in:
+
+- [`docs/mt5_v1_acceptance_runbook.md`](docs/mt5_v1_acceptance_runbook.md)

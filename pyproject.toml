@@ -10,6 +10,7 @@ dependencies = [
   "alembic",
   "numpy",
   "pandas",
+  "pyarrow",
   "PyYAML",
   "MetaTrader5; platform_system == 'Windows'",
   "scipy",

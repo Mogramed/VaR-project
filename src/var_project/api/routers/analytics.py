@@ -8,6 +8,7 @@ from var_project.api.schemas import (
     BacktestFrameResponse,
     BacktestRunResponse,
     BacktestRunSummary,
+    LiveRiskSummaryResponse,
     ModelComparisonResponse,
     RiskAttributionResponse,
     RiskBudgetResponse,
@@ -130,6 +131,29 @@ def latest_risk_budget(
     if budget is None:
         raise HTTPException(status_code=404, detail="No risk budget available.")
     return RiskBudgetResponse.model_validate(budget)
+
+
+@router.get("/risk/summary", response_model=LiveRiskSummaryResponse)
+def risk_summary(
+    portfolio_slug: str | None = Query(default=None),
+    service: DeskApiService = Depends(get_service),
+) -> LiveRiskSummaryResponse:
+    summary = service.risk_summary(portfolio_slug=portfolio_slug)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="No risk summary available.")
+    return LiveRiskSummaryResponse.model_validate(summary)
+
+
+@router.get("/risk/contributions", response_model=RiskAttributionResponse)
+def risk_contributions(
+    source: str | None = Query(default=None),
+    portfolio_slug: str | None = Query(default=None),
+    service: DeskApiService = Depends(get_service),
+) -> RiskAttributionResponse:
+    payload = service.risk_contributions(source=source, portfolio_slug=portfolio_slug)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="No risk contributions available.")
+    return RiskAttributionResponse.model_validate(payload)
 
 
 @router.post("/snapshots/stress", response_model=StressReportResponse)

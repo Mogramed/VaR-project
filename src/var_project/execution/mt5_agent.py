@@ -130,6 +130,53 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
         except MT5ConnectionError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    @app.get("/bars/{symbol}")
+    def bars(
+        symbol: str,
+        timeframe: str = Query(...),
+        n_bars: int = Query(..., ge=1, le=500000),
+        chunk_size: int = Query(default=5000, ge=1, le=500000),
+        _: None = Depends(authorize),
+    ) -> list[dict[str, Any]]:
+        try:
+            frame = app.state.mt5_runtime.execute(
+                lambda connector: connector.fetch_last_n_bars(
+                    symbol,
+                    timeframe,
+                    n_bars,
+                    chunk_size=chunk_size,
+                )
+            )
+        except MT5ConnectionError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return frame.to_dict(orient="records")
+
+    @app.get("/ticks/{symbol}")
+    def ticks(
+        symbol: str,
+        date_from: str = Query(...),
+        date_to: str = Query(...),
+        flags: int | None = Query(default=None),
+        _: None = Depends(authorize),
+    ) -> list[dict[str, Any]]:
+        try:
+            start = datetime.fromisoformat(date_from)
+            end = datetime.fromisoformat(date_to)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid tick date range.") from exc
+        try:
+            frame = app.state.mt5_runtime.execute(
+                lambda connector: connector.fetch_ticks_range(
+                    symbol,
+                    start,
+                    end,
+                    flags=flags,
+                )
+            )
+        except MT5ConnectionError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return frame.to_dict(orient="records")
+
     @app.get("/positions")
     def positions(
         symbol: str | None = Query(default=None),
@@ -155,6 +202,8 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
         date_from: str = Query(...),
         date_to: str = Query(...),
         symbol: str | None = Query(default=None),
+        ticket: int | None = Query(default=None),
+        position: int | None = Query(default=None),
         _: None = Depends(authorize),
     ) -> list[dict[str, Any]]:
         try:
@@ -164,7 +213,13 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
             raise HTTPException(status_code=400, detail="Invalid date range.") from exc
         try:
             return app.state.mt5_runtime.execute(
-                lambda connector: connector.history_orders_get(start, end, symbol=symbol)
+                lambda connector: connector.history_orders_get(
+                    start,
+                    end,
+                    symbol=symbol,
+                    ticket=ticket,
+                    position=position,
+                )
             )
         except MT5ConnectionError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -174,6 +229,8 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
         date_from: str = Query(...),
         date_to: str = Query(...),
         symbol: str | None = Query(default=None),
+        ticket: int | None = Query(default=None),
+        position: int | None = Query(default=None),
         _: None = Depends(authorize),
     ) -> list[dict[str, Any]]:
         try:
@@ -183,7 +240,13 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
             raise HTTPException(status_code=400, detail="Invalid date range.") from exc
         try:
             return app.state.mt5_runtime.execute(
-                lambda connector: connector.history_deals_get(start, end, symbol=symbol)
+                lambda connector: connector.history_deals_get(
+                    start,
+                    end,
+                    symbol=symbol,
+                    ticket=ticket,
+                    position=position,
+                )
             )
         except MT5ConnectionError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc

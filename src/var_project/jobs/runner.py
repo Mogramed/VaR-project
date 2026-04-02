@@ -251,6 +251,18 @@ class JobRunner:
                     skipped_portfolios.append({"portfolio_slug": slug, "reason": f"Portfolio mode '{mode or 'unknown'}' is not live."})
                     continue
 
+                market_sync_error = None
+                try:
+                    service.runtime.market_data.sync_market_data_if_stale(
+                        portfolio_slug=slug,
+                        max_age_seconds=max(900.0, float(service.runtime.mt5_config.live_history_poll_seconds) * 10.0),
+                        days=service.runtime.market_data.history_backfill_days(),
+                        timeframes=service.runtime.market_data.startup_sync_timeframes(),
+                    )
+                except Exception as exc:
+                    market_sync_error = str(exc)
+                    self.log.warning("market data warm-up failed for %s: %s", slug, exc)
+
                 before_snapshot = (
                     service.storage.latest_snapshot(source="mt5_live_bridge", portfolio_slug=slug)
                     if storage_ready
@@ -306,6 +318,7 @@ class JobRunner:
                             or after_snapshot is None
                             or before_snapshot.get("id") != after_snapshot.get("id")
                         ),
+                        "market_sync_error": market_sync_error,
                         "report_markdown": report_path,
                         "report_changed": report_changed,
                         "report_auto_generated": report_auto_generated,

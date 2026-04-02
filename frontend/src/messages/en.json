@@ -10,7 +10,7 @@
   "landing": {
     "eyebrow": "FX Market Risk Operating Surface",
     "title": "VaR Risk Desk Platform",
-    "subtitle": "A premium operating surface for FX VaR, validation, capital allocation, decisions and paper execution.",
+    "subtitle": "A premium operating surface for FX VaR, validation, capital allocation, decisions and MT5 execution.",
     "primaryCta": "Enter Desk",
     "secondaryCta": "Read Product Story",
     "heroLabel": "Live desk posture",
@@ -38,7 +38,7 @@
     "credibilityListTwo": "Per-pair attribution, capital slices and pressure points",
     "credibilityListThree": "Decision history, audit trail and report continuity",
     "previewTitle": "One workspace for the entire risk loop.",
-    "previewBody": "From desk overview to trade simulation, every page uses the same visual grammar and the same backend source of truth.",
+    "previewBody": "From desk overview to blotter and execution, every page uses the same visual grammar and the same backend source of truth.",
     "finalTitle": "Deploy the desk, keep the risk logic.",
     "finalBody": "FastAPI remains the source of truth. The new frontend simply gives the platform the product presence it deserves.",
     "finalPrimaryCta": "Launch Desk"

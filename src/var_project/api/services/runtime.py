@@ -92,6 +92,7 @@ class DeskServiceRuntime:
         min_coverage: float | None = None,
         config: RiskModelConfig | None = None,
         window: int | None = None,
+        allow_auto_sync: bool = True,
     ) -> dict[str, Any]:
         return self.risk.compute_portfolio_state(
             portfolio_slug=portfolio_slug,
@@ -100,6 +101,7 @@ class DeskServiceRuntime:
             min_coverage=min_coverage,
             config=config,
             window=window,
+            allow_auto_sync=allow_auto_sync,
         )
 
     def _compute_portfolio_state_for_exposure(
@@ -112,6 +114,7 @@ class DeskServiceRuntime:
         min_coverage: float | None = None,
         config: RiskModelConfig | None = None,
         window: int | None = None,
+        allow_auto_sync: bool = True,
         snapshot_source: str = "historical",
         snapshot_timestamp: str | None = None,
     ) -> dict[str, Any]:
@@ -123,6 +126,7 @@ class DeskServiceRuntime:
             min_coverage=min_coverage,
             config=config,
             window=window,
+            allow_auto_sync=allow_auto_sync,
             snapshot_source=snapshot_source,
             snapshot_timestamp=snapshot_timestamp,
         )
@@ -137,6 +141,7 @@ class DeskServiceRuntime:
         min_coverage: float | None = None,
         config: RiskModelConfig | None = None,
         window: int | None = None,
+        allow_auto_sync: bool = True,
         snapshot_source: str = "historical",
         snapshot_timestamp: str | None = None,
     ) -> dict[str, Any]:
@@ -148,6 +153,7 @@ class DeskServiceRuntime:
             min_coverage=min_coverage,
             config=config,
             window=window,
+            allow_auto_sync=allow_auto_sync,
             snapshot_source=snapshot_source,
             snapshot_timestamp=snapshot_timestamp,
         )
@@ -162,6 +168,7 @@ class DeskServiceRuntime:
         min_coverage: float | None = None,
         config: RiskModelConfig | None = None,
         window: int | None = None,
+        allow_auto_sync: bool = True,
         snapshot_source: str = "historical",
         snapshot_timestamp: str | None = None,
     ) -> dict[str, Any]:
@@ -173,12 +180,23 @@ class DeskServiceRuntime:
             min_coverage=min_coverage,
             config=config,
             window=window,
+            allow_auto_sync=allow_auto_sync,
             snapshot_source=snapshot_source,
             snapshot_timestamp=snapshot_timestamp,
         )
 
-    def _compute_live_portfolio_state(self, *, portfolio: Mapping[str, Any], live: MT5LiveGateway) -> dict[str, Any]:
-        return self.risk.compute_live_portfolio_state(portfolio=portfolio, live=live)
+    def _compute_live_portfolio_state(
+        self,
+        *,
+        portfolio: Mapping[str, Any],
+        live: MT5LiveGateway,
+        allow_auto_sync: bool = True,
+    ) -> dict[str, Any]:
+        return self.risk.compute_live_portfolio_state(
+            portfolio=portfolio,
+            live=live,
+            allow_auto_sync=allow_auto_sync,
+        )
 
     def _evaluate_trade_decision_from_bundle(
         self,

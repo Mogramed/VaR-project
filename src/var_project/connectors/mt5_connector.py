@@ -172,10 +172,17 @@ class MT5Connector:
         date_to: datetime,
         *,
         symbol: str | None = None,
+        ticket: int | None = None,
+        position: int | None = None,
     ) -> list[dict[str, Any]]:
-        start = self._history_datetime(date_from)
-        end = self._history_datetime(date_to)
-        rows = self._call_with_reconnect(self._mt5.history_orders_get, start, end)
+        if ticket is not None:
+            rows = self._call_with_reconnect(self._mt5.history_orders_get, ticket=int(ticket))
+        elif position is not None:
+            rows = self._call_with_reconnect(self._mt5.history_orders_get, position=int(position))
+        else:
+            start = self._history_datetime(date_from)
+            end = self._history_datetime(date_to)
+            rows = self._call_with_reconnect(self._mt5.history_orders_get, start, end)
         if rows is None:
             raise MT5ConnectionError(f"history_orders_get() a echoue: {self._mt5.last_error()}")
         payload = [dict(self._coerce_namedtuple(row) or {}) for row in rows]
@@ -190,10 +197,17 @@ class MT5Connector:
         date_to: datetime,
         *,
         symbol: str | None = None,
+        ticket: int | None = None,
+        position: int | None = None,
     ) -> list[dict[str, Any]]:
-        start = self._history_datetime(date_from)
-        end = self._history_datetime(date_to)
-        rows = self._call_with_reconnect(self._mt5.history_deals_get, start, end)
+        if ticket is not None:
+            rows = self._call_with_reconnect(self._mt5.history_deals_get, ticket=int(ticket))
+        elif position is not None:
+            rows = self._call_with_reconnect(self._mt5.history_deals_get, position=int(position))
+        else:
+            start = self._history_datetime(date_from)
+            end = self._history_datetime(date_to)
+            rows = self._call_with_reconnect(self._mt5.history_deals_get, start, end)
         if rows is None:
             raise MT5ConnectionError(f"history_deals_get() a echoue: {self._mt5.last_error()}")
         payload = [dict(self._coerce_namedtuple(row) or {}) for row in rows]
@@ -462,6 +476,44 @@ class MT5Connector:
             "ask": float(t.ask),
             "last": float(getattr(t, "last", 0.0) or 0.0),
         }
+
+    def fetch_ticks_range(
+        self,
+        symbol: str,
+        date_from: datetime,
+        date_to: datetime,
+        *,
+        flags: int | None = None,
+    ) -> pd.DataFrame:
+        """
+        Récupère l'historique de ticks MT5 sur un intervalle UTC.
+        """
+        self._require_ready()
+        self.ensure_symbol(symbol)
+
+        start = self._history_datetime(date_from)
+        end = self._history_datetime(date_to)
+        if flags is None:
+            flags = getattr(self._mt5, "COPY_TICKS_ALL", 0)
+
+        ticks = self._call_with_reconnect(self._mt5.copy_ticks_range, symbol, start, end, flags)
+        if ticks is None:
+            raise MT5ConnectionError(
+                f"copy_ticks_range() a renvoyé None: {self._mt5.last_error()} (symbol={symbol}, start={start}, end={end})"
+            )
+        if len(ticks) == 0:
+            return pd.DataFrame(columns=["time_utc", "bid", "ask", "last", "volume", "time_msc", "flags"])
+
+        frame = pd.DataFrame(ticks)
+        if "time_msc" in frame.columns:
+            frame["time_utc"] = pd.to_datetime(frame["time_msc"], unit="ms", utc=True, errors="coerce")
+        elif "time" in frame.columns:
+            frame["time_utc"] = pd.to_datetime(frame["time"], unit="s", utc=True, errors="coerce")
+        else:
+            frame["time_utc"] = pd.NaT
+        columns = [column for column in ["time_utc", "bid", "ask", "last", "volume", "time_msc", "flags"] if column in frame.columns]
+        frame = frame[columns].dropna(subset=["time_utc"]).sort_values("time_utc").reset_index(drop=True)
+        return frame
 
     def mid_price(self, symbol: str) -> float:
         tick = self.fetch_tick(symbol)

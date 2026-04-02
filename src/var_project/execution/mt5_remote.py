@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 import httpx
+import pandas as pd
 
 from var_project.core.exceptions import MT5ConnectionError
 from var_project.core.types import MT5Config
@@ -86,6 +87,8 @@ class RemoteMT5Connector:
         date_to: datetime,
         *,
         symbol: str | None = None,
+        ticket: int | None = None,
+        position: int | None = None,
     ) -> list[dict[str, Any]]:
         params = {
             "date_from": date_from.isoformat(),
@@ -93,6 +96,10 @@ class RemoteMT5Connector:
         }
         if symbol is not None:
             params["symbol"] = str(symbol).upper()
+        if ticket is not None:
+            params["ticket"] = int(ticket)
+        if position is not None:
+            params["position"] = int(position)
         payload = self._request("GET", "/history/orders", params=params)
         return [dict(item) for item in payload]
 
@@ -102,6 +109,8 @@ class RemoteMT5Connector:
         date_to: datetime,
         *,
         symbol: str | None = None,
+        ticket: int | None = None,
+        position: int | None = None,
     ) -> list[dict[str, Any]]:
         params = {
             "date_from": date_from.isoformat(),
@@ -109,6 +118,10 @@ class RemoteMT5Connector:
         }
         if symbol is not None:
             params["symbol"] = str(symbol).upper()
+        if ticket is not None:
+            params["ticket"] = int(ticket)
+        if position is not None:
+            params["position"] = int(position)
         payload = self._request("GET", "/history/deals", params=params)
         return [dict(item) for item in payload]
 
@@ -142,6 +155,71 @@ class RemoteMT5Connector:
 
     def ensure_symbol(self, symbol: str) -> None:
         self.symbol_info(symbol)
+
+    def bars_per_day(self, timeframe: str) -> int:
+        tf = str(timeframe).upper().strip()
+        minutes_map = {
+            "M1": 1,
+            "M2": 2,
+            "M3": 3,
+            "M4": 4,
+            "M5": 5,
+            "M10": 10,
+            "M15": 15,
+            "M30": 30,
+            "H1": 60,
+            "H2": 120,
+            "H4": 240,
+            "D1": 1440,
+        }
+        if tf not in minutes_map:
+            raise ValueError(f"Timeframe inconnu: {timeframe}")
+        return int(1440 / minutes_map[tf])
+
+    def fetch_last_n_bars(
+        self,
+        symbol: str,
+        timeframe: str,
+        n_bars: int,
+        chunk_size: int = 5000,
+    ) -> pd.DataFrame:
+        payload = self._request(
+            "GET",
+            f"/bars/{str(symbol).upper()}",
+            params={
+                "timeframe": str(timeframe).upper(),
+                "n_bars": int(n_bars),
+                "chunk_size": int(chunk_size),
+            },
+        )
+        frame = pd.DataFrame(list(payload or []))
+        if frame.empty:
+            return pd.DataFrame(columns=["time", "open", "high", "low", "close", "tick_volume", "spread", "real_volume"])
+        if "time" in frame.columns:
+            frame["time"] = pd.to_datetime(frame["time"], utc=True, errors="coerce")
+        return frame
+
+    def fetch_ticks_range(
+        self,
+        symbol: str,
+        date_from: datetime,
+        date_to: datetime,
+        *,
+        flags: int | None = None,
+    ) -> pd.DataFrame:
+        params = {
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+        }
+        if flags is not None:
+            params["flags"] = int(flags)
+        payload = self._request("GET", f"/ticks/{str(symbol).upper()}", params=params, timeout=60.0)
+        frame = pd.DataFrame(list(payload or []))
+        if frame.empty:
+            return pd.DataFrame(columns=["time_utc", "bid", "ask", "last", "volume", "time_msc", "flags"])
+        if "time_utc" in frame.columns:
+            frame["time_utc"] = pd.to_datetime(frame["time_utc"], utc=True, errors="coerce")
+        return frame
 
     def _request(
         self,

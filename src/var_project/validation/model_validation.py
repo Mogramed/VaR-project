@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional
+import re
 
 import numpy as np
 import pandas as pd
@@ -56,6 +57,9 @@ class ValidationSummary:
     expected_rate: float
     model_results: Dict[str, BacktestModelValidation]
     best_model: Optional[str]
+    champion_model_live: Optional[str] = None
+    champion_model_reporting: Optional[str] = None
+    surface: dict[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, payload: Dict[str, Any]) -> "ValidationSummary":
@@ -65,15 +69,42 @@ class ValidationSummary:
             expected_rate=float(payload["expected_rate"]),
             model_results={name: BacktestModelValidation.from_dict(dict(model_payload)) for name, model_payload in models_payload.items()},
             best_model=payload.get("best_model"),
+            champion_model_live=payload.get("champion_model_live"),
+            champion_model_reporting=payload.get("champion_model_reporting"),
+            surface=None if payload.get("surface") is None else dict(payload.get("surface") or {}),
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "alpha": self.alpha,
             "expected_rate": self.expected_rate,
             "best_model": self.best_model,
             "models": {name: result.to_dict() for name, result in self.model_results.items()},
+            "champion_model_live": self.champion_model_live,
+            "champion_model_reporting": self.champion_model_reporting,
         }
+        if self.surface is not None:
+            payload["surface"] = dict(self.surface)
+        return payload
+
+
+@dataclass(frozen=True)
+class ValidationSurfacePoint:
+    model: str
+    alpha: float
+    horizon_days: int
+    n: int
+    exceptions: int
+    expected_rate: float
+    actual_rate: float
+    p_uc: float
+    p_ind: float
+    p_cc: float
+    traffic_light: Optional[str]
+    score: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -99,6 +130,7 @@ class RankedModelComparison:
 class ChampionChallengerSummary:
     alpha: float
     champion_model: Optional[str]
+    champion_model_reporting: Optional[str]
     challenger_model: Optional[str]
     score_gap: float | None
     rate_gap: float | None
@@ -106,11 +138,13 @@ class ChampionChallengerSummary:
     current_var_gap: float | None
     current_es_gap: float | None
     ranking: list[RankedModelComparison]
+    validation_surface: dict[str, Any] | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "alpha": self.alpha,
             "champion_model": self.champion_model,
+            "champion_model_reporting": self.champion_model_reporting,
             "challenger_model": self.challenger_model,
             "score_gap": self.score_gap,
             "rate_gap": self.rate_gap,
@@ -118,6 +152,7 @@ class ChampionChallengerSummary:
             "current_var_gap": self.current_var_gap,
             "current_es_gap": self.current_es_gap,
             "ranking": [row.to_dict() for row in self.ranking],
+            "validation_surface": self.validation_surface,
         }
 
 
@@ -234,6 +269,158 @@ def _traffic_light(last_250_exceptions: int, alpha: float) -> Optional[str]:
     return "RED"
 
 
+_SURFACE_COLUMN_RE = re.compile(r"^(?P<prefix>var|es|exc)_(?P<model>[a-z0-9]+)_a(?P<alpha>\d+)_h(?P<horizon>\d+)$")
+
+
+def _surface_dimensions(df: pd.DataFrame) -> tuple[list[str], list[float], list[int]]:
+    models: set[str] = set()
+    alphas: set[float] = set()
+    horizons: set[int] = set()
+    for column in df.columns:
+        match = _SURFACE_COLUMN_RE.match(str(column))
+        if not match:
+            continue
+        models.add(str(match.group("model")))
+        alphas.add(int(match.group("alpha")) / 100.0)
+        horizons.add(int(match.group("horizon")))
+    return (
+        infer_model_names_from_columns([f"var_{model}" for model in models]),
+        sorted(alphas),
+        sorted(horizons),
+    )
+
+
+def _surface_exc_series(df: pd.DataFrame, *, model: str, alpha: float, horizon_days: int) -> pd.Series | None:
+    alpha_suffix = int(round(float(alpha) * 100))
+    surface_col = f"exc_{model}_a{alpha_suffix}_h{int(horizon_days)}"
+    if surface_col in df.columns:
+        return pd.to_numeric(df[surface_col], errors="coerce")
+    if int(horizon_days) == 1 and f"exc_{model}" in df.columns:
+        return pd.to_numeric(df[f"exc_{model}"], errors="coerce")
+    return None
+
+
+def _surface_metric_map(
+    df: pd.DataFrame,
+    *,
+    prefix: str,
+    alpha: float,
+    horizon_days: int,
+) -> dict[str, float]:
+    alpha_suffix = int(round(float(alpha) * 100))
+    metrics: dict[str, float] = {}
+    for column in df.columns:
+        match = _SURFACE_COLUMN_RE.match(str(column))
+        if not match or match.group("prefix") != prefix:
+            continue
+        if int(match.group("alpha")) != alpha_suffix or int(match.group("horizon")) != int(horizon_days):
+            continue
+        metrics[str(match.group("model"))] = float(pd.to_numeric(df[column], errors="coerce").iloc[-1])
+    if int(horizon_days) == 1 and not metrics:
+        for model in infer_model_names_from_columns(df.columns):
+            column = f"{prefix}_{model}"
+            if column in df.columns:
+                metrics[model] = float(pd.to_numeric(df[column], errors="coerce").iloc[-1])
+    return metrics
+
+
+def _pick_surface_champion(
+    points: list[ValidationSurfacePoint],
+    *,
+    alpha: float,
+    horizon_days: int,
+) -> str | None:
+    candidates = [
+        point
+        for point in points
+        if abs(float(point.alpha) - float(alpha)) <= 1e-9 and int(point.horizon_days) == int(horizon_days)
+    ]
+    if not candidates:
+        return None
+    preferred_rank = {"hist": 0, "fhs": 1, "ewma": 2, "param": 3, "garch": 4, "mc": 5}
+    ordered = sorted(
+        candidates,
+        key=lambda item: (
+            -float(item.score),
+            abs(float(item.actual_rate) - float(item.expected_rate)),
+            preferred_rank.get(item.model, 99),
+            int(item.exceptions),
+        ),
+    )
+    return ordered[0].model
+
+
+def validate_compare_surface(
+    df: pd.DataFrame,
+    *,
+    alphas: list[float] | None = None,
+    horizons: list[int] | None = None,
+) -> dict[str, Any]:
+    inferred_models, inferred_alphas, inferred_horizons = _surface_dimensions(df)
+    selected_alphas = list(alphas or inferred_alphas or [0.95])
+    selected_horizons = list(horizons or inferred_horizons or [1])
+    models = inferred_models or _infer_models(df)
+
+    points: list[ValidationSurfacePoint] = []
+    summary_by_key: dict[str, dict[str, Any]] = {}
+
+    for alpha in selected_alphas:
+        expected_rate = 1.0 - float(alpha)
+        for horizon_days in selected_horizons:
+            for model in models:
+                exc_series = _surface_exc_series(df, model=model, alpha=alpha, horizon_days=horizon_days)
+                if exc_series is None:
+                    continue
+                exc = exc_series.dropna().astype(int)
+                uc = kupiec_uc(exc, alpha)
+                ind = christoffersen_ind(exc)
+                cc = conditional_coverage(exc, alpha)
+                exceptions_last_250 = int(exc.iloc[-250:].sum()) if len(exc) >= 250 else int(exc.sum())
+                traffic_light = _traffic_light(exceptions_last_250, alpha)
+                score = _score_model(
+                    actual_rate=uc["rate"],
+                    expected_rate=expected_rate,
+                    p_uc=uc["p_uc"],
+                    p_ind=ind["p_ind"],
+                    p_cc=cc["p_cc"],
+                )
+                points.append(
+                    ValidationSurfacePoint(
+                        model=model,
+                        alpha=float(alpha),
+                        horizon_days=int(horizon_days),
+                        n=int(uc["n"]),
+                        exceptions=int(uc["x"]),
+                        expected_rate=float(expected_rate),
+                        actual_rate=float(uc["rate"]),
+                        p_uc=float(uc["p_uc"]),
+                        p_ind=float(ind["p_ind"]) if not np.isnan(ind["p_ind"]) else float("nan"),
+                        p_cc=float(cc["p_cc"]) if not np.isnan(cc["p_cc"]) else float("nan"),
+                        traffic_light=traffic_light,
+                        score=float(score),
+                    )
+                )
+            summary_by_key[f"a{int(round(alpha * 100))}_h{int(horizon_days)}"] = {
+                "var": _surface_metric_map(df, prefix="var", alpha=alpha, horizon_days=horizon_days),
+                "es": _surface_metric_map(df, prefix="es", alpha=alpha, horizon_days=horizon_days),
+            }
+
+    champion_live = _pick_surface_champion(points, alpha=0.95, horizon_days=1)
+    champion_reporting = (
+        _pick_surface_champion(points, alpha=0.99, horizon_days=10)
+        or _pick_surface_champion(points, alpha=0.99, horizon_days=5)
+        or champion_live
+    )
+    return {
+        "alphas": [float(item) for item in selected_alphas],
+        "horizons": [int(item) for item in selected_horizons],
+        "points": [point.to_dict() for point in points],
+        "current_metrics": summary_by_key,
+        "champion_model_live": champion_live,
+        "champion_model_reporting": champion_reporting,
+    }
+
+
 def validate_compare_frame(df: pd.DataFrame, alpha: float) -> ValidationSummary:
     models = _infer_models(df)
     expected_rate = 1.0 - float(alpha)
@@ -277,12 +464,16 @@ def validate_compare_frame(df: pd.DataFrame, alpha: float) -> ValidationSummary:
 
     ranked = sorted(results.values(), key=_rank_key)
     best_model = ranked[0].model if ranked else None
+    surface = validate_compare_surface(df, alphas=[float(alpha)], horizons=[1])
 
     return ValidationSummary(
         alpha=float(alpha),
         expected_rate=expected_rate,
         model_results=results,
         best_model=best_model,
+        champion_model_live=surface.get("champion_model_live"),
+        champion_model_reporting=surface.get("champion_model_reporting"),
+        surface=surface,
     )
 
 
@@ -327,7 +518,8 @@ def build_champion_challenger_summary(
 
     return ChampionChallengerSummary(
         alpha=float(summary.alpha),
-        champion_model=None if champion is None else champion.model,
+        champion_model=summary.champion_model_live or (None if champion is None else champion.model),
+        champion_model_reporting=summary.champion_model_reporting,
         challenger_model=None if challenger is None else challenger.model,
         score_gap=None if champion is None or challenger is None else round(float(champion.score - challenger.score), 2),
         rate_gap=None if champion is None or challenger is None else float(champion.actual_rate - challenger.actual_rate),
@@ -343,4 +535,5 @@ def build_champion_challenger_summary(
             else float(champion.current_es - challenger.current_es)
         ),
         ranking=ranking,
+        validation_surface=None if summary.surface is None else dict(summary.surface),
     )

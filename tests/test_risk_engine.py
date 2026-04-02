@@ -39,9 +39,15 @@ def test_risk_attribution_exposes_component_and_incremental_metrics():
     hist = attribution.models["hist"]
     assert hist.total_var == snapshot.models["hist"].var
     assert set(hist.positions) == {"EURUSD", "USDJPY"}
+    assert set(hist.asset_classes) == {"fx"}
     eurusd = hist.positions["EURUSD"]
+    assert eurusd.asset_class == "fx"
     assert eurusd.standalone_var >= 0.0
     assert eurusd.incremental_var >= 0.0
+    fx_bucket = hist.asset_classes["fx"]
+    assert fx_bucket.symbol_count == 2
+    assert set(fx_bucket.symbols) == {"EURUSD", "USDJPY"}
+    assert fx_bucket.component_es >= 0.0
 
 
 def test_backtest_returns_standardized_columns():
@@ -91,3 +97,37 @@ def test_stress_report_is_keyed_by_scenario():
 
     assert "shock" in stressed
     assert stressed["shock"].var >= 0.0
+
+
+def test_risk_surface_exposes_multi_horizon_metrics_and_quality():
+    engine = RiskEngine({"EURUSD": 10_000.0, "USDJPY": 8_000.0})
+    surface = engine.build_risk_surface(
+        _sample_returns(320),
+        RiskModelConfig(alpha=0.95),
+        alphas=[0.95, 0.99],
+        horizons=[1, 5, 10],
+        estimation_window_days=250,
+        minimum_valid_days=120,
+        reference_model="hist",
+    )
+
+    payload = surface.to_dict()
+    assert payload["headline"]
+    assert payload["data_quality"]["status"] in {"healthy", "thin_history", "stale", "incomplete"}
+    assert any(point["alpha"] == 0.99 and point["horizon_days"] == 10 for point in payload["points"])
+
+
+def test_backtest_adds_surface_columns_for_alpha_and_horizon():
+    engine = RiskEngine({"EURUSD": 10_000.0, "USDJPY": 8_000.0})
+    backtest = engine.backtest(
+        _sample_returns(220),
+        window=80,
+        config=RiskModelConfig(alpha=0.95),
+        alphas=[0.95, 0.99],
+        horizons=[1, 5],
+    )
+
+    assert "pnl_h5" in backtest.columns
+    assert "var_hist_a99_h5" in backtest.columns
+    assert "es_hist_a95_h5" in backtest.columns
+    assert "exc_hist_a99_h5" in backtest.columns

@@ -18,7 +18,7 @@ def write_settings(
     config_dir.mkdir(parents=True, exist_ok=True)
     default_portfolio = {
         "name": "FX_EUR_20k",
-        "positions_eur": {"EURUSD": 10_000, "USDJPY": 10_000},
+        "configured_exposure": {"EURUSD": 10_000, "USDJPY": 10_000},
     }
     settings = {
         "base_currency": "EUR",
@@ -27,12 +27,22 @@ def write_settings(
         "data": {
             "timeframes": ["H1"],
             "history_days_list": [60],
+            "market_history_days": 60,
+            "market_retention_days": {"M1": 30, "H1": 60, "D1": 60},
+            "tick_retention_days": 7,
+            "tick_archive_dir": "data/market_ticks",
+            "tick_archive_format": "parquet",
             "storage_format": "csv",
             "timezone": "Europe/Paris",
             "min_coverage": 0.90,
         },
         "risk": {
             "alpha": 0.95,
+            "alphas": [0.95, 0.99],
+            "horizons": [1, 5, 10],
+            "estimation_window_days": 40,
+            "minimum_valid_days": 20,
+            "validation_window_days": 40,
             "window": 20,
             "ewma": {"lambda": 0.94},
             "fhs": {"lambda": 0.94},

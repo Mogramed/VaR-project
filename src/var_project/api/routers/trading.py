@@ -12,6 +12,7 @@ from var_project.api.schemas import (
     ExecutionResultResponse,
     ReconciliationAcknowledgeRequest,
     ReconciliationAcknowledgeResponse,
+    ReconciliationAcknowledgementResponse,
     RiskDecisionResponse,
     TradeProposalRequest,
 )
@@ -107,12 +108,62 @@ def acknowledge_reconciliation(
     payload: ReconciliationAcknowledgeRequest,
     service: DeskApiService = Depends(get_service),
 ) -> ReconciliationAcknowledgeResponse:
-    result = service.acknowledge_reconciliation_mismatch(
-        portfolio_slug=payload.portfolio_slug,
-        symbol=payload.symbol,
-        reason=payload.reason,
-        operator_note=payload.operator_note,
-    )
+    try:
+        result = service.acknowledge_reconciliation_mismatch(
+            portfolio_slug=payload.portfolio_slug,
+            symbol=payload.symbol,
+            reason=payload.reason,
+            operator_note=payload.operator_note,
+            incident_status=payload.incident_status,
+            resolution_note=payload.resolution_note,
+        )
+    except (MT5ConnectionError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ReconciliationAcknowledgeResponse.model_validate(result)
+
+
+@router.get("/reconciliation/incidents", response_model=list[ReconciliationAcknowledgementResponse])
+def reconciliation_incidents(
+    portfolio_slug: str | None = Query(default=None),
+    symbol: str | None = Query(default=None),
+    incident_status: str | None = Query(default=None),
+    include_resolved: bool = Query(default=True),
+    limit: int | None = Query(default=200, ge=1, le=1000),
+    service: DeskApiService = Depends(get_service),
+) -> list[ReconciliationAcknowledgementResponse]:
+    try:
+        payload = service.reconciliation_incidents(
+            portfolio_slug=portfolio_slug,
+            symbol=symbol,
+            incident_status=incident_status,
+            include_resolved=include_resolved,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return [ReconciliationAcknowledgementResponse.model_validate(item) for item in payload]
+
+
+@router.post("/reconciliation/incidents/update", response_model=ReconciliationAcknowledgeResponse)
+def update_reconciliation_incident(
+    payload: ReconciliationAcknowledgeRequest,
+    service: DeskApiService = Depends(get_service),
+) -> ReconciliationAcknowledgeResponse:
+    try:
+        result = service.update_reconciliation_incident(
+            portfolio_slug=payload.portfolio_slug,
+            symbol=payload.symbol,
+            reason=payload.reason,
+            operator_note=payload.operator_note,
+            incident_status=payload.incident_status or "acknowledged",
+            resolution_note=payload.resolution_note,
+        )
+    except (MT5ConnectionError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ReconciliationAcknowledgeResponse.model_validate(result)
 
 

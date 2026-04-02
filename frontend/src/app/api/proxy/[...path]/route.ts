@@ -20,12 +20,20 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
     headers.set("Accept", accept);
   }
 
-  const response = await fetch(target, {
-    method: request.method,
-    headers,
-    body,
-    cache: "no-store",
-  });
+  let response: Response;
+  try {
+    response = await fetch(target, {
+      method: request.method,
+      headers,
+      body,
+      cache: "no-store",
+    });
+  } catch {
+    return NextResponse.json(
+      { detail: "Backend API is unreachable." },
+      { status: 502 },
+    );
+  }
 
   const responseHeaders = new Headers();
   const responseContentType = response.headers.get("content-type");
@@ -54,6 +62,27 @@ export async function GET(
 }
 
 export async function POST(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+) {
+  return handle(request, context);
+}
+
+export async function PUT(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+) {
+  return handle(request, context);
+}
+
+export async function PATCH(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+) {
+  return handle(request, context);
+}
+
+export async function DELETE(
   request: NextRequest,
   context: { params: Promise<{ path: string[] }> },
 ) {

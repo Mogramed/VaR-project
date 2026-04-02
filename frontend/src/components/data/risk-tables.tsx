@@ -34,10 +34,11 @@ export function ModelRankingTable({ rows }: { rows: ModelComparisonRow[] }) {
 
 export function AttributionTable({ rows }: { rows: FlatAttributionRow[] }) {
   const cols: ColumnDef<FlatAttributionRow>[] = [
-    { accessorKey: "symbol", header: "Symbol", cell: ({ row }) => <span className="font-semibold text-[var(--color-text)]">{row.original.symbol}</span> },
-    { accessorKey: "position", header: "Position", cell: ({ row }) => <span className="mono">{formatCurrency(row.original.position)}</span> },
-    { accessorKey: "componentVar", header: "cVaR", cell: ({ row }) => <span className="mono text-[var(--color-text)]">{formatCurrency(row.original.componentVar)}</span> },
-    { accessorKey: "incrementalVar", header: "iVaR", cell: ({ row }) => <span className="mono">{formatCurrency(row.original.incrementalVar)}</span> },
+      { accessorKey: "symbol", header: "Symbol", cell: ({ row }) => <span className="font-semibold text-[var(--color-text)]">{row.original.symbol}</span> },
+      { accessorKey: "assetClass", header: "Asset class", cell: ({ row }) => <span className="text-[var(--color-text-muted)]">{row.original.assetClass}</span> },
+      { accessorKey: "position", header: "Position", cell: ({ row }) => <span className="mono">{formatCurrency(row.original.position)}</span> },
+      { accessorKey: "componentVar", header: "cVaR", cell: ({ row }) => <span className="mono text-[var(--color-text)]">{formatCurrency(row.original.componentVar)}</span> },
+      { accessorKey: "incrementalVar", header: "iVaR", cell: ({ row }) => <span className="mono">{formatCurrency(row.original.incrementalVar)}</span> },
     { accessorKey: "contributionPctVar", header: "Contrib", cell: ({ row }) => formatPercent(row.original.contributionPctVar) },
     { accessorKey: "status", header: "Status", cell: ({ row }) => <StatusBadge label={row.original.status} tone={tone(row.original.status)} /> },
   ];
@@ -138,20 +139,27 @@ export function DealHistoryTable({ rows }: { rows: DealHistoryEntryResponse[] })
   return <DataGrid data={rows} columns={cols} maxHeight="30rem" />;
 }
 
-export function ReconciliationTable({ rows, onAcknowledge }: { rows: ReconciliationMismatchResponse[]; onAcknowledge?: (symbol: string) => void }) {
+export function ReconciliationTable({
+  rows,
+  onManage,
+}: {
+  rows: ReconciliationMismatchResponse[];
+  onManage?: (symbol: string) => void;
+}) {
   const cols: ColumnDef<ReconciliationMismatchResponse>[] = [
     { accessorKey: "symbol", header: "Symbol", cell: ({ row }) => <span className="font-semibold text-[var(--color-text)]">{row.original.symbol}</span> },
     { accessorKey: "desk_exposure_eur", header: "Desk", cell: ({ row }) => <span className="mono">{formatCurrency(row.original.desk_exposure_eur)}</span> },
     { accessorKey: "live_exposure_eur", header: "Live", cell: ({ row }) => <span className="mono text-[var(--color-text)]">{formatCurrency(row.original.live_exposure_eur)}</span> },
     { accessorKey: "difference_eur", header: "Drift", cell: ({ row }) => <span className="mono">{formatCurrency(row.original.difference_eur)}</span> },
     { accessorKey: "status", header: "Status", cell: ({ row }) => <StatusBadge label={row.original.status} tone={tone(row.original.status)} /> },
-    ...(onAcknowledge ? [{
-      id: "action", header: "Ack",
+    { accessorKey: "incident_status", header: "Incident", cell: ({ row }) => row.original.incident_status ? <StatusBadge label={row.original.incident_status} tone={tone(row.original.incident_status)} /> : <StatusBadge label="new" tone="neutral" /> },
+    ...(onManage ? [{
+      id: "action", header: "Manage",
       cell: ({ row }: { row: { original: ReconciliationMismatchResponse } }) =>
-        row.original.status !== "match" && !row.original.acknowledged ? (
+        row.original.status !== "match" ? (
           <button type="button" className="rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-text)] transition hover:bg-[var(--color-surface-hover)]"
-            onClick={() => onAcknowledge(row.original.symbol)}>Ack</button>
-        ) : row.original.acknowledged ? <span className="text-[10px] text-[var(--color-text-muted)]">Done</span> : null,
+            onClick={() => onManage(row.original.symbol)}>Manage</button>
+        ) : row.original.incident_status ? <span className="text-[10px] text-[var(--color-text-muted)]">{row.original.incident_status}</span> : null,
     } satisfies ColumnDef<ReconciliationMismatchResponse>] : []),
   ];
   return <DataGrid data={rows} columns={cols} maxHeight="24rem" />;

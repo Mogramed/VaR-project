@@ -7,7 +7,7 @@ from typing import Any, Mapping, Sequence
 import pandas as pd
 
 from var_project.storage import AppStorage, slugify_label
-from var_project.validation.model_validation import validate_compare_frame
+from var_project.validation.model_validation import ValidationSummary, validate_compare_frame, validate_compare_surface
 
 
 def infer_portfolio_metadata(frame: pd.DataFrame) -> tuple[str, str, list[str], dict[str, float], str]:
@@ -24,13 +24,13 @@ def infer_portfolio_metadata(frame: pd.DataFrame) -> tuple[str, str, list[str], 
     else:
         symbols = [str(col).replace("ret_", "") for col in frame.columns if str(col).startswith("ret_")]
 
-    positions_raw = first.get("exposure_by_symbol_json") or first.get("positions_eur_json")
-    if isinstance(positions_raw, str) and positions_raw.strip():
-        positions = {str(key): float(value) for key, value in json.loads(positions_raw).items()}
+    exposure_raw = first.get("exposure_by_symbol_json") or first.get("positions_eur_json")
+    if isinstance(exposure_raw, str) and exposure_raw.strip():
+        exposure_by_symbol = {str(key): float(value) for key, value in json.loads(exposure_raw).items()}
     else:
-        positions = {}
+        exposure_by_symbol = {}
 
-    return name, base_currency, symbols, positions, slugify_label(name)
+    return name, base_currency, symbols, exposure_by_symbol, slugify_label(name)
 
 
 def persist_validation_summary(
@@ -38,6 +38,8 @@ def persist_validation_summary(
     storage: AppStorage,
     compare_csv: Path,
     alpha: float,
+    alphas: Sequence[float] | None = None,
+    horizons: Sequence[int] | None = None,
     source_artifact_id: int | None = None,
     portfolio_id: int | None = None,
     portfolio_name: str | None = None,
@@ -50,6 +52,16 @@ def persist_validation_summary(
 
     frame = pd.read_csv(compare_csv)
     summary = validate_compare_frame(frame, alpha)
+    surface = validate_compare_surface(frame, alphas=list(alphas or [alpha]), horizons=list(horizons or [1]))
+    summary = ValidationSummary(
+        alpha=summary.alpha,
+        expected_rate=summary.expected_rate,
+        model_results=summary.model_results,
+        best_model=summary.best_model,
+        champion_model_live=surface.get("champion_model_live"),
+        champion_model_reporting=surface.get("champion_model_reporting"),
+        surface=surface,
+    )
 
     inferred_name, inferred_currency, inferred_symbols, inferred_positions, inferred_slug = infer_portfolio_metadata(frame)
     resolved_name = str(portfolio_name or inferred_name)

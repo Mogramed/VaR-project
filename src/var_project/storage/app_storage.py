@@ -33,6 +33,7 @@ class AppStorage:
         self.settings.analytics_dir.mkdir(parents=True, exist_ok=True)
         self.settings.reports_dir.mkdir(parents=True, exist_ok=True)
         self.settings.snapshots_dir.mkdir(parents=True, exist_ok=True)
+        self.settings.tick_archive_dir.mkdir(parents=True, exist_ok=True)
         if create_schema:
             Base.metadata.create_all(self.engine)
 
@@ -232,6 +233,8 @@ class AppStorage:
         reason: str = "",
         operator_note: str = "",
         mismatch_status: str | None = None,
+        incident_status: str | None = None,
+        resolution_note: str = "",
         payload: Mapping[str, Any] | None = None,
     ) -> int:
         return self.writes.upsert_reconciliation_acknowledgement(
@@ -240,11 +243,22 @@ class AppStorage:
             reason=reason,
             operator_note=operator_note,
             mismatch_status=mismatch_status,
+            incident_status=incident_status,
+            resolution_note=resolution_note,
             payload=payload,
         )
 
     def latest_snapshot(self, *, source: str | None = None, portfolio_slug: str | None = None) -> dict[str, Any] | None:
         return self.reads.latest_snapshot(source=source, portfolio_slug=portfolio_slug)
+
+    def recent_snapshots(
+        self,
+        *,
+        limit: int = 25,
+        source: str | None = None,
+        portfolio_slug: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.reads.recent_snapshots(limit=limit, source=source, portfolio_slug=portfolio_slug)
 
     def latest_backtest_run(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
         return self.reads.latest_backtest_run(portfolio_slug=portfolio_slug)
@@ -294,8 +308,22 @@ class AppStorage:
     def recent_audit_events(self, *, limit: int = 50, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
         return self.reads.recent_audit_events(limit=limit, portfolio_slug=portfolio_slug)
 
-    def reconciliation_acknowledgements(self, *, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
-        return self.reads.reconciliation_acknowledgements(portfolio_slug=portfolio_slug)
+    def reconciliation_acknowledgements(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        symbol: str | None = None,
+        incident_status: str | None = None,
+        include_resolved: bool = True,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.reads.reconciliation_acknowledgements(
+            portfolio_slug=portfolio_slug,
+            symbol=symbol,
+            incident_status=incident_status,
+            include_resolved=include_resolved,
+            limit=limit,
+        )
 
     def list_portfolios(self) -> list[dict[str, Any]]:
         return self.reads.list_portfolios()

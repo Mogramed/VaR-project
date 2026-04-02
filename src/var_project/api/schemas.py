@@ -236,6 +236,7 @@ class ModelComparisonRow(BaseModel):
 class ModelComparisonResponse(BaseModel):
     alpha: float
     champion_model: str | None = None
+    champion_model_reporting: str | None = None
     challenger_model: str | None = None
     score_gap: float | None = None
     rate_gap: float | None = None
@@ -245,10 +246,31 @@ class ModelComparisonResponse(BaseModel):
     snapshot_source: str | None = None
     snapshot_timestamp: str | None = None
     ranking: list[ModelComparisonRow]
+    validation_surface: dict[str, Any] | None = None
 
 
 class RiskAttributionPositionResponse(ApiModel):
     symbol: str
+    asset_class: str = "unknown"
+    exposure_base_ccy: float = Field(
+        validation_alias=AliasChoices("exposure_base_ccy", "position_eur")
+    )
+    standalone_var: float
+    standalone_es: float
+    incremental_var: float
+    incremental_es: float
+    marginal_var: float
+    marginal_es: float
+    component_var: float
+    component_es: float
+    contribution_pct_var: float | None = None
+    contribution_pct_es: float | None = None
+
+
+class RiskAttributionAssetClassResponse(ApiModel):
+    asset_class: str = Field(validation_alias=AliasChoices("asset_class", "key"))
+    symbols: list[str] = Field(default_factory=list)
+    symbol_count: int = 0
     exposure_base_ccy: float = Field(
         validation_alias=AliasChoices("exposure_base_ccy", "position_eur")
     )
@@ -269,6 +291,7 @@ class RiskAttributionModelResponse(BaseModel):
     total_var: float
     total_es: float
     positions: dict[str, RiskAttributionPositionResponse]
+    asset_classes: dict[str, RiskAttributionAssetClassResponse] = Field(default_factory=dict)
 
 
 class RiskAttributionResponse(BaseModel):
@@ -354,6 +377,8 @@ class RiskDecisionStateResponse(ApiModel):
         validation_alias=AliasChoices("symbol_exposure", "position_eur")
     )
     status: str
+    headline_risk: list[HeadlineRiskPointResponse] = Field(default_factory=list)
+    data_quality: RiskDataQualityResponse | None = None
 
 
 class RiskDecisionResponse(ApiModel):
@@ -675,6 +700,44 @@ class OperatorAlertResponse(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+class RiskSurfacePointResponse(BaseModel):
+    model: str
+    alpha: float
+    horizon_days: int
+    var: float
+    es: float
+    observation_count: int
+    status: str
+    latest_observation: str | None = None
+    is_stressed: bool = False
+    scenario_name: str | None = None
+
+
+class HeadlineRiskPointResponse(BaseModel):
+    key: str
+    label: str
+    model: str
+    alpha: float
+    horizon_days: int
+    var: float
+    es: float
+    status: str
+    observation_count: int
+    is_stressed: bool = False
+    scenario_name: str | None = None
+
+
+class RiskDataQualityResponse(BaseModel):
+    status: str
+    estimation_window_days: int
+    minimum_valid_days: int
+    available_observations: int
+    oldest_observation: str | None = None
+    latest_observation: str | None = None
+    horizon_observations: dict[str, int] = Field(default_factory=dict)
+    symbol_count: int = 0
+
+
 class LiveRiskSummaryResponse(BaseModel):
     generated_at: str
     portfolio_slug: str
@@ -690,16 +753,28 @@ class LiveRiskSummaryResponse(BaseModel):
     latest_observation: str | None = None
     var: dict[str, float] = Field(default_factory=dict)
     es: dict[str, float] = Field(default_factory=dict)
+    risk_surface: dict[str, Any] = Field(default_factory=dict)
+    headline_risk: list[HeadlineRiskPointResponse] = Field(default_factory=list)
+    stress_surface: dict[str, Any] = Field(default_factory=dict)
+    data_quality: RiskDataQualityResponse | None = None
+    model_diagnostics: dict[str, Any] = Field(default_factory=dict)
+    risk_nowcast: dict[str, Any] = Field(default_factory=dict)
+    microstructure: dict[str, Any] = Field(default_factory=dict)
+    tick_quality: dict[str, Any] = Field(default_factory=dict)
+    pnl_explain: dict[str, Any] = Field(default_factory=dict)
 
 
 class MarketDataSyncStatusResponse(BaseModel):
     portfolio_slug: str
     portfolio_mode: str | None = None
     status: str
+    coverage_status: str | None = None
     configured: bool
     timeframe: str
     symbols: list[str] = Field(default_factory=list)
     instrument_count: int = 0
+    stored_history_days: int = 0
+    retention_tiers: dict[str, int] = Field(default_factory=dict)
     latest_sync_at: str | None = None
     latest_bar_times: dict[str, str | None] = Field(default_factory=dict)
     live_bridge_status: str | None = None
@@ -709,6 +784,8 @@ class MarketDataSyncStatusResponse(BaseModel):
     live_bridge_sequence: int | None = None
     missing_symbols: list[str] = Field(default_factory=list)
     missing_bars: list[str] = Field(default_factory=list)
+    tick_archive: dict[str, Any] = Field(default_factory=dict)
+    tick_quality: dict[str, Any] = Field(default_factory=dict)
     open_positions: list[HoldingSnapshotResponse] = Field(default_factory=list)
     pending_orders: list[MT5PendingOrderResponse] = Field(default_factory=list)
     details: dict[str, Any] = Field(default_factory=dict)
@@ -728,9 +805,30 @@ class ReconciliationMismatchResponse(BaseModel):
     reason: str | None = None
     status: str
     acknowledged: bool = False
+    incident_id: int | None = None
+    incident_status: str | None = None
+    incident_reason: str | None = None
+    incident_note: str | None = None
+    incident_updated_at: str | None = None
+    resolution_note: str | None = None
+    resolved_at: str | None = None
     acknowledged_at: str | None = None
     acknowledged_reason: str | None = None
     acknowledged_note: str | None = None
+
+
+class ReconciliationIncidentResponse(BaseModel):
+    id: int | None = None
+    portfolio_id: int | None = None
+    symbol: str
+    reason: str | None = None
+    operator_note: str | None = None
+    mismatch_status: str | None = None
+    incident_status: str | None = None
+    resolution_note: str | None = None
+    acknowledged_at: str | None = None
+    resolved_at: str | None = None
+    updated_at: str | None = None
 
 
 class ReconciliationSummaryResponse(BaseModel):
@@ -744,8 +842,10 @@ class ReconciliationSummaryResponse(BaseModel):
     manual_event_count: int
     unmatched_execution_count: int
     status_counts: dict[str, int] = Field(default_factory=dict)
+    incident_status_counts: dict[str, int] = Field(default_factory=dict)
     holdings: list[HoldingSnapshotResponse] = Field(default_factory=list)
     mismatches: list[ReconciliationMismatchResponse] = Field(default_factory=list)
+    incidents: list[ReconciliationIncidentResponse] = Field(default_factory=list)
     recent_execution_attempts: list[ExecutionResultResponse] = Field(default_factory=list)
     recent_fills: list[ExecutionFillResponse] = Field(default_factory=list)
 
@@ -796,6 +896,10 @@ class MT5LiveStateResponse(BaseModel):
     risk_budget: RiskBudgetResponse | None = None
     capital_usage: CapitalUsageSnapshotResponse | None = None
     reconciliation: ReconciliationSummaryResponse | None = None
+    tick_quality: dict[str, Any] = Field(default_factory=dict)
+    microstructure: dict[str, Any] = Field(default_factory=dict)
+    risk_nowcast: dict[str, Any] = Field(default_factory=dict)
+    pnl_explain: dict[str, Any] = Field(default_factory=dict)
     operator_alerts: list[OperatorAlertResponse] = Field(default_factory=list)
 
 
@@ -851,6 +955,11 @@ class ExecutionPreviewResponse(BaseModel):
     order_check: dict[str, Any] = Field(default_factory=dict)
     pre_capital: dict[str, Any] = Field(default_factory=dict)
     post_capital: dict[str, Any] = Field(default_factory=dict)
+    microstructure: dict[str, Any] = Field(default_factory=dict)
+    risk_nowcast: dict[str, Any] = Field(default_factory=dict)
+    pnl_explain: dict[str, Any] = Field(default_factory=dict)
+    estimated_spread_cost: float | None = None
+    expected_slippage_points: float | None = None
 
 
 class ExecutionFillResponse(BaseModel):
@@ -930,6 +1039,8 @@ class ReconciliationAcknowledgeRequest(BaseModel):
     symbol: str
     reason: str = ""
     operator_note: str = ""
+    incident_status: str | None = None
+    resolution_note: str = ""
 
 
 class ReconciliationAcknowledgementResponse(BaseModel):
@@ -939,7 +1050,10 @@ class ReconciliationAcknowledgementResponse(BaseModel):
     reason: str | None = None
     operator_note: str | None = None
     mismatch_status: str | None = None
+    incident_status: str | None = None
+    resolution_note: str | None = None
     acknowledged_at: str | None = None
+    resolved_at: str | None = None
     updated_at: str | None = None
 
 
@@ -949,6 +1063,8 @@ class ReconciliationAcknowledgeResponse(BaseModel):
     audit_event_id: int
     acknowledgement_id: int | None = None
     mismatch_status: str | None = None
+    incident_status: str | None = None
+    baseline_snapshot_id: int | None = None
     acknowledgement: ReconciliationAcknowledgementResponse | None = None
 
 
@@ -970,13 +1086,28 @@ class StressScenarioResultResponse(BaseModel):
     name: str
     vol_multiplier: float
     shock_pnl: float
-    var: float
-    es: float
+    var: float | None = None
+    es: float | None = None
+    headline_risk: list[HeadlineRiskPointResponse] = Field(default_factory=list)
+    risk_surface: dict[str, Any] = Field(default_factory=dict)
+    attribution: RiskAttributionResponse | None = None
+    primary_metric: dict[str, Any] = Field(default_factory=dict)
+
+
+class HistoricalStressExtremeResponse(BaseModel):
+    horizon_days: int
+    worst_loss: float
+    worst_end_date: str | None = None
+    tail_mean_loss: float | None = None
 
 
 class StressReportResponse(BaseModel):
     portfolio_slug: str
     alpha: float
-    baseline_var: float
-    baseline_es: float
+    baseline_var: float | None = None
+    baseline_es: float | None = None
+    risk_surface: dict[str, Any] = Field(default_factory=dict)
+    headline_risk: list[HeadlineRiskPointResponse] = Field(default_factory=list)
+    attribution: RiskAttributionResponse | None = None
     scenarios: list[StressScenarioResultResponse]
+    historical_extremes: list[HistoricalStressExtremeResponse] = Field(default_factory=list)

@@ -89,9 +89,13 @@ class DeskAnalyticsService:
             "window": selected_window,
             "holdings": list(bundle["holdings"]),
             "exposure_by_symbol": dict(bundle["exposure_by_symbol"]),
-            "positions_eur": dict(bundle["exposure_by_symbol"]),
             "var": snapshot.vars_dict(),
             "es": snapshot.es_dict(),
+            "risk_surface": dict(bundle["risk_surface"]),
+            "headline_risk": list(bundle["headline_risk"]),
+            "stress_surface": dict(bundle["stress_surface"]),
+            "data_quality": dict(bundle["data_quality"]),
+            "model_diagnostics": dict(bundle["risk_surface"].get("model_diagnostics") or {}),
             "attribution": attribution.to_dict(),
             "risk_budget": risk_budget.to_dict(),
             "capital_usage": capital_snapshot,
@@ -186,21 +190,22 @@ class DeskAnalyticsService:
         engine = RiskEngine(bundle["holdings"], base_currency=str(portfolio["base_currency"]))
         daily_rets = bundle["daily_returns"][bundle["portfolio_symbols"]]
         exposure_by_symbol = dict(bundle["exposure_by_symbol"])
-        gross_notional = float(sum(abs(value) for value in exposure_by_symbol.values()))
+        gross_exposure = float(sum(abs(value) for value in exposure_by_symbol.values()))
         symbols = list(bundle["portfolio_symbols"])
 
         backtest = engine.backtest(
             returns_wide=daily_rets,
             window=selected_window,
             config=config,
+            alphas=[float(item) for item in self.runtime.risk_defaults["alphas"]],
+            horizons=[int(item) for item in self.runtime.risk_defaults["horizons"]],
             metadata={
                 "portfolio": portfolio["name"],
                 "base_currency": portfolio["base_currency"],
                 "symbols": ",".join(symbols),
                 "exposure_by_symbol_json": self.runtime._positions_json(exposure_by_symbol),
-                "positions_eur_json": self.runtime._positions_json(exposure_by_symbol),
                 "holdings_json": json.dumps(list(bundle["holdings"])),
-                "gross_notional": gross_notional,
+                "gross_exposure": gross_exposure,
                 "timeframe": selected_timeframe,
                 "days": selected_days,
             },
@@ -227,12 +232,12 @@ class DeskAnalyticsService:
             },
         )
         exception_counts = {
-            "hist": int(backtest["exc_hist"].sum()),
-            "param": int(backtest["exc_param"].sum()),
-            "mc": int(backtest["exc_mc"].sum()),
-            "ewma": int(backtest["exc_ewma"].sum()),
+            "hist": int(backtest["exc_hist"].sum()) if "exc_hist" in backtest.columns else 0,
+            "param": int(backtest["exc_param"].sum()) if "exc_param" in backtest.columns else 0,
+            "mc": int(backtest["exc_mc"].sum()) if "exc_mc" in backtest.columns else 0,
+            "ewma": int(backtest["exc_ewma"].sum()) if "exc_ewma" in backtest.columns else 0,
             "garch": int(backtest["exc_garch"].sum()) if "exc_garch" in backtest.columns else 0,
-            "fhs": int(backtest["exc_fhs"].sum()),
+            "fhs": int(backtest["exc_fhs"].sum()) if "exc_fhs" in backtest.columns else 0,
         }
         backtest_run_id = self.runtime.storage.record_backtest_run(
             portfolio_id=portfolio_id,
@@ -244,7 +249,7 @@ class DeskAnalyticsService:
             n_rows=len(backtest),
             summary={
                 "portfolio": portfolio["name"],
-                "gross_notional": gross_notional,
+                "gross_exposure": gross_exposure,
                 "symbols": symbols,
                 "exception_counts": exception_counts,
             },
@@ -254,6 +259,8 @@ class DeskAnalyticsService:
             storage=self.runtime.storage,
             compare_csv=out_path,
             alpha=config.alpha,
+            alphas=[float(item) for item in self.runtime.risk_defaults["alphas"]],
+            horizons=[int(item) for item in self.runtime.risk_defaults["horizons"]],
             source_artifact_id=compare_artifact_id,
             portfolio_id=portfolio_id,
             portfolio_name=portfolio["name"],
@@ -303,6 +310,8 @@ class DeskAnalyticsService:
             storage=self.runtime.storage,
             compare_csv=compare_csv,
             alpha=selected_alpha,
+            alphas=[float(item) for item in self.runtime.risk_defaults["alphas"]],
+            horizons=[int(item) for item in self.runtime.risk_defaults["horizons"]],
         )
         self.runtime.storage.record_audit_event(
             actor="api",
@@ -396,8 +405,7 @@ class DeskAnalyticsService:
         scenarios: list[dict[str, Any]] | None = None,
         alpha: float | None = None,
     ) -> dict[str, Any]:
-        from var_project.risk.stress import StressScenario, stress_report
-        from var_project.risk.expected_shortfall import historical_var_es
+        from var_project.risk.stress import StressScenario
 
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         config = self.runtime._build_risk_model_config(alpha, None, None, None, None)
@@ -431,16 +439,9 @@ class DeskAnalyticsService:
                 portfolio_slug=portfolio["slug"],
                 config=config,
             )
-        pnl = bundle["sample"]["pnl"]
-
-        baseline = historical_var_es(pnl, config.alpha)
 
         if not scenarios:
-            scenarios = [
-                {"name": "2008 Crisis", "vol_multiplier": 3.0, "shock_pnl": 0.0},
-                {"name": "COVID March 2020", "vol_multiplier": 4.0, "shock_pnl": -0.05 * float(pnl.std())},
-                {"name": "ECB Rate Shock", "vol_multiplier": 2.0, "shock_pnl": -0.02 * float(pnl.std())},
-            ]
+            scenarios = []
 
         stress_scenarios = [
             StressScenario(
@@ -450,21 +451,77 @@ class DeskAnalyticsService:
             )
             for s in scenarios
         ]
-        results = stress_report(pnl, config.alpha, stress_scenarios)
+        stress_surface = bundle["stress_surface"]
+        if stress_scenarios:
+            stress_surface = RiskEngine(bundle["holdings"], base_currency=str(portfolio["base_currency"])).build_stress_surface(
+                bundle["sample"][bundle["portfolio_symbols"]],
+                config,
+                alphas=[float(item) for item in self.runtime.risk_defaults["alphas"]],
+                horizons=[int(item) for item in self.runtime.risk_defaults["horizons"]],
+                estimation_window_days=int(self.runtime.risk_defaults["estimation_window_days"]),
+                minimum_valid_days=int(self.runtime.risk_defaults["minimum_valid_days"]),
+                scenarios=stress_scenarios,
+            )
+
+        target_alpha = float(config.alpha)
+        surface_payload = dict(stress_surface.get("risk_surface") or {})
+        reference_model = str(surface_payload.get("reference_model") or "hist").lower()
+        baseline_headline = next(
+            (
+                item
+                for item in list(surface_payload.get("points") or [])
+                if not item.get("is_stressed")
+                and str(item.get("model") or "").lower() == reference_model
+                and int(item.get("horizon_days") or 0) == 1
+                and abs(float(item.get("alpha") or 0.0) - target_alpha) <= 1e-9
+            ),
+            None,
+        )
+        if baseline_headline is None:
+            baseline_headline = next(
+                (
+                    item
+                    for item in list(stress_surface.get("headline_risk") or [])
+                    if not item.get("is_stressed")
+                    and int(item.get("horizon_days") or 0) == 1
+                    and abs(float(item.get("alpha") or 0.0) - target_alpha) <= 1e-9
+                ),
+                None,
+            )
+        if baseline_headline is None:
+            baseline_headline = next(
+                (
+                    item
+                    for item in list(stress_surface.get("headline_risk") or [])
+                    if not item.get("is_stressed") and item.get("key") == "live_1d_95"
+                ),
+                None,
+            )
+        scenario_rows = []
+        for scenario in list(stress_surface.get("scenarios") or []):
+            primary = dict(scenario.get("primary_metric") or {})
+            scenario_rows.append(
+                {
+                    "name": scenario.get("name"),
+                    "vol_multiplier": scenario.get("vol_multiplier"),
+                    "shock_pnl": scenario.get("shock_pnl"),
+                    "var": primary.get("var"),
+                    "es": primary.get("es"),
+                    "headline_risk": list(scenario.get("headline_risk") or []),
+                    "risk_surface": dict(scenario.get("risk_surface") or {}),
+                    "attribution": dict(scenario.get("attribution") or {}),
+                    "primary_metric": primary,
+                }
+            )
 
         return {
             "portfolio_slug": portfolio["slug"],
             "alpha": config.alpha,
-            "baseline_var": baseline.var,
-            "baseline_es": baseline.es,
-            "scenarios": [
-                {
-                    "name": sc.name,
-                    "vol_multiplier": sc.vol_multiplier,
-                    "shock_pnl": sc.shock_pnl,
-                    "var": results[sc.name].var,
-                    "es": results[sc.name].es,
-                }
-                for sc in stress_scenarios
-            ],
+            "baseline_var": None if baseline_headline is None else baseline_headline.get("var"),
+            "baseline_es": None if baseline_headline is None else baseline_headline.get("es"),
+            "risk_surface": dict(stress_surface.get("risk_surface") or {}),
+            "headline_risk": list(stress_surface.get("headline_risk") or []),
+            "attribution": dict(stress_surface.get("attribution") or {}),
+            "scenarios": scenario_rows,
+            "historical_extremes": list(stress_surface.get("historical_extremes") or []),
         }

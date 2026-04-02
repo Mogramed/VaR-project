@@ -22,6 +22,7 @@ class StorageSettings:
     analytics_dir: Path
     reports_dir: Path
     snapshots_dir: Path
+    tick_archive_dir: Path
     analytics_format: str = "csv"
 
     @classmethod
@@ -39,6 +40,10 @@ class StorageSettings:
         analytics_dir = resolve_path(root, str(storage_cfg.get("analytics_dir", "reports/backtests")))
         reports_dir = resolve_path(root, str(storage_cfg.get("reports_dir", "reports/daily")))
         snapshots_dir = resolve_path(root, str(storage_cfg.get("snapshots_dir", "data/snapshots")))
+        tick_archive_dir = resolve_path(
+            root,
+            str(storage_cfg.get("tick_archive_dir") or data_cfg.get("tick_archive_dir") or "data/market_ticks"),
+        )
         analytics_format = str(storage_cfg.get("analytics_format") or data_cfg.get("storage_format") or "csv").lower()
 
         return cls(
@@ -47,5 +52,6 @@ class StorageSettings:
             analytics_dir=analytics_dir,
             reports_dir=reports_dir,
             snapshots_dir=snapshots_dir,
+            tick_archive_dir=tick_archive_dir,
             analytics_format=analytics_format,
         )

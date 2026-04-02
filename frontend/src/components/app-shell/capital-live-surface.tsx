@@ -9,7 +9,7 @@ import { CapitalRebalancePanel } from "@/components/forms/capital-rebalance-pane
 import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
-import { makeLineOption } from "@/lib/chart-options";
+import { CHART_PALETTE, makeLineOption } from "@/lib/chart-options";
 import type { CapitalUsageSnapshotResponse, MT5LiveStateResponse } from "@/lib/api/types";
 import { useMt5LiveState } from "@/lib/use-mt5-live-state";
 import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
@@ -89,7 +89,7 @@ export function CapitalLiveSurface({
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_300px]">
         <ChartSurface
-          option={makeLineOption(capitalSeries, "#0ecb81", { mode: "standard" })}
+          option={makeLineOption(capitalSeries, CHART_PALETTE.green, { mode: "standard" })}
           mode="standard" dataCount={capitalSeries.length}
           title="Capital history" meta={resolved?.snapshot_timestamp ? formatTimestamp(resolved.snapshot_timestamp) : undefined}
           emptyState={<p className="text-xs text-[var(--color-text-muted)]">No capital history available.</p>}

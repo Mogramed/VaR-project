@@ -173,7 +173,7 @@ def render_daily_markdown(
         holdings = list(snapshot_payload.get("holdings") or [])
         if holdings:
             lines.append("### Holdings")
-            lines.append("| Symbol | Asset class | Side | Lots | Signed EUR | Exposure (base) | Unrealized PnL |")
+            lines.append("| Symbol | Asset class | Side | Lots | Signed exposure | Exposure (base) | Unrealized PnL |")
             lines.append("|---|---|---|---:|---:|---:|---:|")
             for item in holdings:
                 lines.append(
@@ -182,7 +182,7 @@ def render_daily_markdown(
                     f"{item.get('asset_class') or 'n/a'} | "
                     f"{item.get('side') or 'n/a'} | "
                     f"{_fmt_number(item.get('volume_lots'))} | "
-                    f"{_fmt_money(item.get('signed_position_eur'))} | "
+                    f"{_fmt_money(item.get('signed_exposure_base_ccy', item.get('signed_position_eur')))} | "
                     f"{_fmt_money(item.get('exposure_base_ccy'))} | "
                     f"{_fmt_money(item.get('unrealized_pnl_base_ccy'))} |"
                 )
@@ -199,8 +199,15 @@ def render_daily_markdown(
 
         vars_map = snapshot_payload.get("var", {}) or {}
         es_map = snapshot_payload.get("es", {}) or {}
+        headline_risk = list(snapshot_payload.get("headline_risk") or [])
+        stress_surface = dict(snapshot_payload.get("stress_surface") or {})
+        attribution = dict(snapshot_payload.get("attribution") or {})
+        risk_nowcast = dict(snapshot_payload.get("risk_nowcast") or {})
+        microstructure = dict(snapshot_payload.get("microstructure") or {})
+        tick_quality = dict(snapshot_payload.get("tick_quality") or {})
+        pnl_explain = dict(snapshot_payload.get("pnl_explain") or {})
         if vars_map:
-            lines.append("### VaR / ES (EUR)")
+            lines.append("### VaR / ES")
             lines.append("| Model | VaR | ES |")
             lines.append("|---|---:|---:|")
             model_names = sorted(set(list(vars_map.keys()) + list(es_map.keys())))
@@ -208,6 +215,148 @@ def render_daily_markdown(
                 lines.append(
                     f"| {model_name} | {_fmt_money(vars_map.get(model_name))} | {_fmt_money(es_map.get(model_name))} |"
                 )
+            lines.append("")
+
+        if headline_risk:
+            lines.append("### Headline Risk Surface")
+            lines.append("| View | Model | Horizon | Confidence | VaR | ES | Status |")
+            lines.append("|---|---|---:|---:|---:|---:|---|")
+            for item in headline_risk:
+                lines.append(
+                    f"| {item.get('label') or item.get('key') or 'n/a'} | "
+                    f"{str(item.get('model') or 'n/a').upper()} | "
+                    f"{item.get('horizon_days') or 'n/a'}d | "
+                    f"{_fmt_number(item.get('alpha'), 2)} | "
+                    f"{_fmt_money(item.get('var'))} | "
+                    f"{_fmt_money(item.get('es'))} | "
+                    f"{item.get('status') or 'n/a'} |"
+                )
+            lines.append("")
+
+        if attribution:
+            models_payload = dict(attribution.get("models") or {})
+            preferred_model = None
+            if headline_risk:
+                preferred_model = str((headline_risk[0] or {}).get("model") or "").lower() or None
+            if preferred_model not in models_payload:
+                preferred_model = next(iter(models_payload.keys()), None)
+            model_payload = dict(models_payload.get(preferred_model or "", {}) or {})
+            position_rows = sorted(
+                list(dict(model_payload.get("positions") or {}).values()),
+                key=lambda item: abs(float(item.get("component_es") or item.get("component_var") or 0.0)),
+                reverse=True,
+            )
+            asset_class_rows = sorted(
+                list(dict(model_payload.get("asset_classes") or {}).values()),
+                key=lambda item: abs(float(item.get("component_es") or item.get("component_var") or 0.0)),
+                reverse=True,
+            )
+            if position_rows or asset_class_rows:
+                lines.append("### Risk Contributions")
+                if preferred_model:
+                    lines.append(f"- Attribution model: **{str(preferred_model).upper()}**")
+                if position_rows:
+                    lines.append("| Symbol | Asset class | Exposure | cVaR | cES | iVaR | iES | Contrib ES |")
+                    lines.append("|---|---|---:|---:|---:|---:|---:|---:|")
+                    for item in position_rows[:5]:
+                        lines.append(
+                            f"| {item.get('symbol') or 'n/a'} | "
+                            f"{item.get('asset_class') or 'n/a'} | "
+                            f"{_fmt_money(item.get('exposure_base_ccy'))} | "
+                            f"{_fmt_money(item.get('component_var'))} | "
+                            f"{_fmt_money(item.get('component_es'))} | "
+                            f"{_fmt_money(item.get('incremental_var'))} | "
+                            f"{_fmt_money(item.get('incremental_es'))} | "
+                            f"{_fmt_number(None if item.get('contribution_pct_es') is None else float(item.get('contribution_pct_es')) * 100.0, 1)}% |"
+                        )
+                    lines.append("")
+                if asset_class_rows:
+                    lines.append("| Asset class | Symbols | Exposure | cVaR | cES | iVaR | iES | Contrib ES |")
+                    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|")
+                    for item in asset_class_rows:
+                        lines.append(
+                            f"| {item.get('asset_class') or 'n/a'} | "
+                            f"{item.get('symbol_count') or 0} | "
+                            f"{_fmt_money(item.get('exposure_base_ccy'))} | "
+                            f"{_fmt_money(item.get('component_var'))} | "
+                            f"{_fmt_money(item.get('component_es'))} | "
+                            f"{_fmt_money(item.get('incremental_var'))} | "
+                            f"{_fmt_money(item.get('incremental_es'))} | "
+                            f"{_fmt_number(None if item.get('contribution_pct_es') is None else float(item.get('contribution_pct_es')) * 100.0, 1)}% |"
+                        )
+                    lines.append("")
+
+        if stress_surface:
+            lines.append("### Stress Surface")
+            historical_extremes = list(stress_surface.get("historical_extremes") or [])
+            scenarios = list(stress_surface.get("scenarios") or [])
+            if scenarios:
+                lines.append("| Scenario | VaR | ES |")
+                lines.append("|---|---:|---:|")
+                for scenario in scenarios:
+                    primary = dict(scenario.get("primary_metric") or {})
+                    lines.append(
+                        f"| {scenario.get('name') or 'n/a'} | "
+                        f"{_fmt_money(primary.get('var', scenario.get('var')))} | "
+                        f"{_fmt_money(primary.get('es', scenario.get('es')))} |"
+                    )
+                lines.append("")
+            if historical_extremes:
+                lines.append("| Historical window | Worst loss | Tail mean loss | End date |")
+                lines.append("|---|---:|---:|---|")
+                for item in historical_extremes:
+                    lines.append(
+                        f"| {item.get('horizon_days') or 'n/a'}d | "
+                        f"{_fmt_money(item.get('worst_loss'))} | "
+                        f"{_fmt_money(item.get('tail_mean_loss'))} | "
+                        f"{item.get('worst_end_date') or 'n/a'} |"
+                    )
+                lines.append("")
+
+        if risk_nowcast:
+            lines.append("### Live Risk Nowcast")
+            live_nowcast = dict(risk_nowcast.get("live_1d_99") or {})
+            governance_nowcast = dict(risk_nowcast.get("governance_10d_99") or {})
+            lines.append(f"- Regime: **{risk_nowcast.get('regime') or 'n/a'}**")
+            lines.append(f"- Scale factor: **{_fmt_number(risk_nowcast.get('scale_factor'), 2)}**")
+            if live_nowcast:
+                lines.append(
+                    f"- 1D 99% nowcast: VaR **{_fmt_money(live_nowcast.get('nowcast_var'))}**, "
+                    f"ES **{_fmt_money(live_nowcast.get('nowcast_es'))}**"
+                )
+            if governance_nowcast:
+                lines.append(
+                    f"- Governance nowcast: VaR **{_fmt_money(governance_nowcast.get('nowcast_var'))}**, "
+                    f"ES **{_fmt_money(governance_nowcast.get('nowcast_es'))}**"
+                )
+            lines.append("")
+
+        if microstructure or tick_quality:
+            lines.append("### Market Microstructure")
+            if microstructure:
+                lines.append(f"- Market regime: **{microstructure.get('regime') or 'n/a'}**")
+                lines.append(f"- Average spread: **{_fmt_number(microstructure.get('avg_spread_bps'), 2)} bps**")
+                lines.append(
+                    f"- Widest spread: **{_fmt_number(microstructure.get('widest_spread_bps'), 2)} bps** on **{microstructure.get('widest_symbol') or 'n/a'}**"
+                )
+            if tick_quality:
+                lines.append(f"- Tick quality: **{tick_quality.get('status') or 'n/a'}**")
+                lines.append(
+                    f"- Healthy/stale/incomplete symbols: **{tick_quality.get('healthy_symbols', 0)} / {tick_quality.get('stale_symbols', 0)} / {tick_quality.get('incomplete_symbols', 0)}**"
+                )
+            lines.append("")
+
+        if pnl_explain:
+            lines.append("### PnL Explain")
+            lines.append(
+                f"- Realized: **{_fmt_money(pnl_explain.get('realized'))}** | "
+                f"Unrealized: **{_fmt_money(pnl_explain.get('unrealized'))}** | "
+                f"Swap: **{_fmt_money(pnl_explain.get('swap'))}**"
+            )
+            lines.append(
+                f"- Commission/fee: **{_fmt_money(pnl_explain.get('commission'))} / {_fmt_money(pnl_explain.get('fee'))}** | "
+                f"Estimated spread cost: **{_fmt_money(pnl_explain.get('estimated_spread_cost'))}**"
+            )
             lines.append("")
 
         snapshot_limits = snapshot_payload.get("limits", {}) or {}

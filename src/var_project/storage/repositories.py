@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from var_project.alerts.engine import AlertEvent
 from var_project.storage.mappers import (
@@ -286,12 +286,18 @@ class StorageWriteRepository:
     ) -> int:
         payload = jsonable(dict(decision))
         created_at = coerce_datetime(payload.get("created_at") or payload.get("time_utc")) or utcnow()
+        requested_exposure_change = float(
+            payload.get("requested_exposure_change", payload.get("requested_delta_position_eur", 0.0))
+        )
+        approved_exposure_change = float(
+            payload.get("approved_exposure_change", payload.get("approved_delta_position_eur", 0.0))
+        )
         with self.session_factory() as session:
             record = DecisionRecord(
                 portfolio_id=portfolio_id,
                 symbol=str(payload.get("symbol") or ""),
-                requested_delta_position_eur=float(payload.get("requested_delta_position_eur", 0.0)),
-                approved_delta_position_eur=float(payload.get("approved_delta_position_eur", 0.0)),
+                requested_delta_position_eur=requested_exposure_change,
+                approved_delta_position_eur=approved_exposure_change,
                 decision=str(payload.get("decision") or "REJECT"),
                 model_used=str(payload.get("model_used") or "hist"),
                 payload_json=payload,
@@ -338,14 +344,23 @@ class StorageWriteRepository:
         execution = jsonable(dict(payload))
         created_at = coerce_datetime(execution.get("created_at") or execution.get("time_utc")) or utcnow()
         mt5_result = dict(execution.get("mt5_result") or {})
+        requested_exposure_change = float(
+            execution.get("requested_exposure_change", execution.get("requested_delta_position_eur", 0.0))
+        )
+        approved_exposure_change = float(
+            execution.get("approved_exposure_change", execution.get("approved_delta_position_eur", 0.0))
+        )
+        executed_exposure_change = float(
+            execution.get("executed_exposure_change", execution.get("executed_delta_position_eur", 0.0))
+        )
         with self.session_factory() as session:
             record = ExecutionRecord(
                 portfolio_id=portfolio_id,
                 decision_id=decision_id,
                 symbol=str(execution.get("symbol") or ""),
-                requested_delta_position_eur=float(execution.get("requested_delta_position_eur", 0.0)),
-                approved_delta_position_eur=float(execution.get("approved_delta_position_eur", 0.0)),
-                executed_delta_position_eur=float(execution.get("executed_delta_position_eur", 0.0)),
+                requested_delta_position_eur=requested_exposure_change,
+                approved_delta_position_eur=approved_exposure_change,
+                executed_delta_position_eur=executed_exposure_change,
                 requested_volume_lots=None if execution.get("requested_volume_lots") is None else float(execution.get("requested_volume_lots")),
                 approved_volume_lots=None if execution.get("approved_volume_lots") is None else float(execution.get("approved_volume_lots")),
                 submitted_volume_lots=None if execution.get("submitted_volume_lots") is None else float(execution.get("submitted_volume_lots")),
@@ -428,6 +443,8 @@ class StorageWriteRepository:
         reason: str = "",
         operator_note: str = "",
         mismatch_status: str | None = None,
+        incident_status: str | None = None,
+        resolution_note: str = "",
         payload: Mapping[str, Any] | None = None,
     ) -> int:
         normalized_symbol = str(symbol or "").upper().strip()
@@ -447,13 +464,23 @@ class StorageWriteRepository:
                 record = ReconciliationAcknowledgementRecord(
                     portfolio_id=portfolio_id,
                     symbol=normalized_symbol,
+                    acknowledged_at=utcnow(),
                 )
                 session.add(record)
             record.reason = reason or None
             record.operator_note = operator_note or None
             record.mismatch_status = None if mismatch_status is None else str(mismatch_status)
+            normalized_incident_status = None if incident_status is None else str(incident_status)
+            record.incident_status = normalized_incident_status
+            if normalized_incident_status == "resolved":
+                record.resolution_note = resolution_note or None
+                record.resolved_at = utcnow()
+            else:
+                record.resolution_note = resolution_note or None
+                record.resolved_at = None
             record.payload_json = jsonable(dict(payload or {}))
-            record.acknowledged_at = utcnow()
+            if record.acknowledged_at is None:
+                record.acknowledged_at = utcnow()
             record.updated_at = utcnow()
             session.commit()
             session.refresh(record)
@@ -571,16 +598,25 @@ class StorageWriteRepository:
         source: str = "mt5",
     ) -> int:
         upserted = 0
+        payloads = [jsonable(dict(item)) for item in records]
+        tickets = [int(item["ticket"]) for item in payloads if item.get("ticket") is not None]
         with self.session_factory() as session:
-            for item in records:
-                payload = jsonable(dict(item))
+            existing = {
+                int(record.ticket): record
+                for record in session.scalars(
+                    select(MT5OrderHistoryRecord).where(MT5OrderHistoryRecord.ticket.in_(tickets))
+                ).all()
+            } if tickets else {}
+            for payload in payloads:
                 ticket = payload.get("ticket")
                 if ticket is None:
                     continue
-                record = session.scalar(select(MT5OrderHistoryRecord).where(MT5OrderHistoryRecord.ticket == int(ticket)))
+                normalized_ticket = int(ticket)
+                record = existing.get(normalized_ticket)
                 if record is None:
-                    record = MT5OrderHistoryRecord(ticket=int(ticket))
+                    record = MT5OrderHistoryRecord(ticket=normalized_ticket)
                     session.add(record)
+                    existing[normalized_ticket] = record
                 record.sync_run_id = sync_run_id
                 record.portfolio_id = portfolio_id
                 record.position_id = None if payload.get("position_id") is None else int(payload.get("position_id"))
@@ -613,16 +649,25 @@ class StorageWriteRepository:
         source: str = "mt5",
     ) -> int:
         upserted = 0
+        payloads = [jsonable(dict(item)) for item in records]
+        tickets = [int(item["ticket"]) for item in payloads if item.get("ticket") is not None]
         with self.session_factory() as session:
-            for item in records:
-                payload = jsonable(dict(item))
+            existing = {
+                int(record.ticket): record
+                for record in session.scalars(
+                    select(MT5DealHistoryRecord).where(MT5DealHistoryRecord.ticket.in_(tickets))
+                ).all()
+            } if tickets else {}
+            for payload in payloads:
                 ticket = payload.get("ticket")
                 if ticket is None:
                     continue
-                record = session.scalar(select(MT5DealHistoryRecord).where(MT5DealHistoryRecord.ticket == int(ticket)))
+                normalized_ticket = int(ticket)
+                record = existing.get(normalized_ticket)
                 if record is None:
-                    record = MT5DealHistoryRecord(ticket=int(ticket))
+                    record = MT5DealHistoryRecord(ticket=normalized_ticket)
                     session.add(record)
+                    existing[normalized_ticket] = record
                 record.sync_run_id = sync_run_id
                 record.portfolio_id = portfolio_id
                 record.order_ticket = None if payload.get("order_ticket") is None else int(payload.get("order_ticket"))
@@ -654,6 +699,16 @@ class StorageReadRepository:
         self.session_factory = session_factory
 
     def latest_snapshot(self, *, source: str | None = None, portfolio_slug: str | None = None) -> dict[str, Any] | None:
+        records = self.recent_snapshots(limit=1, source=source, portfolio_slug=portfolio_slug)
+        return records[0] if records else None
+
+    def recent_snapshots(
+        self,
+        *,
+        limit: int = 25,
+        source: str | None = None,
+        portfolio_slug: str | None = None,
+    ) -> list[dict[str, Any]]:
         with self.session_factory() as session:
             stmt = select(SnapshotRecord)
             if source:
@@ -661,10 +716,10 @@ class StorageReadRepository:
             if portfolio_slug:
                 portfolio_id = self._portfolio_id(session, portfolio_slug)
                 if portfolio_id is None:
-                    return None
+                    return []
                 stmt = stmt.where(SnapshotRecord.portfolio_id == portfolio_id)
-            record = session.scalars(stmt.order_by(SnapshotRecord.created_at.desc(), SnapshotRecord.id.desc())).first()
-            return None if record is None else snapshot_to_dict(record)
+            records = session.scalars(stmt.order_by(SnapshotRecord.created_at.desc(), SnapshotRecord.id.desc()).limit(int(limit))).all()
+            return [snapshot_to_dict(record) for record in records]
 
     def latest_backtest_run(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
         with self.session_factory() as session:
@@ -804,7 +859,15 @@ class StorageReadRepository:
             records = session.scalars(stmt.order_by(AuditRecord.created_at.desc(), AuditRecord.id.desc()).limit(int(limit))).all()
             return [audit_to_dict(record) for record in records]
 
-    def reconciliation_acknowledgements(self, *, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
+    def reconciliation_acknowledgements(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        symbol: str | None = None,
+        incident_status: str | None = None,
+        include_resolved: bool = True,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
         with self.session_factory() as session:
             stmt = select(ReconciliationAcknowledgementRecord)
             if portfolio_slug:
@@ -812,12 +875,24 @@ class StorageReadRepository:
                 if portfolio_id is None:
                     return []
                 stmt = stmt.where(ReconciliationAcknowledgementRecord.portfolio_id == portfolio_id)
-            records = session.scalars(
-                stmt.order_by(
-                    ReconciliationAcknowledgementRecord.acknowledged_at.desc(),
-                    ReconciliationAcknowledgementRecord.id.desc(),
+            if symbol:
+                stmt = stmt.where(ReconciliationAcknowledgementRecord.symbol == str(symbol).upper())
+            if incident_status:
+                stmt = stmt.where(ReconciliationAcknowledgementRecord.incident_status == str(incident_status).lower())
+            if not include_resolved:
+                stmt = stmt.where(
+                    or_(
+                        ReconciliationAcknowledgementRecord.incident_status.is_(None),
+                        ReconciliationAcknowledgementRecord.incident_status != "resolved",
+                    )
                 )
-            ).all()
+            stmt = stmt.order_by(
+                ReconciliationAcknowledgementRecord.acknowledged_at.desc(),
+                ReconciliationAcknowledgementRecord.id.desc(),
+            )
+            if limit is not None:
+                stmt = stmt.limit(int(limit))
+            records = session.scalars(stmt).all()
             return [reconciliation_acknowledgement_to_dict(record) for record in records]
 
     def list_portfolios(self) -> list[dict[str, Any]]:

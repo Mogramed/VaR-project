@@ -9,7 +9,7 @@ export default async function DeskStressPage({
   const query = await searchParams;
   const portfolioSlug =
     typeof query.portfolio === "string" ? query.portfolio : undefined;
-  const resolvedPortfolio = portfolioSlug ?? (await api.health()).portfolio_slug;
+  const resolvedPortfolio = portfolioSlug ?? (await api.safeHealth()).portfolio_slug;
 
   return (
     <StressLiveSurface

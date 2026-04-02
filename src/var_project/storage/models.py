@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, UniqueConstraint
+from sqlalchemy import BIGINT, JSON, Boolean, DateTime, Float, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from var_project.storage.serialization import utcnow
@@ -146,12 +146,12 @@ class ExecutionRecord(Base):
     remaining_volume_lots: Mapped[float | None] = mapped_column(Float, nullable=True)
     fill_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
     broker_status: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
-    position_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    position_id: Mapped[int | None] = mapped_column(BIGINT, index=True, nullable=True)
     slippage_points: Mapped[float | None] = mapped_column(Float, nullable=True)
     reconciliation_status: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
     status: Mapped[str] = mapped_column(String(24), index=True)
-    mt5_order_ticket: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
-    mt5_deal_ticket: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    mt5_order_ticket: Mapped[int | None] = mapped_column(BIGINT, index=True, nullable=True)
+    mt5_deal_ticket: Mapped[int | None] = mapped_column(BIGINT, index=True, nullable=True)
     payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
@@ -163,9 +163,9 @@ class ExecutionFillRecord(Base):
     execution_result_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     portfolio_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     symbol: Mapped[str] = mapped_column(String(32), index=True)
-    order_ticket: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
-    deal_ticket: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
-    position_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    order_ticket: Mapped[int | None] = mapped_column(BIGINT, index=True, nullable=True)
+    deal_ticket: Mapped[int | None] = mapped_column(BIGINT, index=True, nullable=True)
+    position_id: Mapped[int | None] = mapped_column(BIGINT, index=True, nullable=True)
     side: Mapped[str | None] = mapped_column(String(16), nullable=True)
     entry: Mapped[str | None] = mapped_column(String(32), nullable=True)
     volume_lots: Mapped[float] = mapped_column(Float)
@@ -195,8 +195,11 @@ class ReconciliationAcknowledgementRecord(Base):
     reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
     operator_note: Mapped[str | None] = mapped_column(String(512), nullable=True)
     mismatch_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    incident_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    resolution_note: Mapped[str | None] = mapped_column(String(512), nullable=True)
     payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     acknowledged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
@@ -277,8 +280,8 @@ class MT5OrderHistoryRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     sync_run_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     portfolio_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
-    ticket: Mapped[int] = mapped_column(Integer, unique=True, index=True)
-    position_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    ticket: Mapped[int] = mapped_column(BIGINT, unique=True, index=True)
+    position_id: Mapped[int | None] = mapped_column(BIGINT, index=True, nullable=True)
     symbol: Mapped[str] = mapped_column(String(64), index=True)
     side: Mapped[str | None] = mapped_column(String(16), nullable=True)
     order_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -303,9 +306,9 @@ class MT5DealHistoryRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     sync_run_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     portfolio_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
-    ticket: Mapped[int] = mapped_column(Integer, unique=True, index=True)
-    order_ticket: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
-    position_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    ticket: Mapped[int] = mapped_column(BIGINT, unique=True, index=True)
+    order_ticket: Mapped[int | None] = mapped_column(BIGINT, index=True, nullable=True)
+    position_id: Mapped[int | None] = mapped_column(BIGINT, index=True, nullable=True)
     symbol: Mapped[str] = mapped_column(String(64), index=True)
     side: Mapped[str | None] = mapped_column(String(16), nullable=True)
     entry: Mapped[str | None] = mapped_column(String(32), nullable=True)

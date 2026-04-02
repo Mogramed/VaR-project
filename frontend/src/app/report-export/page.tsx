@@ -2,7 +2,7 @@ import { ChartSurface } from "@/components/charts/chart-surface";
 import { ReportDocument } from "@/components/reports/report-document";
 import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
-import { makeBacktestOption, makeGroupedBarOption, makeLineOption } from "@/lib/chart-options";
+import { CHART_PALETTE, makeBacktestOption, makeGroupedBarOption, makeLineOption } from "@/lib/chart-options";
 import { loadDeskReportViewModel } from "@/lib/report-view-model";
 import { formatCurrency, formatTimestamp } from "@/lib/utils";
 
@@ -21,6 +21,11 @@ export default async function ReportExportPage({
     report.meta.preferredSnapshotSource === "mt5_live_bridge"
       ? "mt5 live snapshot"
       : "historical snapshot";
+  const reportDate = new Date().toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  });
 
   return (
     <main
@@ -28,19 +33,24 @@ export default async function ReportExportPage({
       className="pdf-report min-h-screen bg-[#090a0d] px-8 py-8 text-[var(--color-text)]"
     >
       <div className="mx-auto flex max-w-[1120px] flex-col gap-8">
-        <section className="surface-strong rounded-[2rem] border border-white/10 px-8 py-10">
+        {/* ─── Cover Page ─── */}
+        <section className="pdf-page-break-after surface-strong rounded-[2rem] border border-white/10 px-10 py-12">
           <div className="flex flex-wrap items-start justify-between gap-6">
             <div className="max-w-3xl">
-              <div className="mono text-[11px] uppercase tracking-[0.3em] text-[var(--color-accent)]">
+              <div className="h-[2px] w-16 rounded-full bg-[var(--color-accent)]" />
+              <div className="mt-5 mono text-[11px] uppercase tracking-[0.3em] text-[var(--color-accent)]">
                 FX Risk Desk Platform
               </div>
               <h1 className="mt-5 text-balance text-5xl font-semibold tracking-[-0.06em] text-white">
-                Daily FX risk report
+                Daily FX Risk Report
               </h1>
+              <p className="mt-2 text-lg font-medium text-white/70">
+                {reportDate}
+              </p>
               <p className="mt-4 max-w-2xl text-base leading-8 text-[var(--color-text-soft)]">
-                Portfolio {report.resolvedPortfolio}. This downloadable report packages
-                the current risk posture, capital usage, governance flow and the latest
-                written desk narrative into a standalone PDF.
+                Portfolio <span className="font-semibold text-white">{report.resolvedPortfolio}</span>.
+                This report packages the current risk posture, capital usage, governance
+                flow and the latest written desk narrative into a standalone document.
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
                 <StatusBadge label={report.selectedModel.toUpperCase()} tone="accent" />
@@ -64,8 +74,50 @@ export default async function ReportExportPage({
               ))}
             </div>
           </div>
+
+          {/* Confidential notice */}
+          <div className="mt-10 flex items-center gap-3 border-t border-white/8 pt-5">
+            <span className="mono text-[9px] uppercase tracking-[0.25em] text-[var(--color-text-muted)]">
+              Confidential
+            </span>
+            <span className="h-px flex-1 bg-white/6" />
+            <span className="text-[10px] text-[var(--color-text-muted)]">
+              Internal use only — Do not distribute
+            </span>
+          </div>
         </section>
 
+        {/* ─── Table of Contents ─── */}
+        <section className="pdf-avoid-break surface rounded-[1.8rem] p-6">
+          <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
+            Contents
+          </div>
+          <div className="mt-4 grid gap-1.5 text-sm">
+            {[
+              { num: "01", title: "Executive Summary" },
+              { num: "02", title: "Analytics" },
+              { num: "03", title: "Capital" },
+              { num: "04", title: "Governance" },
+              { num: "05", title: "Desk Narrative" },
+              { num: "06", title: "Audit Trail" },
+            ].map((s) => (
+              <div key={s.num} className="flex items-center gap-3 py-1.5">
+                <span className="mono w-6 text-[12px] font-bold text-[var(--color-accent)]">{s.num}</span>
+                <span className="text-[var(--color-text-soft)]">{s.title}</span>
+                <span className="h-px flex-1 border-b border-dotted border-white/10" />
+              </div>
+            ))}
+            {report.headings.filter((h) => h.level <= 2).slice(0, 8).map((h) => (
+              <div key={h.id} className="flex items-center gap-3 py-1 pl-9">
+                <span className="text-[12px] text-[var(--color-text-muted)]">{h.text}</span>
+                <span className="h-px flex-1 border-b border-dotted border-white/8" />
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* ─── 01 Executive Summary ─── */}
+        <SectionDivider number="01" title="Executive Summary" />
         <section className="pdf-avoid-break grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
           <div className="surface rounded-[1.8rem] p-6">
             <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
@@ -97,6 +149,8 @@ export default async function ReportExportPage({
           </div>
         </section>
 
+        {/* ─── 02 Analytics ─── */}
+        <SectionDivider number="02" title="Analytics" />
         <section className="pdf-avoid-break grid gap-6 lg:grid-cols-2">
           <ChartSurface
             option={makeBacktestOption(report.derived.backtestSeries)}
@@ -106,20 +160,24 @@ export default async function ReportExportPage({
             eyebrow="Analytics"
             title="Backtest trace"
             description="Portfolio PnL against the current VaR stack."
+            showDescription
             meta={`${report.derived.backtestSeries.length} rows`}
           />
           <ChartSurface
-            option={makeLineOption(report.capitalSeries, "#5fd4a6", { mode: "standard" })}
+            option={makeLineOption(report.capitalSeries, CHART_PALETTE.green, { mode: "standard" })}
             height={420}
             mode="standard"
             dataCount={report.capitalSeries.length}
             eyebrow="Capital"
             title="Capital usage trajectory"
             description="Consumed capital over the latest persisted snapshots."
+            showDescription
             meta={report.capital?.reference_model.toUpperCase() ?? "n/a"}
           />
         </section>
 
+        {/* ─── 03 Capital ─── */}
+        <SectionDivider number="03" title="Governance" />
         <ChartSurface
           option={makeGroupedBarOption(
             report.decisionSizeSeries.labels,
@@ -127,12 +185,12 @@ export default async function ReportExportPage({
               {
                 name: "Requested",
                 data: report.decisionSizeSeries.requested,
-                color: "#d89b49",
+                color: CHART_PALETTE.gold,
               },
               {
                 name: "Approved",
                 data: report.decisionSizeSeries.approved,
-                color: "#5fd4a6",
+                color: CHART_PALETTE.green,
               },
             ],
             { mode: "comparison" },
@@ -141,10 +199,13 @@ export default async function ReportExportPage({
           mode="comparison"
           dataCount={report.decisionSizeSeries.labels.length}
           eyebrow="Decision continuity"
-          title="Requested versus approved notional"
+          title="Requested versus approved exposure"
           description="Advisory friction remains visible inside the downloadable report."
+          showDescription
         />
 
+        {/* ─── 04 Desk Narrative ─── */}
+        <SectionDivider number="04" title="Desk Narrative" />
         {report.report ? (
           <ReportDocument
             content={report.normalizedReportContent}
@@ -157,6 +218,8 @@ export default async function ReportExportPage({
           </section>
         )}
 
+        {/* ─── 05 Audit Trail ─── */}
+        <SectionDivider number="05" title="Audit Trail" />
         <section className="pdf-avoid-break grid gap-6 lg:grid-cols-2">
           <StaticTableCard
             title="Recent decisions"
@@ -184,6 +247,18 @@ export default async function ReportExportPage({
   );
 }
 
+/* ─── Local components ─── */
+
+function SectionDivider({ number, title }: { number: string; title: string }) {
+  return (
+    <div className="pdf-avoid-break flex items-center gap-4 pb-1 pt-4">
+      <span className="mono text-[14px] font-bold text-[var(--color-accent)]">{number}</span>
+      <div className="h-[1px] flex-1 bg-gradient-to-r from-[var(--color-accent)]/30 to-transparent" />
+      <span className="text-[11px] uppercase tracking-[0.2em] text-[var(--color-text-muted)]">{title}</span>
+    </div>
+  );
+}
+
 function ReportMetaRow({
   label,
   value,
@@ -203,6 +278,10 @@ function ReportMetaRow({
   );
 }
 
+function isNumericCell(cell: string): boolean {
+  return /^[\d€$£¥%,.\-+\s]+$/.test(cell.trim());
+}
+
 function StaticTableCard({
   title,
   headers,
@@ -217,9 +296,9 @@ function StaticTableCard({
       <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
         {title}
       </div>
-      <div className="mt-5 overflow-hidden rounded-[1.3rem] border border-white/8">
+      <div className="mt-5 overflow-hidden rounded-[1.3rem] border border-white/8 border-l-[2px] border-l-[var(--color-accent)]/30">
         <table className="min-w-full border-collapse">
-          <thead className="bg-white/[0.03]">
+          <thead className="bg-white/[0.04]">
             <tr>
               {headers.map((header) => (
                 <th
@@ -233,11 +312,16 @@ function StaticTableCard({
           </thead>
           <tbody>
             {rows.map((row, rowIndex) => (
-              <tr key={`${title}-${rowIndex}`} className="border-b border-white/6 last:border-b-0">
+              <tr
+                key={`${title}-${rowIndex}`}
+                className={`border-b border-white/6 last:border-b-0 ${rowIndex % 2 === 1 ? "bg-white/[0.02]" : ""}`}
+              >
                 {row.map((cell, cellIndex) => (
                   <td
                     key={`${title}-${rowIndex}-${cellIndex}`}
-                    className="px-4 py-3 text-sm text-[var(--color-text-soft)]"
+                    className={`px-4 py-3 text-sm text-[var(--color-text-soft)] ${
+                      isNumericCell(cell) ? "mono text-right font-medium" : ""
+                    }`}
                   >
                     {cell}
                   </td>
