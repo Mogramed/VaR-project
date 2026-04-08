@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -13,6 +15,7 @@ from var_project.api.schemas import (
     MarketDataSyncRequest,
     MarketDataSyncStatusResponse,
     MT5AccountSnapshotResponse,
+    MT5AnalyticsSeriesResponse,
     MT5LiveEventResponse,
     MT5LiveStateResponse,
     MT5PendingOrderResponse,
@@ -24,9 +27,77 @@ from var_project.api.schemas import (
 )
 from var_project.api.service import DeskApiService
 from var_project.core.exceptions import MT5ConnectionError
+from var_project.execution.mt5_bridge import build_empty_live_state
 
 
 router = APIRouter(tags=["mt5"])
+MT5_LIVE_STREAM_WAIT_SECONDS = 5.0
+MT5_LIVE_STREAM_RETRY_MS = 5000
+
+
+def iter_mt5_live_stream(
+    service: DeskApiService,
+    *,
+    portfolio_slug: str | None = None,
+    detail_level: Literal["summary", "full", "inspector"] = "full",
+):
+    sequence = 0
+    portfolio = service.runtime._resolve_portfolio_context(portfolio_slug)
+    yield f"retry: {MT5_LIVE_STREAM_RETRY_MS}\n\n"
+    while True:
+        try:
+            try:
+                events = service.mt5_live_events(
+                    portfolio_slug=portfolio_slug,
+                    after=sequence,
+                    limit=100,
+                    wait_seconds=MT5_LIVE_STREAM_WAIT_SECONDS,
+                    detail_level=detail_level,
+                )
+            except TypeError as exc:
+                if "detail_level" not in str(exc):
+                    raise
+                events = service.mt5_live_events(
+                    portfolio_slug=portfolio_slug,
+                    after=sequence,
+                    limit=100,
+                    wait_seconds=MT5_LIVE_STREAM_WAIT_SECONDS,
+                )
+        except Exception as exc:
+            sequence += 1
+            degraded_state = build_empty_live_state(
+                config=service.runtime.mt5_config,
+                seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
+                status="degraded",
+                connected=False,
+                degraded=True,
+                stale=True,
+                last_error=str(exc),
+            )
+            degraded_state["portfolio_slug"] = portfolio["slug"]
+            degraded_state["portfolio_mode"] = portfolio.get("mode")
+            degraded_state["generated_at"] = datetime.now(timezone.utc).isoformat()
+            payload = {
+                "sequence": sequence,
+                "kind": "stream_error",
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "change_summary": {},
+                "state": degraded_state,
+            }
+            yield (
+                f"id: {sequence}\n"
+                f"data: {json.dumps(payload)}\n\n"
+            )
+            continue
+        if not events:
+            yield ": keep-alive\n\n"
+            continue
+        for event in events:
+            sequence = max(sequence, int(event.get("sequence") or 0))
+            yield (
+                f"id: {sequence}\n"
+                f"data: {json.dumps(event)}\n\n"
+            )
 
 
 @router.get("/mt5/status", response_model=MT5TerminalStatusResponse)
@@ -74,10 +145,36 @@ def mt5_orders(
 @router.get("/mt5/live/state", response_model=MT5LiveStateResponse)
 def mt5_live_state(
     portfolio_slug: str | None = Query(default=None),
+    detail_level: Literal["summary", "full", "inspector"] = Query(default="full"),
     service: DeskApiService = Depends(get_service),
 ) -> MT5LiveStateResponse:
-    payload = service.mt5_live_state(portfolio_slug=portfolio_slug)
+    try:
+        payload = service.mt5_live_state(portfolio_slug=portfolio_slug, detail_level=detail_level)
+    except MT5ConnectionError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return MT5LiveStateResponse.model_validate(payload)
+
+
+@router.get("/mt5/analytics/series", response_model=MT5AnalyticsSeriesResponse)
+def mt5_analytics_series(
+    portfolio_slug: str | None = Query(default=None),
+    window_minutes: int = Query(default=240, ge=15, le=10080),
+    max_points: int = Query(default=300, ge=50, le=2000),
+    service: DeskApiService = Depends(get_service),
+) -> MT5AnalyticsSeriesResponse:
+    try:
+        payload = service.mt5_analytics_series(
+            portfolio_slug=portfolio_slug,
+            window_minutes=window_minutes,
+            max_points=max_points,
+        )
+    except MT5ConnectionError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MT5AnalyticsSeriesResponse.model_validate(payload)
 
 
 @router.get("/mt5/live/events", response_model=list[MT5LiveEventResponse])
@@ -86,48 +183,41 @@ def mt5_live_events(
     after: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
     wait_seconds: float = Query(default=15.0, ge=0.0, le=60.0),
+    detail_level: Literal["summary", "full", "inspector"] = Query(default="full"),
     service: DeskApiService = Depends(get_service),
 ) -> list[MT5LiveEventResponse]:
-    payload = service.mt5_live_events(
-        portfolio_slug=portfolio_slug,
-        after=after,
-        limit=limit,
-        wait_seconds=wait_seconds,
-    )
+    try:
+        payload = service.mt5_live_events(
+            portfolio_slug=portfolio_slug,
+            after=after,
+            limit=limit,
+            wait_seconds=wait_seconds,
+            detail_level=detail_level,
+        )
+    except MT5ConnectionError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return [MT5LiveEventResponse.model_validate(item) for item in payload]
 
 
 @router.get("/mt5/live/stream")
 def mt5_live_stream(
     portfolio_slug: str | None = Query(default=None),
+    detail_level: Literal["summary", "full", "inspector"] = Query(default="full"),
     service: DeskApiService = Depends(get_service),
 ) -> StreamingResponse:
-    def event_iter():
-        sequence = 0
-        while True:
-            events = service.mt5_live_events(
-                portfolio_slug=portfolio_slug,
-                after=sequence,
-                limit=100,
-                wait_seconds=15.0,
-            )
-            if not events:
-                yield ": keep-alive\n\n"
-                continue
-            for event in events:
-                sequence = max(sequence, int(event.get("sequence") or 0))
-                yield (
-                    f"id: {sequence}\n"
-                    f"event: {event.get('kind') or 'snapshot'}\n"
-                    f"data: {json.dumps(event)}\n\n"
-                )
-
+    try:
+        service.runtime._resolve_portfolio_context(portfolio_slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return StreamingResponse(
-        event_iter(),
+        iter_mt5_live_stream(service, portfolio_slug=portfolio_slug, detail_level=detail_level),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
         },
     )
 

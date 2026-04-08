@@ -26,18 +26,16 @@ export default async function DeskExecutionPage({
   const health = await api.safeHealth();
   const resolvedPortfolio = portfolioSlug ?? health.portfolio_slug;
 
-  const [liveState, recentExecutions, recentFills] = await Promise.all([
-    api.mt5LiveState(resolvedPortfolio).catch(() => null),
+  const [recentExecutions, recentFills] = await Promise.all([
     api.recentExecutionResults(resolvedPortfolio, 12).catch(() => []),
     api.recentExecutionFills(resolvedPortfolio, 12).catch(() => []),
   ]);
-  const status = liveState?.terminal_status ?? (await api.mt5Status());
+  const status = await api.mt5Status();
 
   return (
     <ExecutionLiveSurface
       key={resolvedPortfolio}
       portfolioSlug={resolvedPortfolio}
-      initialLiveState={liveState}
       initialTerminalStatus={status}
       initialExecutions={recentExecutions}
       initialFills={recentFills}

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import pandas as pd
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 
 from var_project.alerts.engine import AlertEvent
 from var_project.storage.mappers import (
@@ -22,6 +22,7 @@ from var_project.storage.mappers import (
     market_data_sync_to_dict,
     mt5_deal_history_to_dict,
     mt5_order_history_to_dict,
+    operator_run_to_dict,
     portfolio_to_dict,
     reconciliation_acknowledgement_to_dict,
     snapshot_to_dict,
@@ -41,6 +42,7 @@ from var_project.storage.models import (
     MT5OrderHistoryRecord,
     MarketBarRecord,
     MarketDataSyncRecord,
+    OperatorRunRecord,
     PortfolioRecord,
     ReconciliationAcknowledgementRecord,
     SnapshotRecord,
@@ -411,6 +413,64 @@ class StorageWriteRepository:
             session.commit()
             return int(record.id)
 
+    def update_execution_reconciliation(
+        self,
+        execution_id: int,
+        *,
+        reconciliation_status: str | None = None,
+        filled_volume_lots: float | None = None,
+        remaining_volume_lots: float | None = None,
+        fill_ratio: float | None = None,
+        broker_status: str | None = None,
+        position_id: int | None = None,
+        mt5_order_ticket: int | None = None,
+        mt5_deal_ticket: int | None = None,
+    ) -> dict[str, Any] | None:
+        with self.session_factory() as session:
+            record = session.get(ExecutionRecord, int(execution_id))
+            if record is None:
+                return None
+
+            if reconciliation_status is not None:
+                record.reconciliation_status = str(reconciliation_status)
+            if filled_volume_lots is not None:
+                record.filled_volume_lots = float(filled_volume_lots)
+            if remaining_volume_lots is not None:
+                record.remaining_volume_lots = float(remaining_volume_lots)
+            if fill_ratio is not None:
+                record.fill_ratio = float(fill_ratio)
+            if broker_status is not None:
+                record.broker_status = str(broker_status)
+            if position_id is not None:
+                record.position_id = int(position_id)
+            if mt5_order_ticket is not None:
+                record.mt5_order_ticket = int(mt5_order_ticket)
+            if mt5_deal_ticket is not None:
+                record.mt5_deal_ticket = int(mt5_deal_ticket)
+
+            payload = dict(record.payload_json or {})
+            if reconciliation_status is not None:
+                payload["reconciliation_status"] = str(reconciliation_status)
+            if filled_volume_lots is not None:
+                payload["filled_volume_lots"] = float(filled_volume_lots)
+            if remaining_volume_lots is not None:
+                payload["remaining_volume_lots"] = float(remaining_volume_lots)
+            if fill_ratio is not None:
+                payload["fill_ratio"] = float(fill_ratio)
+            if broker_status is not None:
+                payload["broker_status"] = str(broker_status)
+            if position_id is not None:
+                payload["position_id"] = int(position_id)
+            if mt5_order_ticket is not None:
+                payload["mt5_order_ticket"] = int(mt5_order_ticket)
+            if mt5_deal_ticket is not None:
+                payload["mt5_deal_ticket"] = int(mt5_deal_ticket)
+            record.payload_json = jsonable(payload)
+
+            session.commit()
+            session.refresh(record)
+            return execution_to_dict(record)
+
     def record_audit_event(
         self,
         *,
@@ -543,6 +603,151 @@ class StorageWriteRepository:
             session.commit()
             session.refresh(record)
             return int(record.id)
+
+    def update_market_data_sync(
+        self,
+        sync_run_id: int,
+        *,
+        status: str | None = None,
+        details: Mapping[str, Any] | None = None,
+        synced_at: Any | None = None,
+    ) -> dict[str, Any] | None:
+        with self.session_factory() as session:
+            record = session.get(MarketDataSyncRecord, int(sync_run_id))
+            if record is None:
+                return None
+            if status is not None:
+                record.status = str(status)
+            if details is not None:
+                record.details_json = jsonable(dict(details))
+            record.synced_at = coerce_datetime(synced_at) or utcnow()
+            session.commit()
+            session.refresh(record)
+            return market_data_sync_to_dict(record)
+
+    def create_operator_run(
+        self,
+        *,
+        portfolio_id: int | None,
+        portfolio_slug: str | None,
+        action: str,
+        request_id: str,
+        status: str,
+        stage: str,
+        request_payload: Mapping[str, Any] | None = None,
+        artifact_refs: Mapping[str, Any] | None = None,
+        result: Mapping[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        hint: str | None = None,
+        queue_task_id: str | None = None,
+        reused_run_id: int | None = None,
+        started_at: Any | None = None,
+        finished_at: Any | None = None,
+    ) -> int:
+        with self.session_factory() as session:
+            record = OperatorRunRecord(
+                portfolio_id=portfolio_id,
+                portfolio_slug=None if portfolio_slug is None else str(portfolio_slug),
+                action=str(action),
+                request_id=str(request_id),
+                status=str(status),
+                stage=str(stage),
+                request_payload_json=jsonable(dict(request_payload or {})),
+                artifact_refs_json=jsonable(dict(artifact_refs or {})),
+                result_json=jsonable(dict(result or {})) if result is not None else None,
+                error_code=None if error_code is None else str(error_code),
+                error_message=None if error_message is None else str(error_message),
+                hint=None if hint is None else str(hint),
+                queue_task_id=None if queue_task_id is None else str(queue_task_id),
+                reused_run_id=None if reused_run_id is None else int(reused_run_id),
+                started_at=coerce_datetime(started_at),
+                finished_at=coerce_datetime(finished_at),
+            )
+            session.add(record)
+            session.commit()
+            session.refresh(record)
+            return int(record.id)
+
+    def update_operator_run(
+        self,
+        run_id: int,
+        *,
+        status: str | None = None,
+        stage: str | None = None,
+        artifact_refs: Mapping[str, Any] | None = None,
+        result: Mapping[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        hint: str | None = None,
+        queue_task_id: str | None = None,
+        reused_run_id: int | None = None,
+        started_at: Any | None = None,
+        finished_at: Any | None = None,
+    ) -> dict[str, Any] | None:
+        with self.session_factory() as session:
+            record = session.get(OperatorRunRecord, int(run_id))
+            if record is None:
+                return None
+            if status is not None:
+                record.status = str(status)
+            if stage is not None:
+                record.stage = str(stage)
+            if artifact_refs is not None:
+                merged_artifacts = dict(record.artifact_refs_json or {})
+                merged_artifacts.update(dict(artifact_refs))
+                record.artifact_refs_json = jsonable(merged_artifacts)
+            if result is not None:
+                merged_result = dict(record.result_json or {})
+                merged_result.update(dict(result))
+                record.result_json = jsonable(merged_result)
+            if error_code is not None:
+                record.error_code = str(error_code)
+            if error_message is not None:
+                record.error_message = str(error_message)
+            if hint is not None:
+                record.hint = str(hint)
+            if queue_task_id is not None:
+                record.queue_task_id = str(queue_task_id)
+            if reused_run_id is not None:
+                record.reused_run_id = int(reused_run_id)
+            if started_at is not None:
+                record.started_at = coerce_datetime(started_at)
+            if finished_at is not None:
+                record.finished_at = coerce_datetime(finished_at)
+            record.updated_at = utcnow()
+            session.commit()
+            session.refresh(record)
+            return operator_run_to_dict(record)
+
+    def claim_operator_run(
+        self,
+        run_id: int,
+        *,
+        stage: str = "starting",
+        started_at: Any | None = None,
+    ) -> dict[str, Any] | None:
+        normalized_started_at = coerce_datetime(started_at) or utcnow()
+        with self.session_factory() as session:
+            result = session.execute(
+                update(OperatorRunRecord)
+                .where(
+                    OperatorRunRecord.id == int(run_id),
+                    OperatorRunRecord.status == "queued",
+                )
+                .values(
+                    status="running",
+                    stage=str(stage),
+                    started_at=normalized_started_at,
+                    updated_at=utcnow(),
+                )
+            )
+            if int(result.rowcount or 0) <= 0:
+                session.rollback()
+                return None
+            session.commit()
+            record = session.get(OperatorRunRecord, int(run_id))
+            return None if record is None else operator_run_to_dict(record)
 
     def sync_market_bars(
         self,
@@ -858,6 +1063,53 @@ class StorageReadRepository:
                 stmt = stmt.where(AuditRecord.portfolio_id == portfolio_id)
             records = session.scalars(stmt.order_by(AuditRecord.created_at.desc(), AuditRecord.id.desc()).limit(int(limit))).all()
             return [audit_to_dict(record) for record in records]
+
+    def operator_run_by_id(self, run_id: int) -> dict[str, Any] | None:
+        with self.session_factory() as session:
+            record = session.get(OperatorRunRecord, int(run_id))
+            return None if record is None else operator_run_to_dict(record)
+
+    def list_operator_runs(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        action: str | None = None,
+        statuses: Iterable[str] | None = None,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        with self.session_factory() as session:
+            stmt = select(OperatorRunRecord)
+            if portfolio_slug:
+                stmt = stmt.where(OperatorRunRecord.portfolio_slug == str(portfolio_slug))
+            if action:
+                stmt = stmt.where(OperatorRunRecord.action == str(action))
+            normalized_statuses = [str(item) for item in (statuses or []) if str(item).strip()]
+            if normalized_statuses:
+                stmt = stmt.where(OperatorRunRecord.status.in_(normalized_statuses))
+            stmt = stmt.order_by(OperatorRunRecord.created_at.desc(), OperatorRunRecord.id.desc()).limit(int(limit))
+            records = session.scalars(stmt).all()
+            return [operator_run_to_dict(record) for record in records]
+
+    def latest_active_operator_run(
+        self,
+        *,
+        portfolio_slug: str,
+        action: str,
+        request_payload: Mapping[str, Any] | None = None,
+        statuses: Iterable[str] | None = None,
+    ) -> dict[str, Any] | None:
+        normalized_payload = jsonable(dict(request_payload or {}))
+        candidate_statuses = [str(item) for item in (statuses or ("queued", "running")) if str(item).strip()]
+        records = self.list_operator_runs(
+            portfolio_slug=portfolio_slug,
+            action=action,
+            statuses=candidate_statuses,
+            limit=20,
+        )
+        for record in records:
+            if jsonable(dict(record.get("request_payload") or {})) == normalized_payload:
+                return record
+        return None
 
     def reconciliation_acknowledgements(
         self,

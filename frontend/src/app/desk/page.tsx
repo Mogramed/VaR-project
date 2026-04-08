@@ -13,14 +13,13 @@ export default async function DeskOverviewPage({
   const portfolioSlug =
     typeof query.portfolio === "string" ? query.portfolio : undefined;
 
-  const [health, alerts, capital, comparison, snapshot] = await Promise.all([
+  const [health, activeAlerts, capital, comparison, snapshot] = await Promise.all([
     api.safeHealth(),
-    api.recentAlerts(12).catch(() => []),
+    api.activeAlerts(12, portfolioSlug).catch(() => []),
     api.latestCapital(portfolioSlug).catch(() => null),
     api.latestModelComparison(portfolioSlug).catch(() => null),
-    api.latestSnapshot(portfolioSlug).catch(() => null),
+    api.latestSnapshot(portfolioSlug, "auto").catch(() => null),
   ]);
-  const liveState = await api.mt5LiveState(portfolioSlug).catch(() => null);
 
   const deskSlug = health.desk_slug ?? "main";
   const desk = await api.deskOverview(deskSlug).catch(() => null);
@@ -36,7 +35,7 @@ export default async function DeskOverviewPage({
   const esValue = Number(
     payload.es?.[selectedModel] ?? Object.values(payload.es ?? {})[0] ?? 0,
   );
-  const alertCounts = buildAlertSeverityCounts(alerts);
+  const alertCounts = buildAlertSeverityCounts(activeAlerts);
 
   return (
     <div className="desk-page space-y-4">
@@ -48,9 +47,7 @@ export default async function DeskOverviewPage({
 
       <OverviewLiveDashboard
         deskSlug={deskSlug}
-        portfolioSlug={portfolioSlug ?? health.portfolio_slug}
         initialDesk={desk}
-        initialLiveState={liveState}
         initialCapital={capital}
         fallbackSelectedModel={selectedModel}
         fallbackVarValue={varValue}
@@ -58,6 +55,7 @@ export default async function DeskOverviewPage({
         alertCounts={alertCounts}
         championModel={comparison?.champion_model ?? null}
         snapshotCreatedAt={snapshot?.created_at ?? null}
+        snapshotSource={snapshot?.source ?? null}
       />
     </div>
   );

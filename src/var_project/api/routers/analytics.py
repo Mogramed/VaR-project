@@ -81,7 +81,10 @@ def latest_backtest_frame(
     portfolio_slug: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> BacktestFrameResponse:
-    frame = service.latest_backtest_frame(limit=limit, portfolio_slug=portfolio_slug)
+    try:
+        frame = service.latest_backtest_frame(limit=limit, portfolio_slug=portfolio_slug)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     if frame is None:
         raise HTTPException(status_code=404, detail="No backtest frame found.")
     return BacktestFrameResponse.model_validate(frame)
@@ -111,7 +114,7 @@ def latest_model_comparison(
 
 @router.get("/snapshots/attribution/latest", response_model=RiskAttributionResponse)
 def latest_risk_attribution(
-    source: str = Query(default="historical"),
+    source: str = Query(default="auto"),
     portfolio_slug: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> RiskAttributionResponse:
@@ -123,7 +126,7 @@ def latest_risk_attribution(
 
 @router.get("/snapshots/budget/latest", response_model=RiskBudgetResponse)
 def latest_risk_budget(
-    source: str = Query(default="historical"),
+    source: str = Query(default="auto"),
     portfolio_slug: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> RiskBudgetResponse:
@@ -154,6 +157,27 @@ def risk_contributions(
     if payload is None:
         raise HTTPException(status_code=404, detail="No risk contributions available.")
     return RiskAttributionResponse.model_validate(payload)
+
+
+@router.get("/snapshots/stress", response_model=StressReportResponse)
+def latest_stress_test(
+    portfolio_slug: str | None = Query(default=None),
+    alpha: float | None = Query(default=None, gt=0.0, lt=1.0),
+    service: DeskApiService = Depends(get_service),
+) -> StressReportResponse:
+    try:
+        result = service.run_stress_test(
+            portfolio_slug=portfolio_slug,
+            scenarios=None,
+            alpha=alpha,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return StressReportResponse.model_validate(result)
 
 
 @router.post("/snapshots/stress", response_model=StressReportResponse)

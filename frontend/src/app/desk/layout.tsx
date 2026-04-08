@@ -7,17 +7,25 @@ export default async function DeskLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const [health, jobsStatus, portfolios, alerts, audit] = await Promise.all([
+  const [health, jobsStatus, portfolios, activeAlerts, recentAlerts, audit] = await Promise.all([
     api.safeHealth(),
     api.jobsStatus().catch(() => null),
     api.portfolios().catch(() => []),
+    api.activeAlerts(8).catch(() => []),
     api.recentAlerts(8).catch(() => []),
     api.recentAudit(undefined, 8).catch(() => []),
   ]);
 
   return (
     <Suspense>
-      <DeskChrome health={health} jobsStatus={jobsStatus} portfolios={portfolios} alerts={alerts} audit={audit}>
+      <DeskChrome
+        health={health}
+        jobsStatus={jobsStatus}
+        portfolios={portfolios}
+        activeAlerts={activeAlerts}
+        recentAlerts={recentAlerts}
+        audit={audit}
+      >
         {children}
       </DeskChrome>
     </Suspense>

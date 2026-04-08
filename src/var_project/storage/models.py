@@ -252,6 +252,30 @@ class MarketDataSyncRecord(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
+class OperatorRunRecord(Base):
+    __tablename__ = "operator_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    portfolio_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    portfolio_slug: Mapped[str | None] = mapped_column(String(160), index=True, nullable=True)
+    action: Mapped[str] = mapped_column(String(32), index=True)
+    request_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    stage: Mapped[str] = mapped_column(String(64), index=True)
+    request_payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    artifact_refs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    error_message: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    hint: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    queue_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    reused_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, index=True)
+
+
 class MarketBarRecord(Base):
     __tablename__ = "market_bars"
     __table_args__ = (

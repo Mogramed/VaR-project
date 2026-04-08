@@ -1,21 +1,20 @@
 "use client";
 
+import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { ExecutionFillsTable, ExecutionHistoryTable } from "@/components/data/risk-tables";
 import { ExecutionPanel } from "@/components/forms/execution-panel";
 import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
-import type { ExecutionFillResponse, ExecutionResultResponse, MT5LiveStateResponse, MT5TerminalStatusResponse } from "@/lib/api/types";
-import { useMt5LiveState } from "@/lib/use-mt5-live-state";
+import type { ExecutionFillResponse, ExecutionResultResponse, MT5TerminalStatusResponse } from "@/lib/api/types";
 import { useRecentExecutionActivity } from "@/lib/use-recent-execution-activity";
 
 
 export function ExecutionLiveSurface({
-  portfolioSlug, initialLiveState, initialTerminalStatus, initialExecutions, initialFills, initialSymbol, initialExposureChange, initialSide,
+  portfolioSlug, initialTerminalStatus, initialExecutions, initialFills, initialSymbol, initialExposureChange, initialSide,
 }: {
   portfolioSlug: string;
-  initialLiveState: MT5LiveStateResponse | null;
   initialTerminalStatus: MT5TerminalStatusResponse;
   initialExecutions: ExecutionResultResponse[];
   initialFills: ExecutionFillResponse[];
@@ -23,7 +22,7 @@ export function ExecutionLiveSurface({
   initialExposureChange?: number | null;
   initialSide?: "buy" | "sell";
 }) {
-  const { liveState, transport } = useMt5LiveState(portfolioSlug, initialLiveState);
+  const { liveState, transport } = useDeskLive();
   const { executions, fills, pushExecutionResult } = useRecentExecutionActivity({
     portfolioSlug, initialExecutions, initialFills, liveSequence: liveState?.sequence, executionLimit: 12, fillLimit: 12,
   });

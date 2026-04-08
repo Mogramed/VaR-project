@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -68,6 +69,55 @@ class DeskServiceRuntime:
         self.execution = MT5ExecutionOrchestrator(self)
         self.governance = GovernanceRecorder(self)
         self.market_data = DeskMarketDataService(self)
+
+    @staticmethod
+    def _bool_env(value: str | None, *, default: bool) -> bool:
+        if value in {None, "", "null"}:
+            return bool(default)
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _portfolio_mode(portfolio: Mapping[str, Any]) -> str:
+        return str(portfolio.get("mode") or "offline_fixture").strip().lower()
+
+    def is_live_portfolio(self, portfolio: Mapping[str, Any]) -> bool:
+        return self._portfolio_mode(portfolio) in {"live_mt5", "hybrid"}
+
+    def strict_live_enabled(self, portfolio: Mapping[str, Any]) -> bool:
+        # Live portfolios are always strict: risk/capital must come from MT5 broker state.
+        if self.is_live_portfolio(portfolio):
+            return True
+        configured_default = self.is_live_portfolio(portfolio)
+        mt5_cfg = dict(self.raw_config.get("mt5") or {})
+        config_value = mt5_cfg.get("strict_live")
+        if config_value is None:
+            config_value = configured_default
+        env_value = os.getenv("VAR_PROJECT_STRICT_LIVE")
+        return self._bool_env(
+            env_value if env_value is not None else str(config_value),
+            default=configured_default,
+        )
+
+    def strict_live_required(self, portfolio: Mapping[str, Any]) -> bool:
+        return self.is_live_portfolio(portfolio) and self.strict_live_enabled(portfolio)
+
+    def strict_live_sources(self) -> tuple[str, ...]:
+        return ("mt5_live_bridge", "mt5_live")
+
+    def strict_live_unavailable_error(
+        self,
+        *,
+        portfolio: Mapping[str, Any],
+        reason: str | None = None,
+    ) -> RuntimeError:
+        detail = "" if reason in {None, ""} else f" Detail: {reason}"
+        return RuntimeError(
+            "mt5_live_unavailable: strict_live is enabled for "
+            f"portfolio '{portfolio.get('slug')}' ({portfolio.get('mode')}). "
+            "The live MT5 book cannot be loaded in this process. "
+            "Configure VAR_PROJECT_MT5_AGENT_BASE_URL / VAR_PROJECT_MT5_AGENT_API_KEY on API and workers."
+            f"{detail}"
+        )
 
     def require_storage_ready(self) -> None:
         if not self.storage_ready:
@@ -338,9 +388,24 @@ class DeskServiceRuntime:
     def _resolve_portfolio_context(self, portfolio_slug: str | None = None) -> dict[str, Any]:
         if portfolio_slug is None:
             return dict(self.portfolio)
-        portfolio = self.portfolio_by_slug.get(str(portfolio_slug))
+        normalized_slug = str(portfolio_slug).strip()
+        if not normalized_slug:
+            return dict(self.portfolio)
+        normalized_slug = normalized_slug.strip("'\"").strip()
+        if not normalized_slug:
+            return dict(self.portfolio)
+        if normalized_slug.lower() in {"default", "main", "primary"}:
+            return dict(self.portfolio)
+        portfolio = self.portfolio_by_slug.get(normalized_slug)
         if portfolio is None:
-            raise ValueError(f"Unknown portfolio '{portfolio_slug}'.")
+            lowered = normalized_slug.lower()
+            for slug, candidate in self.portfolio_by_slug.items():
+                if str(slug).strip().lower() == lowered:
+                    portfolio = candidate
+                    break
+        if portfolio is None:
+            available = ", ".join(sorted(str(slug) for slug in self.portfolio_by_slug.keys()))
+            raise ValueError(f"Unknown portfolio '{portfolio_slug}'. Available portfolios: {available}.")
         return dict(portfolio)
 
     def _resolve_portfolio_id(self, portfolio_slug: str | None = None) -> int:

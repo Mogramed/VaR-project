@@ -46,6 +46,7 @@ def main() -> None:
     s = sub.add_parser("api")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8000)
+    s.add_argument("--workers", type=int, default=1)
     s.add_argument("--reload", action="store_true")
 
     s = sub.add_parser("mt5-agent")
@@ -55,6 +56,8 @@ def main() -> None:
 
     s = sub.add_parser("worker")
     s.add_argument("--once", action="store_true")
+
+    sub.add_parser("operator-worker")
 
     s = sub.add_parser("seed-demo")
     s.add_argument("--portfolio-slug", default=None)
@@ -69,12 +72,15 @@ def main() -> None:
     if args.cmd == "api":
         import uvicorn
 
-        from var_project.api import create_app
-
+        workers = max(int(getattr(args, "workers", 1) or 1), 1)
+        if bool(args.reload):
+            workers = 1
         uvicorn.run(
-            create_app(root, bootstrap_storage=False),
+            "var_project.api.app:create_app",
+            factory=True,
             host=str(args.host),
             port=int(args.port),
+            workers=workers,
             reload=bool(args.reload),
         )
         raise SystemExit(0)
@@ -97,6 +103,12 @@ def main() -> None:
 
         runner = JobRunner(root, bootstrap_storage=False)
         runner.run_forever(once=bool(args.once))
+        raise SystemExit(0)
+
+    if args.cmd == "operator-worker":
+        from var_project.jobs.operator_queue import run_operator_worker
+
+        run_operator_worker()
         raise SystemExit(0)
 
     if args.cmd == "seed-demo":

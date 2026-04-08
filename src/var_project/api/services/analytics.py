@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
+
+import pandas as pd
 
 from var_project.alerts.engine import alerts_from_capital_snapshot, alerts_from_risk_budget
 from var_project.api.services.mt5 import DeskMt5Service
 from var_project.api.services.runtime import DeskServiceRuntime
+from var_project.core.config_validation import validate_backtest_history_compatibility
 from var_project.engine.risk_engine import RiskEngine
 from var_project.reporting.render import render_daily_markdown
 from var_project.validation.workflows import persist_validation_summary
@@ -16,8 +20,54 @@ class DeskAnalyticsService:
     def __init__(self, runtime: DeskServiceRuntime):
         self.runtime = runtime
 
+    @staticmethod
+    def _parse_timeline_column(values: pd.Series, *, column: str) -> pd.Series:
+        numeric_values = pd.to_numeric(values, errors="coerce")
+        if numeric_values.notna().any():
+            max_abs = float(numeric_values.abs().max())
+            if max_abs < 1e11:
+                unit = "s"
+            elif max_abs < 1e14:
+                unit = "ms"
+            elif max_abs < 1e17:
+                unit = "us"
+            else:
+                unit = "ns"
+            parsed = pd.to_datetime(numeric_values, unit=unit, utc=True, errors="coerce")
+        else:
+            parsed = pd.to_datetime(values, utc=True, errors="coerce")
+        if not parsed.notna().any():
+            raise RuntimeError(
+                f"Backtest timeline is invalid: unable to parse column '{column}'. "
+                "Re-run sync then backtest to regenerate normalized market data."
+            )
+        invalid_epoch = parsed.notna() & (parsed.dt.year < 2000)
+        if bool(invalid_epoch.any()):
+            raise RuntimeError(
+                f"Backtest timeline is invalid: epoch-style timestamps detected in '{column}'. "
+                "Refresh market data and rerun backtest."
+            )
+        return parsed
+
+    def _normalize_backtest_timeline(self, frame: pd.DataFrame) -> pd.DataFrame:
+        timeline_columns = [
+            column
+            for column in ("date", "time", "time_utc", "timestamp")
+            if column in frame.columns
+        ]
+        if not timeline_columns:
+            raise RuntimeError(
+                "Backtest result is missing timeline columns. Expected one of date/time/time_utc/timestamp."
+            )
+        normalized = frame.copy()
+        for column in timeline_columns:
+            parsed = self._parse_timeline_column(normalized[column], column=column)
+            normalized[column] = parsed.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return normalized
+
     def _resolve_report_snapshot(self, *, portfolio_slug: str) -> tuple[dict[str, Any] | None, str]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        strict_live = self.runtime.strict_live_required(portfolio)
         preferred_sources: list[str] = []
         if self.runtime.market_data.should_use_mt5_market_data(portfolio):
             try:
@@ -26,7 +76,9 @@ class DeskAnalyticsService:
                 live_state = None
             if live_state is not None and (live_state.get("risk_summary") or {}).get("source") == "mt5_live_bridge":
                 preferred_sources.append("mt5_live_bridge")
-        preferred_sources.extend(["historical", "live"])
+        preferred_sources.extend(["mt5_live_bridge", "mt5_live"])
+        if not strict_live:
+            preferred_sources.extend(["historical", "live"])
 
         seen: set[str] = set()
         for source in preferred_sources:
@@ -36,7 +88,7 @@ class DeskAnalyticsService:
             snapshot = self.runtime.storage.latest_snapshot(source=source, portfolio_slug=portfolio["slug"])
             if snapshot is not None:
                 return snapshot, source
-        return None, "historical"
+        return None, "mt5_live_bridge" if strict_live else "historical"
 
     def run_snapshot(
         self,
@@ -54,12 +106,6 @@ class DeskAnalyticsService:
     ) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
-        if self.runtime.market_data.should_use_mt5_market_data(portfolio):
-            self.runtime.market_data.sync_market_data(
-                portfolio_slug=portfolio["slug"],
-                days=int(days or self.runtime._default_days()),
-                timeframes=[str(timeframe or self.runtime._default_timeframe())],
-            )
         selected_timeframe = timeframe or self.runtime._default_timeframe()
         selected_days = int(days or self.runtime._default_days())
         selected_min_coverage = float(min_coverage or self.runtime.data_defaults["min_coverage"])
@@ -72,17 +118,25 @@ class DeskAnalyticsService:
             min_coverage=selected_min_coverage,
             config=config,
             window=selected_window,
+            allow_auto_sync=False,
         )
         sample = bundle["sample"]
         snapshot = bundle["snapshot"]
         attribution = bundle["attribution"]
         risk_budget = bundle["risk_budget"]
         capital_snapshot = bundle["capital"]
+        snapshot_source = str(
+            capital_snapshot.get("snapshot_source")
+            or capital_snapshot.get("source")
+            or "historical"
+        )
+        artifact_source = re.sub(r"[^a-z0-9_]+", "_", snapshot_source.lower()).strip("_") or "historical"
+        artifact_type = "live_snapshot" if snapshot_source.startswith("mt5_live") else "historical_snapshot"
 
         now = datetime.now(timezone.utc)
         payload = {
             "time_utc": now.isoformat(),
-            "source": "historical",
+            "source": snapshot_source,
             "alpha": config.alpha,
             "timeframe": selected_timeframe,
             "days": selected_days,
@@ -102,11 +156,13 @@ class DeskAnalyticsService:
             "sample_size": snapshot.sample_size,
             "latest_observation": sample.index[-1].isoformat(),
         }
-        out_path = self.runtime.storage.settings.snapshots_dir / f"historical_snapshot_{now.strftime('%Y%m%d_%H%M%S')}.json"
+        out_path = self.runtime.storage.settings.snapshots_dir / (
+            f"{artifact_source}_snapshot_{now.strftime('%Y%m%d_%H%M%S')}.json"
+        )
         artifact_id = self.runtime.storage.write_json_artifact(
             payload,
             out_path,
-            artifact_type="historical_snapshot",
+            artifact_type=artifact_type,
             details={
                 "portfolio": portfolio["name"],
                 "portfolio_slug": portfolio["slug"],
@@ -114,6 +170,7 @@ class DeskAnalyticsService:
                 "days": selected_days,
                 "alpha": config.alpha,
                 "window": selected_window,
+                "source": snapshot_source,
             },
         )
         portfolio_id = self.runtime._resolve_portfolio_id(portfolio["slug"])
@@ -121,12 +178,16 @@ class DeskAnalyticsService:
             payload,
             portfolio_id=portfolio_id,
             artifact_id=artifact_id,
-            source="historical",
+            source=snapshot_source,
         )
         capital_snapshot["artifact_id"] = artifact_id
         capital_snapshot["snapshot_id"] = snapshot_id
         capital_snapshot["snapshot_timestamp"] = now.isoformat()
-        self.runtime.storage.record_capital_snapshot(capital_snapshot, portfolio_id=portfolio_id, source="historical")
+        self.runtime.storage.record_capital_snapshot(
+            capital_snapshot,
+            portfolio_id=portfolio_id,
+            source=snapshot_source,
+        )
         budget_alerts = alerts_from_risk_budget(risk_budget.to_dict())
         capital_alerts = alerts_from_capital_snapshot(capital_snapshot)
         if budget_alerts:
@@ -138,7 +199,13 @@ class DeskAnalyticsService:
             action_type="snapshot.run",
             object_type="risk_snapshot",
             object_id=snapshot_id,
-            payload={"artifact_id": artifact_id, "portfolio_slug": portfolio["slug"], "timeframe": selected_timeframe, "days": selected_days},
+            payload={
+                "artifact_id": artifact_id,
+                "portfolio_slug": portfolio["slug"],
+                "timeframe": selected_timeframe,
+                "days": selected_days,
+                "source": snapshot_source,
+            },
             portfolio_id=portfolio_id,
         )
         return {
@@ -146,7 +213,7 @@ class DeskAnalyticsService:
             "artifact_id": artifact_id,
             "artifact_path": str(out_path.resolve()),
             "portfolio_slug": portfolio["slug"],
-            "source": "historical",
+            "source": snapshot_source,
             "snapshot": payload,
         }
 
@@ -166,16 +233,17 @@ class DeskAnalyticsService:
     ) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
-        if self.runtime.market_data.should_use_mt5_market_data(portfolio):
-            self.runtime.market_data.sync_market_data(
-                portfolio_slug=portfolio["slug"],
-                days=int(days or self.runtime._default_days()),
-                timeframes=[str(timeframe or self.runtime._default_timeframe())],
-            )
         selected_timeframe = timeframe or self.runtime._default_timeframe()
         selected_days = int(days or self.runtime._default_days())
         selected_min_coverage = float(min_coverage or self.runtime.data_defaults["min_coverage"])
         selected_window = int(window or self.runtime.risk_defaults["window"])
+        validate_backtest_history_compatibility(
+            self.runtime.data_defaults,
+            self.runtime.risk_defaults,
+            days=selected_days,
+            window=selected_window,
+            context="backtest",
+        )
         config = self.runtime._build_risk_model_config(alpha, n_sims, dist, df_t, seed)
         portfolio_id = self.runtime._resolve_portfolio_id(portfolio["slug"])
 
@@ -186,11 +254,18 @@ class DeskAnalyticsService:
             min_coverage=selected_min_coverage,
             config=config,
             window=selected_window,
+            allow_auto_sync=False,
         )
         engine = RiskEngine(bundle["holdings"], base_currency=str(portfolio["base_currency"]))
-        daily_rets = bundle["daily_returns"][bundle["portfolio_symbols"]]
+        return_columns = ["date", *bundle["portfolio_symbols"]]
+        daily_rets = bundle["daily_returns"][return_columns].copy()
         exposure_by_symbol = dict(bundle["exposure_by_symbol"])
         gross_exposure = float(sum(abs(value) for value in exposure_by_symbol.values()))
+        backtest_source = str(
+            dict(bundle.get("capital") or {}).get("snapshot_source")
+            or "historical"
+        )
+        flat_book = gross_exposure <= 1e-9
         symbols = list(bundle["portfolio_symbols"])
 
         backtest = engine.backtest(
@@ -210,6 +285,7 @@ class DeskAnalyticsService:
                 "days": selected_days,
             },
         )
+        backtest = self._normalize_backtest_timeline(backtest)
 
         out_path = self.runtime.storage.settings.analytics_dir / (
             f"compare_{selected_timeframe}_{selected_days}d_alpha{int(config.alpha * 100)}"
@@ -229,6 +305,7 @@ class DeskAnalyticsService:
                 "days": selected_days,
                 "alpha": config.alpha,
                 "window": selected_window,
+                "source": backtest_source,
             },
         )
         exception_counts = {
@@ -252,6 +329,8 @@ class DeskAnalyticsService:
                 "gross_exposure": gross_exposure,
                 "symbols": symbols,
                 "exception_counts": exception_counts,
+                "source": backtest_source,
+                "flat_book": bool(flat_book),
             },
         )
 
@@ -292,6 +371,8 @@ class DeskAnalyticsService:
             "best_model": validation_result["best_model"],
             "alert_count": validation_result["alert_count"],
             "exception_counts": exception_counts,
+            "source": backtest_source,
+            "flat_book": bool(flat_book),
         }
 
     def run_validation(
@@ -336,6 +417,11 @@ class DeskAnalyticsService:
 
         out_dir = self.runtime.storage.settings.reports_dir
         report_snapshot, report_snapshot_source = self._resolve_report_snapshot(portfolio_slug=portfolio["slug"])
+        if self.runtime.strict_live_required(portfolio) and report_snapshot is None:
+            raise self.runtime.strict_live_unavailable_error(
+                portfolio=portfolio,
+                reason="No MT5 live snapshot is available for report rendering.",
+            )
         snapshot_id = None if report_snapshot is None else report_snapshot.get("id")
         portfolio_id = self.runtime._resolve_portfolio_id(portfolio["slug"])
         md_path = render_daily_markdown(
@@ -410,13 +496,13 @@ class DeskAnalyticsService:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         config = self.runtime._build_risk_model_config(alpha, None, None, None, None)
         if self.runtime.market_data.should_use_mt5_market_data(portfolio):
-            self.runtime.market_data.sync_market_data(
+            self.runtime.market_data.sync_market_data_if_stale(
                 portfolio_slug=portfolio["slug"],
+                max_age_seconds=90.0,
                 days=int(self.runtime._default_days()),
                 timeframes=[str(self.runtime._default_timeframe())],
             )
-            live_state = DeskMt5Service(self.runtime).live_state(portfolio_slug=portfolio["slug"])
-            live_holdings = list(live_state.get("holdings") or [])
+            live_holdings = self.runtime.market_data.live_holdings(portfolio_slug=portfolio["slug"])
             if live_holdings:
                 bundle = self.runtime._compute_portfolio_state_for_holdings(
                     portfolio=portfolio,
@@ -427,7 +513,7 @@ class DeskAnalyticsService:
                     config=config,
                     window=int(self.runtime.risk_defaults["window"]),
                     snapshot_source="mt5_live_bridge",
-                    snapshot_timestamp=str(live_state.get("generated_at") or datetime.now(timezone.utc).isoformat()),
+                    snapshot_timestamp=datetime.now(timezone.utc).isoformat(),
                 )
             else:
                 bundle = self.runtime._compute_portfolio_state(

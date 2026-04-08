@@ -1,6 +1,7 @@
 "use client";
 
 import { startTransition, useEffect, useState } from "react";
+import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { ChartSurface } from "@/components/charts/chart-surface";
@@ -8,40 +9,44 @@ import { ModelRankingTable } from "@/components/data/risk-tables";
 import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
-import type { BacktestFrameResponse, MT5LiveStateResponse, ModelComparisonResponse, ValidationRunSummary } from "@/lib/api/types";
+import type { BacktestFrameResponse, ModelComparisonResponse, ValidationRunSummary } from "@/lib/api/types";
 import { CHART_PALETTE, makeBacktestOption, makeBarOption } from "@/lib/chart-options";
-import { useMt5LiveState } from "@/lib/use-mt5-live-state";
 import { preferredHeadlineRisk } from "@/lib/risk-surface";
 import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
 import { buildBacktestSeries, buildModelScoreSeries } from "@/lib/view-models";
 
 export function ModelsLiveSurface({
-  portfolioSlug, initialLiveState, initialComparison, initialValidation, initialFrame,
+  portfolioSlug, initialComparison, initialValidation, initialFrame,
 }: {
   portfolioSlug: string;
-  initialLiveState: MT5LiveStateResponse | null;
   initialComparison: ModelComparisonResponse | null;
   initialValidation: ValidationRunSummary | null;
   initialFrame: BacktestFrameResponse | null;
 }) {
-  const { liveState, transport } = useMt5LiveState(portfolioSlug, initialLiveState);
+  const { liveState, transport, artifactVersion } = useDeskLive();
   const [comparison, setComparison] = useState(initialComparison);
   const [validation, setValidation] = useState(initialValidation);
   const [frame, setFrame] = useState(initialFrame);
 
   useEffect(() => {
+    startTransition(() => {
+      setComparison(initialComparison);
+      setValidation(initialValidation);
+      setFrame(initialFrame);
+    });
+  }, [initialComparison, initialFrame, initialValidation]);
+
+  useEffect(() => {
     let c = false;
-    const t = window.setInterval(() => {
-      Promise.all([
-        api.latestModelComparison(portfolioSlug).catch(() => null),
-        api.latestValidation(portfolioSlug).catch(() => null),
-        api.latestBacktestFrame(portfolioSlug, 240).catch(() => null),
-      ]).then(([nc, nv, nf]) => {
-        if (!c) startTransition(() => { setComparison(nc); setValidation(nv); setFrame(nf); });
-      });
-    }, 30000);
-    return () => { c = true; window.clearInterval(t); };
-  }, [portfolioSlug]);
+    Promise.all([
+      api.latestModelComparison(portfolioSlug).catch(() => null),
+      api.latestValidation(portfolioSlug).catch(() => null),
+      api.latestBacktestFrame(portfolioSlug, 240).catch(() => null),
+    ]).then(([nc, nv, nf]) => {
+      if (!c) startTransition(() => { setComparison(nc); setValidation(nv); setFrame(nf); });
+    });
+    return () => { c = true; };
+  }, [artifactVersion, portfolioSlug]);
 
   const ranking = comparison?.ranking ?? [];
   const backtestSeries = frame ? buildBacktestSeries(frame) : [];

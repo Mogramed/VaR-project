@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import Markdown from "react-markdown";
+import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { slugifyHeading } from "@/lib/utils";
 
@@ -17,7 +18,67 @@ export function extractMarkdownHeadings(markdown: string): ReportHeading[] {
     .map((m) => ({ level: m[1].length, text: m[2].trim(), id: slugifyHeading(m[2]) }));
 }
 
-export function ReportDocument({ content, reportPath, showSource = true }: { content: string; reportPath: string; showSource?: boolean }) {
+function chartNameFromSrc(src: string): string | null {
+  const clean = src.split(/[?#]/)[0] ?? "";
+  const parts = clean.split(/[\\/]/).filter(Boolean);
+  const name = parts.length ? parts[parts.length - 1] : "";
+  return name ? name : null;
+}
+
+function isAbsoluteImageSource(src: string): boolean {
+  if (src.startsWith("/desk/")) {
+    return false;
+  }
+  return /^https?:\/\//i.test(src) || src.startsWith("data:") || src.startsWith("/");
+}
+
+function resolveReportImageSource({
+  src,
+  portfolioSlug,
+  reportId,
+  allowedChartNames,
+}: {
+  src: string;
+  portfolioSlug?: string;
+  reportId?: number | null;
+  allowedChartNames: Set<string> | null;
+}): string | null {
+  if (isAbsoluteImageSource(src)) {
+    return src;
+  }
+  const chartName = chartNameFromSrc(src);
+  if (!chartName) {
+    return null;
+  }
+  if (allowedChartNames && !allowedChartNames.has(chartName.toLowerCase())) {
+    return null;
+  }
+  const params = new URLSearchParams();
+  if (portfolioSlug) {
+    params.set("portfolio_slug", portfolioSlug);
+  }
+  if (reportId != null && Number.isFinite(reportId)) {
+    params.set("report_id", String(reportId));
+  }
+  const query = params.toString();
+  return `/api/proxy/reports/charts/${encodeURIComponent(chartName)}${query ? `?${query}` : ""}`;
+}
+
+export function ReportDocument({
+  content,
+  reportPath,
+  showSource = true,
+  portfolioSlug,
+  reportId,
+  chartPaths = [],
+}: {
+  content: string;
+  reportPath: string;
+  showSource?: boolean;
+  portfolioSlug?: string;
+  reportId?: number | null;
+  chartPaths?: string[];
+}) {
   function textFromNode(node: ReactNode): string {
     if (typeof node === "string" || typeof node === "number") return String(node);
     if (Array.isArray(node)) return node.map(textFromNode).join(" ");
@@ -25,15 +86,51 @@ export function ReportDocument({ content, reportPath, showSource = true }: { con
     return "";
   }
 
+  const allowedChartNames = chartPaths.length
+    ? new Set(
+      chartPaths
+        .map((value) => chartNameFromSrc(String(value)))
+        .filter((value): value is string => Boolean(value))
+        .map((value) => value.toLowerCase()),
+    )
+    : null;
+
+  const components: Components = {
+    h1: ({ children }) => <h1 id={slugifyHeading(textFromNode(children))}>{children}</h1>,
+    h2: ({ children }) => <h2 id={slugifyHeading(textFromNode(children))}>{children}</h2>,
+    h3: ({ children }) => <h3 id={slugifyHeading(textFromNode(children))}>{children}</h3>,
+    h4: ({ children }) => <h4 id={slugifyHeading(textFromNode(children))}>{children}</h4>,
+    img: (props) => {
+      const src = (props as { src?: unknown }).src;
+      const alt = (props as { alt?: unknown }).alt;
+      if (typeof src !== "string" || !src.trim()) {
+        return null;
+      }
+      const resolvedSrc = resolveReportImageSource({
+        src,
+        portfolioSlug,
+        reportId,
+        allowedChartNames,
+      });
+      if (!resolvedSrc) {
+        return null;
+      }
+      /* eslint-disable-next-line @next/next/no-img-element */
+      return <img
+        src={resolvedSrc}
+        alt={typeof alt === "string" ? alt : ""}
+        loading="lazy"
+        className="my-3 rounded-[var(--radius-md)] border border-[var(--color-border)]"
+      />;
+    },
+  };
+
   return (
     <article className="rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[var(--color-surface-strong)] p-5 report-document">
       <div className="report-prose max-w-none">
-        <Markdown remarkPlugins={[remarkGfm]} components={{
-          h1: ({ children }) => <h1 id={slugifyHeading(textFromNode(children))}>{children}</h1>,
-          h2: ({ children }) => <h2 id={slugifyHeading(textFromNode(children))}>{children}</h2>,
-          h3: ({ children }) => <h3 id={slugifyHeading(textFromNode(children))}>{children}</h3>,
-          h4: ({ children }) => <h4 id={slugifyHeading(textFromNode(children))}>{children}</h4>,
-        }}>{content}</Markdown>
+        <Markdown remarkPlugins={[remarkGfm]} components={components}>
+          {content}
+        </Markdown>
       </div>
       {showSource ? (
         <div className="mt-6 border-t border-[var(--color-border)] pt-3 text-[11px] text-[var(--color-text-muted)]">

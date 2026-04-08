@@ -79,8 +79,14 @@ class PortfolioRiskCalculator:
         allow_auto_sync: bool = True,
     ) -> dict[str, Any]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        live_portfolio = self.runtime.is_live_portfolio(portfolio)
         if self.runtime.market_data.should_use_mt5_market_data(portfolio):
-            live_holdings = self.runtime.market_data.live_holdings(portfolio_slug=portfolio["slug"])
+            try:
+                live_holdings = self.runtime.market_data.live_holdings(portfolio_slug=portfolio["slug"])
+            except Exception as exc:
+                if live_portfolio:
+                    raise self.runtime.strict_live_unavailable_error(portfolio=portfolio, reason=str(exc)) from exc
+                live_holdings = []
             if live_holdings:
                 return self.compute_portfolio_state_for_holdings(
                     portfolio=portfolio,
@@ -91,9 +97,24 @@ class PortfolioRiskCalculator:
                     config=config,
                     window=window,
                     allow_auto_sync=allow_auto_sync,
-                    snapshot_source="mt5_live",
+                    snapshot_source="mt5_live_bridge",
                     snapshot_timestamp=datetime.now(timezone.utc).isoformat(),
                 )
+            if live_portfolio:
+                return self.compute_portfolio_state_for_holdings(
+                    portfolio=portfolio,
+                    holdings=[],
+                    timeframe=timeframe,
+                    days=days,
+                    min_coverage=min_coverage,
+                    config=config,
+                    window=window,
+                    allow_auto_sync=allow_auto_sync,
+                    snapshot_source="mt5_live_bridge",
+                    snapshot_timestamp=datetime.now(timezone.utc).isoformat(),
+                )
+        if live_portfolio:
+            raise self.runtime.strict_live_unavailable_error(portfolio=portfolio)
         return self.compute_portfolio_state_for_holdings(
             portfolio=portfolio,
             holdings=portfolio.get("configured_holdings") or [],

@@ -10,7 +10,7 @@ export default async function DeskReportsPage({
   const portfolioSlug =
     typeof query.portfolio === "string" ? query.portfolio : undefined;
 
-  const reportView = await loadDeskReportViewModel(portfolioSlug);
+  const reportView = await loadDeskReportViewModel(portfolioSlug, { liveState: null });
 
   return (
     <ReportsLiveSurface

@@ -48,7 +48,8 @@ class AppStorage:
     def schema_ready(self) -> bool:
         try:
             inspector = inspect(self.engine)
-            return inspector.has_table("portfolios") and inspector.has_table("artifacts")
+            required_tables = ("portfolios", "artifacts", "operator_runs")
+            return all(inspector.has_table(table_name) for table_name in required_tables)
         except Exception:
             return False
 
@@ -206,6 +207,31 @@ class AppStorage:
     ) -> int:
         return self.writes.record_execution_result(payload, portfolio_id=portfolio_id, decision_id=decision_id)
 
+    def update_execution_reconciliation(
+        self,
+        execution_id: int,
+        *,
+        reconciliation_status: str | None = None,
+        filled_volume_lots: float | None = None,
+        remaining_volume_lots: float | None = None,
+        fill_ratio: float | None = None,
+        broker_status: str | None = None,
+        position_id: int | None = None,
+        mt5_order_ticket: int | None = None,
+        mt5_deal_ticket: int | None = None,
+    ) -> dict[str, Any] | None:
+        return self.writes.update_execution_reconciliation(
+            execution_id,
+            reconciliation_status=reconciliation_status,
+            filled_volume_lots=filled_volume_lots,
+            remaining_volume_lots=remaining_volume_lots,
+            fill_ratio=fill_ratio,
+            broker_status=broker_status,
+            position_id=position_id,
+            mt5_order_ticket=mt5_order_ticket,
+            mt5_deal_ticket=mt5_deal_ticket,
+        )
+
     def record_audit_event(
         self,
         *,
@@ -308,6 +334,122 @@ class AppStorage:
     def recent_audit_events(self, *, limit: int = 50, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
         return self.reads.recent_audit_events(limit=limit, portfolio_slug=portfolio_slug)
 
+    def create_operator_run(
+        self,
+        *,
+        portfolio_id: int | None,
+        portfolio_slug: str | None,
+        action: str,
+        request_id: str,
+        status: str,
+        stage: str,
+        request_payload: Mapping[str, Any] | None = None,
+        artifact_refs: Mapping[str, Any] | None = None,
+        result: Mapping[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        hint: str | None = None,
+        queue_task_id: str | None = None,
+        reused_run_id: int | None = None,
+        started_at: Any | None = None,
+        finished_at: Any | None = None,
+    ) -> int:
+        return self.writes.create_operator_run(
+            portfolio_id=portfolio_id,
+            portfolio_slug=portfolio_slug,
+            action=action,
+            request_id=request_id,
+            status=status,
+            stage=stage,
+            request_payload=request_payload,
+            artifact_refs=artifact_refs,
+            result=result,
+            error_code=error_code,
+            error_message=error_message,
+            hint=hint,
+            queue_task_id=queue_task_id,
+            reused_run_id=reused_run_id,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+
+    def update_operator_run(
+        self,
+        run_id: int,
+        *,
+        status: str | None = None,
+        stage: str | None = None,
+        artifact_refs: Mapping[str, Any] | None = None,
+        result: Mapping[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        hint: str | None = None,
+        queue_task_id: str | None = None,
+        reused_run_id: int | None = None,
+        started_at: Any | None = None,
+        finished_at: Any | None = None,
+    ) -> dict[str, Any] | None:
+        return self.writes.update_operator_run(
+            run_id,
+            status=status,
+            stage=stage,
+            artifact_refs=artifact_refs,
+            result=result,
+            error_code=error_code,
+            error_message=error_message,
+            hint=hint,
+            queue_task_id=queue_task_id,
+            reused_run_id=reused_run_id,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+
+    def claim_operator_run(
+        self,
+        run_id: int,
+        *,
+        stage: str = "starting",
+        started_at: Any | None = None,
+    ) -> dict[str, Any] | None:
+        return self.writes.claim_operator_run(
+            run_id,
+            stage=stage,
+            started_at=started_at,
+        )
+
+    def operator_run_by_id(self, run_id: int) -> dict[str, Any] | None:
+        return self.reads.operator_run_by_id(run_id)
+
+    def list_operator_runs(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        action: str | None = None,
+        statuses: Iterable[str] | None = None,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        return self.reads.list_operator_runs(
+            portfolio_slug=portfolio_slug,
+            action=action,
+            statuses=statuses,
+            limit=limit,
+        )
+
+    def latest_active_operator_run(
+        self,
+        *,
+        portfolio_slug: str,
+        action: str,
+        request_payload: Mapping[str, Any] | None = None,
+        statuses: Iterable[str] | None = None,
+    ) -> dict[str, Any] | None:
+        return self.reads.latest_active_operator_run(
+            portfolio_slug=portfolio_slug,
+            action=action,
+            request_payload=request_payload,
+            statuses=statuses,
+        )
+
     def reconciliation_acknowledgements(
         self,
         *,
@@ -346,6 +488,21 @@ class AppStorage:
             mode=mode,
             status=status,
             details=details,
+        )
+
+    def update_market_data_sync(
+        self,
+        sync_run_id: int,
+        *,
+        status: str | None = None,
+        details: Mapping[str, Any] | None = None,
+        synced_at: Any | None = None,
+    ) -> dict[str, Any] | None:
+        return self.writes.update_market_data_sync(
+            sync_run_id,
+            status=status,
+            details=details,
+            synced_at=synced_at,
         )
 
     def sync_market_bars(

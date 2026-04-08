@@ -3,7 +3,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { TrendingUp, DollarSign } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api/client";
 import type {
   ExecutionPreviewResponse,
@@ -21,6 +21,7 @@ import {
   FormError,
   FormMetaTile,
   FormSection,
+  FormSuccess,
   PresetPill,
   SubmitButton,
 } from "@/components/forms/shared";
@@ -51,6 +52,23 @@ export function ExecutionPanel({
     String(Math.max(Math.abs(initialExposureChange ?? 500000), 1)),
   );
   const [note, setNote] = useState("");
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const successTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const validate = useCallback(() => {
+    if (!symbol.trim()) {
+      setValidationError("Symbol is required");
+      return false;
+    }
+    const numericExposure = Number(exposureChange);
+    if (!Number.isFinite(numericExposure) || numericExposure <= 0) {
+      setValidationError("Exposure must be a positive number");
+      return false;
+    }
+    setValidationError(null);
+    return true;
+  }, [symbol, exposureChange]);
 
   const previewMutation = useMutation({
     mutationFn: async () =>
@@ -73,8 +91,14 @@ export function ExecutionPanel({
     onSuccess: (payload) => {
       onSubmitted?.(payload);
       if (!onSubmitted) router.refresh();
+      setShowSuccess(true);
+      clearTimeout(successTimerRef.current);
+      successTimerRef.current = setTimeout(() => setShowSuccess(false), 4000);
+      setNote("");
     },
   });
+
+  useEffect(() => () => clearTimeout(successTimerRef.current), []);
 
   const preview = previewMutation.data;
   const result = submitMutation.data;
@@ -90,7 +114,7 @@ export function ExecutionPanel({
       {/* Form */}
       <form
         className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4"
-        onSubmit={(e) => { e.preventDefault(); previewMutation.mutate(); }}
+        onSubmit={(e) => { e.preventDefault(); if (validate()) previewMutation.mutate(); }}
       >
         <div className="flex items-center justify-between">
           <h3 className="text-[13px] font-semibold text-[var(--color-text)]">MT5 Execution</h3>
@@ -151,7 +175,8 @@ export function ExecutionPanel({
             disabled={!preview?.guard.submit_allowed || submitMutation.isPending}
             onClick={() => submitMutation.mutate()}
           />
-          <FormError message={activeError instanceof Error ? activeError.message : activeError ? "Failed" : null} />
+          <FormError message={validationError ?? (activeError instanceof Error ? activeError.message : activeError ? "Failed" : null)} />
+          <FormSuccess message="Order sent to MT5" visible={showSuccess} />
         </div>
       </form>
 

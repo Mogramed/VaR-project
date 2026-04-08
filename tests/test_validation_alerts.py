@@ -4,6 +4,7 @@ import pandas as pd
 
 from var_project.alerts.engine import (
     alerts_from_capital_snapshot,
+    alerts_from_live_operator_state,
     alerts_from_live_snapshot,
     alerts_from_risk_budget,
     alerts_from_risk_decision,
@@ -168,3 +169,112 @@ def test_capital_alerts_follow_capital_status():
 
     assert alerts
     assert alerts[0].severity == "BREACH"
+
+
+def test_live_operator_alerts_suppress_reconciliation_noise_when_bridge_is_down():
+    alerts = alerts_from_live_operator_state(
+        {
+            "connected": False,
+            "status": "degraded",
+            "generated_at": "2026-04-03T12:00:00+00:00",
+            "last_error": "bridge offline",
+            "reconciliation": {
+                "live_base_ready": False,
+                "manual_event_count": 3,
+                "unmatched_execution_count": 2,
+                "status_counts": {
+                    "desk_vs_broker_drift": 1,
+                    "pending_broker": 2,
+                },
+            },
+        }
+    )
+
+    codes = {alert.code for alert in alerts}
+
+    assert "MT5_LIVE_DISCONNECTED" in codes
+    assert "MT5_LIVE_ERROR" in codes
+    assert "DESK_BROKER_DRIFT" not in codes
+    assert "PENDING_BROKER_ACTIVITY" not in codes
+    assert "EXECUTION_UNMATCHED" not in codes
+
+
+def test_live_operator_alerts_surface_incomplete_reconciliation_base_explicitly():
+    alerts = alerts_from_live_operator_state(
+        {
+            "connected": True,
+            "status": "ok",
+            "generated_at": "2026-04-04T12:00:00+00:00",
+            "reconciliation": {
+                "bridge_connected": True,
+                "live_base_ready": False,
+                "live_evidence_present": False,
+                "history_window_minutes": 180,
+                "history_window_expired_execution_count": 2,
+                "suppressed_status_counts": {
+                    "live_base_incomplete": 1,
+                    "pending_broker": 2,
+                },
+                "status_counts": {
+                    "live_base_incomplete": 1,
+                    "pending_broker": 2,
+                },
+                "diagnostic_code": "MT5_RECONCILIATION_INCOMPLETE",
+                "diagnostic_message": "Broker book is empty for the current reconciliation window.",
+            },
+        }
+    )
+
+    codes = {alert.code for alert in alerts}
+
+    assert "MT5_RECONCILIATION_INCOMPLETE" in codes
+    assert "MT5_RECONCILIATION_WINDOW_EXPIRED" not in codes
+    assert "DESK_BROKER_DRIFT" not in codes
+    assert "PENDING_BROKER_ACTIVITY" not in codes
+    assert "EXECUTION_UNMATCHED" not in codes
+
+
+def test_live_operator_alerts_skip_window_expired_when_only_historical_and_non_actionable():
+    alerts = alerts_from_live_operator_state(
+        {
+            "connected": True,
+            "status": "ok",
+            "generated_at": "2026-04-04T12:00:00+00:00",
+            "reconciliation": {
+                "bridge_connected": True,
+                "live_base_ready": True,
+                "history_window_minutes": 180,
+                "history_window_expired_execution_count": 3,
+                "manual_event_count": 0,
+                "unmatched_execution_count": 0,
+                "status_counts": {},
+                "suppressed_status_counts": {},
+            },
+        }
+    )
+
+    codes = {alert.code for alert in alerts}
+    assert "MT5_RECONCILIATION_WINDOW_EXPIRED" not in codes
+
+
+def test_live_operator_alerts_skip_window_expired_when_only_history_window_expired_status():
+    alerts = alerts_from_live_operator_state(
+        {
+            "connected": True,
+            "status": "ok",
+            "generated_at": "2026-04-04T12:00:00+00:00",
+            "reconciliation": {
+                "bridge_connected": True,
+                "live_base_ready": True,
+                "history_window_minutes": 180,
+                "history_window_expired_execution_count": 3,
+                "manual_event_count": 0,
+                "unmatched_execution_count": 0,
+                "status_counts": {"history_window_expired": 3},
+                "suppressed_status_counts": {},
+            },
+        }
+    )
+
+    codes = {alert.code for alert in alerts}
+    assert "MT5_RECONCILIATION_WINDOW_EXPIRED" not in codes

@@ -1,6 +1,7 @@
 "use client";
 
 import { startTransition, useEffect, useState } from "react";
+import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { ChartSurface } from "@/components/charts/chart-surface";
@@ -9,31 +10,26 @@ import { TradeDecisionPanel } from "@/components/forms/trade-decision-panel";
 import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
-import type { MT5LiveStateResponse, RiskDecisionResponse } from "@/lib/api/types";
+import type { RiskDecisionResponse } from "@/lib/api/types";
 import { CHART_PALETTE, makeBarOption, makeGroupedBarOption } from "@/lib/chart-options";
-import { useMt5LiveState } from "@/lib/use-mt5-live-state";
 import { averageDecisionFillRatio, buildDecisionDeltaComparison, buildDecisionImpactSeries, buildDecisionVerdictCounts } from "@/lib/view-models";
 import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
 
 export function DecisionsLiveSurface({
-  portfolioSlug, initialLiveState, initialDecisions,
-}: { portfolioSlug: string; initialLiveState: MT5LiveStateResponse | null; initialDecisions: RiskDecisionResponse[] }) {
-  const { liveState, transport } = useMt5LiveState(portfolioSlug, initialLiveState);
+  portfolioSlug, initialDecisions,
+}: { portfolioSlug: string; initialDecisions: RiskDecisionResponse[] }) {
+  const { liveState, transport, artifactVersion } = useDeskLive();
   const [decisions, setDecisions] = useState(initialDecisions);
+
+  useEffect(() => {
+    startTransition(() => setDecisions(initialDecisions));
+  }, [initialDecisions]);
 
   useEffect(() => {
     let c = false;
     api.recentDecisions(portfolioSlug, 12).then((n) => { if (!c) startTransition(() => setDecisions(n)); }).catch(() => {});
     return () => { c = true; };
-  }, [portfolioSlug, liveState?.sequence]);
-
-  useEffect(() => {
-    let c = false;
-    const t = window.setInterval(() => {
-      api.recentDecisions(portfolioSlug, 12).then((n) => { if (!c) startTransition(() => setDecisions(n)); }).catch(() => {});
-    }, 15000);
-    return () => { c = true; window.clearInterval(t); };
-  }, [portfolioSlug]);
+  }, [artifactVersion, portfolioSlug]);
 
   const verdicts = buildDecisionVerdictCounts(decisions);
   const fillRatio = averageDecisionFillRatio(decisions);
@@ -81,7 +77,7 @@ export function DecisionsLiveSurface({
                 <StatusBadge label={latest.decision} />
               </div>
               <div className="mt-2 text-xs text-[var(--color-text-muted)]">
-                Approved {formatCurrency(latest.approved_exposure_change)} · {formatTimestamp(latest.created_at ?? latest.time_utc)}
+                Approved {formatCurrency(latest.approved_exposure_change)} | {formatTimestamp(latest.created_at ?? latest.time_utc)}
               </div>
             </div>
           ) : null}

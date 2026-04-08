@@ -28,6 +28,18 @@ def recent_alerts(limit: int = Query(default=25, ge=1, le=200), service: DeskApi
     return [AlertSummary.model_validate(item) for item in service.recent_alerts(limit=limit)]
 
 
+@router.get("/alerts/active", response_model=list[AlertSummary])
+def active_alerts(
+    limit: int = Query(default=25, ge=1, le=200),
+    portfolio_slug: str | None = Query(default=None),
+    service: DeskApiService = Depends(get_service),
+) -> list[AlertSummary]:
+    return [
+        AlertSummary.model_validate(item)
+        for item in service.active_alerts(limit=limit, portfolio_slug=portfolio_slug)
+    ]
+
+
 @router.post("/decisions/evaluate", response_model=RiskDecisionResponse)
 def evaluate_trade_decision(payload: TradeProposalRequest, service: DeskApiService = Depends(get_service)) -> RiskDecisionResponse:
     try:

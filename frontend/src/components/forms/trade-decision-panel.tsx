@@ -3,7 +3,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { TrendingUp, DollarSign } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api/client";
 import type { RiskDecisionResponse } from "@/lib/api/types";
 import { formatCurrency, formatPercent } from "@/lib/utils";
@@ -16,6 +16,7 @@ import {
   FormError,
   FormMetaTile,
   FormSection,
+  FormSuccess,
   PresetPill,
   SubmitButton,
 } from "@/components/forms/shared";
@@ -34,6 +35,23 @@ export function TradeDecisionPanel({
   const [side, setSide] = useState("buy");
   const [exposureChange, setExposureChange] = useState("2500000");
   const [note, setNote] = useState("");
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const successTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const validate = useCallback(() => {
+    if (!symbol.trim()) {
+      setValidationError("Symbol is required");
+      return false;
+    }
+    const numericExposure = Number(exposureChange);
+    if (!Number.isFinite(numericExposure) || numericExposure <= 0) {
+      setValidationError("Exposure must be a positive number");
+      return false;
+    }
+    setValidationError(null);
+    return true;
+  }, [symbol, exposureChange]);
 
   const mutation = useMutation({
     mutationFn: async () =>
@@ -46,8 +64,14 @@ export function TradeDecisionPanel({
     onSuccess: (result) => {
       onEvaluated?.(result);
       if (!onEvaluated) router.refresh();
+      setShowSuccess(true);
+      clearTimeout(successTimerRef.current);
+      successTimerRef.current = setTimeout(() => setShowSuccess(false), 4000);
+      setNote("");
     },
   });
+
+  useEffect(() => () => clearTimeout(successTimerRef.current), []);
 
   const result = mutation.data;
   const fillRatio = useMemo(() => {
@@ -60,7 +84,7 @@ export function TradeDecisionPanel({
       {/* Form */}
       <form
         className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4"
-        onSubmit={(e) => { e.preventDefault(); mutation.mutate(); }}
+        onSubmit={(e) => { e.preventDefault(); if (validate()) { setShowSuccess(false); mutation.mutate(); } }}
       >
         <div className="flex items-center justify-between">
           <h3 className="text-[13px] font-semibold text-[var(--color-text)]">Advisory Decision</h3>
@@ -104,7 +128,8 @@ export function TradeDecisionPanel({
 
         <div className="mt-4 flex items-center gap-2">
           <SubmitButton isPending={mutation.isPending} label="Evaluate" pendingLabel="Evaluating..." />
-          <FormError message={mutation.error instanceof Error ? mutation.error.message : mutation.error ? "Failed" : null} />
+          <FormError message={validationError ?? (mutation.error instanceof Error ? mutation.error.message : mutation.error ? "Failed" : null)} />
+          <FormSuccess message="Decision evaluated" visible={showSuccess} />
         </div>
       </form>
 

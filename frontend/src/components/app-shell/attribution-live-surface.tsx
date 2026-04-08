@@ -1,6 +1,7 @@
 "use client";
 
 import { startTransition, useEffect, useState } from "react";
+import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { ChartSurface } from "@/components/charts/chart-surface";
@@ -8,28 +9,33 @@ import { AttributionTable } from "@/components/data/risk-tables";
 import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
-import type { ModelComparisonResponse, MT5LiveStateResponse, RiskAttributionResponse } from "@/lib/api/types";
+import type { ModelComparisonResponse, RiskAttributionResponse } from "@/lib/api/types";
 import { CHART_PALETTE, makeBarOption } from "@/lib/chart-options";
-import { useMt5LiveState } from "@/lib/use-mt5-live-state";
 import { formatCurrency, formatTimestamp } from "@/lib/utils";
 import { flattenAttribution } from "@/lib/view-models";
 
-function preferredSource(liveState: MT5LiveStateResponse | null) {
-  return liveState?.risk_budget ? "mt5_live_bridge" : "historical";
+function preferredSource(liveState: ReturnType<typeof useDeskLive>["liveState"]) {
+  return liveState?.risk_budget ? "mt5_live_bridge" : "auto";
 }
 
 export function AttributionLiveSurface({
-  portfolioSlug, preferredModel, initialLiveState, initialAttribution, initialComparison,
+  portfolioSlug, preferredModel, initialAttribution, initialComparison,
 }: {
   portfolioSlug: string; preferredModel?: string;
-  initialLiveState: MT5LiveStateResponse | null;
   initialAttribution: RiskAttributionResponse | null;
   initialComparison: ModelComparisonResponse | null;
 }) {
-  const { liveState, transport } = useMt5LiveState(portfolioSlug, initialLiveState);
+  const { liveState, transport, artifactVersion } = useDeskLive();
   const [attribution, setAttribution] = useState(initialAttribution);
   const [comparison, setComparison] = useState(initialComparison);
   const attributionSource = preferredSource(liveState);
+
+  useEffect(() => {
+    startTransition(() => {
+      setAttribution(initialAttribution);
+      setComparison(initialComparison);
+    });
+  }, [initialAttribution, initialComparison]);
 
   useEffect(() => {
     let c = false;
@@ -37,25 +43,16 @@ export function AttributionLiveSurface({
       try {
         const next = await api.latestAttribution(portfolioSlug, attributionSource);
         if (!c) startTransition(() => setAttribution(next));
-      } catch {
-        if (attributionSource !== "historical") {
-          try {
-            const fb = await api.latestAttribution(portfolioSlug, "historical");
-            if (!c) startTransition(() => setAttribution(fb));
-          } catch { /* keep current */ }
-        }
-      }
+      } catch { /* keep current */ }
     })();
     return () => { c = true; };
-  }, [attributionSource, portfolioSlug, liveState?.sequence]);
+  }, [artifactVersion, attributionSource, portfolioSlug]);
 
   useEffect(() => {
     let c = false;
-    const t = window.setInterval(() => {
-      api.latestModelComparison(portfolioSlug).then((n) => { if (!c) startTransition(() => setComparison(n)); }).catch(() => {});
-    }, 30000);
-    return () => { c = true; window.clearInterval(t); };
-  }, [portfolioSlug]);
+    api.latestModelComparison(portfolioSlug).then((n) => { if (!c) startTransition(() => setComparison(n)); }).catch(() => {});
+    return () => { c = true; };
+  }, [artifactVersion, portfolioSlug]);
 
   const selectedModel = preferredModel ?? liveState?.risk_budget?.preferred_model ?? liveState?.risk_summary?.reference_model ?? comparison?.champion_model ?? (attribution ? Object.keys(attribution.models)[0] : undefined) ?? "hist";
   const rows = attribution ? flattenAttribution(attribution, selectedModel) : [];
@@ -67,7 +64,7 @@ export function AttributionLiveSurface({
       <PageHeader eyebrow="Attribution" title="Per-symbol contribution and portfolio pressure"
         aside={<>
           <StatusBadge label={selectedModel.toUpperCase()} tone="accent" />
-          <StatusBadge label={(attribution?.snapshot_source ?? "historical").replaceAll("_", " ")} tone={attribution?.snapshot_source === "mt5_live_bridge" ? "success" : "neutral"} />
+          <StatusBadge label={(attribution?.snapshot_source ?? "auto").replaceAll("_", " ")} tone={attribution?.snapshot_source === "mt5_live_bridge" ? "success" : "neutral"} />
           <StatusBadge label={transport} tone={transport === "stream" ? "success" : "warning"} />
         </>}
       />

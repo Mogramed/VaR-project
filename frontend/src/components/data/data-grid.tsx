@@ -23,6 +23,7 @@ export function DataGrid<TData extends object>({
   density?: "compact" | "comfortable";
   className?: string;
 }) {
+  // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
     data,
     columns,

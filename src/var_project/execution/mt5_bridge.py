@@ -24,6 +24,61 @@ def _normalize_symbol_list(symbols: Iterable[str] | None) -> list[str]:
     return sorted({str(symbol).upper() for symbol in symbols or [] if str(symbol).strip()})
 
 
+def _is_fx_weekend_closed(now: datetime | None = None) -> bool:
+    current = _utcnow() if now is None else now.astimezone(timezone.utc)
+    weekday = current.weekday()
+    if weekday == 4 and current.hour >= 21:
+        return True
+    if weekday == 5:
+        return True
+    if weekday == 6 and current.hour < 21:
+        return True
+    return False
+
+
+def _effective_history_lookback_minutes(*, now: datetime | None = None, history_lookback_minutes: int) -> int:
+    current = _utcnow() if now is None else now.astimezone(timezone.utc)
+    base = max(int(history_lookback_minutes), 1)
+    if _is_fx_weekend_closed(current):
+        return max(base, 72 * 60)
+    return base
+
+
+def _coerce_iso_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _normalize_tick_time_utc(payload: Mapping[str, Any]) -> str | None:
+    direct = _coerce_iso_datetime(payload.get("time_utc"))
+    if direct is not None:
+        return direct.isoformat()
+
+    raw_time_msc = payload.get("time_msc")
+    if raw_time_msc not in {None, ""}:
+        try:
+            parsed_msc = datetime.fromtimestamp(float(raw_time_msc) / 1000.0, tz=timezone.utc)
+            return parsed_msc.isoformat()
+        except (TypeError, ValueError, OSError):
+            pass
+
+    raw_time = payload.get("time")
+    if raw_time not in {None, ""}:
+        try:
+            parsed = datetime.fromtimestamp(float(raw_time), tz=timezone.utc)
+            return parsed.isoformat()
+        except (TypeError, ValueError, OSError):
+            pass
+    return None
+
+
 def build_empty_live_state(
     *,
     config: MT5Config,
@@ -48,6 +103,11 @@ def build_empty_live_state(
         "poll_interval_seconds": float(config.live_poll_seconds),
         "history_poll_interval_seconds": float(config.live_history_poll_seconds),
         "history_lookback_minutes": int(config.live_history_lookback_minutes),
+        "effective_history_lookback_minutes": int(config.live_history_lookback_minutes),
+        "market_closed": False,
+        "market_closed_reason": None,
+        "market_reference_timestamp": None,
+        "market_reference_source": None,
         "symbols": _normalize_symbol_list(seed_symbols),
         "terminal_status": None,
         "account": None,
@@ -65,7 +125,7 @@ def _normalize_tick_payload(symbol: str, payload: Mapping[str, Any]) -> dict[str
         "bid": None if payload.get("bid") is None else float(payload.get("bid")),
         "ask": None if payload.get("ask") is None else float(payload.get("ask")),
         "last": None if payload.get("last") is None else float(payload.get("last")),
-        "time_utc": payload.get("time_utc"),
+        "time_utc": _normalize_tick_time_utc(payload),
         "raw": dict(payload),
     }
 
@@ -83,6 +143,7 @@ def collect_live_state_from_connector(
     history_limit: int = 200,
 ) -> dict[str, Any]:
     live = MT5LiveGateway(connector, config=config, base_currency=base_currency)
+    now = _utcnow()
     terminal_status = live.terminal_status().to_dict()
     account = live.account_snapshot().to_dict()
     holdings = [item.to_dict() for item in live.holdings(symbols=None)]
@@ -98,9 +159,13 @@ def collect_live_state_from_connector(
 
     orders_payload = list(order_history or [])
     deals_payload = list(deal_history or [])
+    effective_history_lookback_minutes = _effective_history_lookback_minutes(
+        now=now,
+        history_lookback_minutes=history_lookback_minutes,
+    )
     if refresh_history:
-        end = _utcnow()
-        start = end - timedelta(minutes=int(history_lookback_minutes))
+        end = now
+        start = end - timedelta(minutes=effective_history_lookback_minutes)
         orders_payload = [item.to_dict() for item in live.order_history(date_from=start, date_to=end, symbols=None)]
         deals_payload = [item.to_dict() for item in live.deal_history(date_from=start, date_to=end, symbols=None)]
     if history_limit > 0:
@@ -114,15 +179,23 @@ def collect_live_state_from_connector(
                 tracked_symbols.add(symbol)
 
     ticks: dict[str, dict[str, Any]] = {}
+    latest_tick_at: datetime | None = None
+    latest_tick_symbol: str | None = None
     for symbol in sorted(tracked_symbols):
         try:
             ticks[symbol] = _normalize_tick_payload(symbol, dict(connector.symbol_info_tick(symbol)))
+            tick_time = _coerce_iso_datetime(ticks[symbol].get("time_utc"))
+            if tick_time is not None and (latest_tick_at is None or tick_time > latest_tick_at):
+                latest_tick_at = tick_time
+                latest_tick_symbol = symbol
         except MT5ConnectionError:
             continue
 
+    market_closed = _is_fx_weekend_closed(now)
+
     return {
         "source": "mt5_agent_bridge",
-        "generated_at": _utcnow_iso(),
+        "generated_at": now.isoformat(),
         "symbols": sorted(tracked_symbols),
         "terminal_status": terminal_status,
         "account": account,
@@ -131,6 +204,11 @@ def collect_live_state_from_connector(
         "pending_orders": pending_orders,
         "order_history": orders_payload,
         "deal_history": deals_payload,
+        "effective_history_lookback_minutes": effective_history_lookback_minutes,
+        "market_closed": market_closed,
+        "market_closed_reason": "weekend" if market_closed else None,
+        "market_reference_timestamp": None if latest_tick_at is None else latest_tick_at.isoformat(),
+        "market_reference_source": None if latest_tick_symbol is None else f"tick:{latest_tick_symbol}",
     }
 
 
@@ -288,6 +366,7 @@ class MT5EventBridge:
             if self._last_success_at is not None:
                 age = max((_utcnow() - self._last_success_at).total_seconds(), 0.0)
                 stale = age >= float(self.config.live_stale_after_seconds)
+                connected = not stale
             degraded = True
             degraded_state = build_empty_live_state(
                 config=self.config,

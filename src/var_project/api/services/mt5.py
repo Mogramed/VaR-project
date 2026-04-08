@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import time
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping
+from threading import Lock, Thread
+from typing import Any, Literal, Mapping
 
 from var_project.alerts.engine import (
     alerts_from_capital_snapshot,
@@ -18,10 +20,255 @@ from var_project.execution.mt5_live import ExecutionPreview, ExecutionResult, MT
 
 
 class DeskMt5Service:
+    _shared_startup_import_done: set[tuple[str, str]] = set()
+    _shared_startup_sync_inflight: set[tuple[str, str]] = set()
+    _shared_last_tick_archive_sequence: dict[tuple[str, str], int] = {}
+    _shared_enriched_live_state_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
+    _shared_live_analytics_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
+    _shared_last_broker_analytics: dict[tuple[str, str], dict[str, Any]] = {}
+    _shared_live_state_response_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
+    _shared_last_execution_reconciliation_heal_at: dict[tuple[str, str], float] = {}
+    _shared_reconciliation_match_streak: dict[tuple[str, str, str], int] = {}
+    _shared_startup_sync_lock = Lock()
+
     def __init__(self, runtime: DeskServiceRuntime):
         self.runtime = runtime
-        self._startup_import_done = False
-        self._last_tick_archive_sequence: dict[str, int] = {}
+
+    def _live_scope_key(self, portfolio_slug: str) -> tuple[str, str]:
+        return (str(self.runtime.root.resolve()), str(portfolio_slug))
+
+    def _live_state_response_cache_key(
+        self,
+        *,
+        portfolio_slug: str,
+        detail_level: str,
+    ) -> tuple[str, str, str]:
+        return (*self._live_scope_key(portfolio_slug), str(detail_level))
+
+    def _summary_cache_ttl_seconds(self) -> float:
+        configured = max(float(self.runtime.mt5_config.live_poll_seconds), 0.5)
+        return min(max(configured * 0.75, 0.5), 2.0)
+
+    def _analytics_fallback_ttl_seconds(self) -> float:
+        configured = max(float(self.runtime.mt5_config.live_history_poll_seconds), 5.0)
+        return min(max(configured * 12.0, 300.0), 1800.0)
+
+    def _remember_last_broker_analytics(
+        self,
+        *,
+        portfolio_slug: str,
+        analytics: Mapping[str, Any],
+    ) -> None:
+        scope_key = self._live_scope_key(portfolio_slug)
+        self._shared_last_broker_analytics[scope_key] = {
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "analytics": deepcopy(dict(analytics)),
+        }
+
+    def _latest_broker_analytics(
+        self,
+        *,
+        portfolio_slug: str,
+    ) -> dict[str, Any] | None:
+        scope_key = self._live_scope_key(portfolio_slug)
+        cached = self._shared_last_broker_analytics.get(scope_key)
+        if cached is None:
+            return None
+        captured_at = self._to_utc_datetime(cached.get("captured_at"))
+        if captured_at is None:
+            return None
+        age_seconds = max((datetime.now(timezone.utc) - captured_at).total_seconds(), 0.0)
+        if age_seconds > self._analytics_fallback_ttl_seconds():
+            return None
+        payload = dict(cached.get("analytics") or {})
+        if not payload:
+            return None
+        return deepcopy(payload)
+
+    def cached_live_state(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        detail_level: Literal["summary", "full", "inspector"] = "summary",
+    ) -> dict[str, Any] | None:
+        if detail_level != "summary":
+            return None
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        cache_key = self._live_state_response_cache_key(
+            portfolio_slug=portfolio["slug"],
+            detail_level=detail_level,
+        )
+        cached = self._shared_live_state_response_cache.get(cache_key)
+        if cached is None:
+            return None
+        if float(cached.get("expires_at") or 0.0) <= time.monotonic():
+            return None
+        return deepcopy(dict(cached.get("payload") or {}))
+
+    @staticmethod
+    def _to_utc_datetime(value: Any) -> datetime | None:
+        if value in {None, "", "null"}:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def _live_analytics_cache_key(
+        self,
+        *,
+        portfolio_slug: str,
+        raw_state: Mapping[str, Any],
+    ) -> tuple[str, str, str]:
+        holdings = []
+        for item in list(raw_state.get("holdings") or []):
+            if not isinstance(item, Mapping):
+                continue
+            holdings.append(
+                {
+                    str(key): item.get(key)
+                    for key in sorted(item.keys())
+                }
+            )
+        holdings.sort(
+            key=lambda item: (
+                str(item.get("symbol") or ""),
+                str(item.get("side") or ""),
+                str(item.get("ticket") or item.get("position_id") or ""),
+                float(item.get("volume_lots") or item.get("volume") or 0.0),
+            )
+        )
+        latest_sync_marker = self._latest_market_sync_marker(portfolio_slug)
+        return (
+            *self._live_scope_key(portfolio_slug),
+            json.dumps(
+                {
+                    "holdings": holdings,
+                    "latest_sync_marker": latest_sync_marker,
+                    "market_closed": bool(raw_state.get("market_closed", False)),
+                    "market_reference_timestamp": raw_state.get("market_reference_timestamp"),
+                },
+                sort_keys=True,
+                default=str,
+            ),
+        )
+
+    def _enriched_live_state_cache_key(
+        self,
+        *,
+        portfolio_slug: str,
+        raw_state: Mapping[str, Any],
+    ) -> tuple[str, str, str, str]:
+        return (
+            *self._live_scope_key(portfolio_slug),
+            self._live_persistence_key(dict(raw_state)),
+            self._latest_market_sync_marker(portfolio_slug),
+        )
+
+    def _latest_market_sync_marker(self, portfolio_slug: str) -> str:
+        if not self.runtime.storage_ready:
+            return ""
+        latest_sync = self.runtime.storage.latest_market_data_sync(portfolio_slug=portfolio_slug)
+        if latest_sync is None:
+            return ""
+        return str(latest_sync.get("synced_at") or latest_sync.get("updated_at") or "")
+
+    def _cached_enrich_live_state(
+        self,
+        raw_state: dict[str, Any],
+        *,
+        portfolio_slug: str,
+    ) -> dict[str, Any]:
+        cache_key = self._enriched_live_state_cache_key(
+            portfolio_slug=portfolio_slug,
+            raw_state=raw_state,
+        )
+        cached = self._shared_enriched_live_state_cache.get(cache_key)
+        if cached is not None:
+            return deepcopy(cached)
+
+        enriched = self._enrich_live_state(raw_state, portfolio_slug=portfolio_slug)
+        self._shared_enriched_live_state_cache[cache_key] = deepcopy(enriched)
+
+        scope_key = self._live_scope_key(portfolio_slug)
+        for key in list(self._shared_enriched_live_state_cache):
+            if key[:2] == scope_key and key != cache_key:
+                del self._shared_enriched_live_state_cache[key]
+
+        return enriched
+
+    def _cached_build_live_analytics(
+        self,
+        raw_state: dict[str, Any],
+        *,
+        portfolio_slug: str,
+    ) -> dict[str, Any] | None:
+        cache_key = self._live_analytics_cache_key(
+            portfolio_slug=portfolio_slug,
+            raw_state=raw_state,
+        )
+        cached = self._shared_live_analytics_cache.get(cache_key)
+        if cached is not None:
+            return deepcopy(cached)
+
+        analytics = self._build_live_analytics(raw_state, portfolio_slug=portfolio_slug)
+        if analytics is None:
+            return None
+
+        self._shared_live_analytics_cache[cache_key] = deepcopy(analytics)
+
+        scope_key = self._live_scope_key(portfolio_slug)
+        for key in list(self._shared_live_analytics_cache):
+            if key[:2] == scope_key and key != cache_key:
+                del self._shared_live_analytics_cache[key]
+
+        return analytics
+
+    def _schedule_startup_sync(
+        self,
+        *,
+        portfolio: Mapping[str, Any],
+        portfolio_id: int | None,
+        imported_symbols: list[str],
+    ) -> None:
+        scope_key = self._live_scope_key(str(portfolio["slug"]))
+        with self._shared_startup_sync_lock:
+            if scope_key in self._shared_startup_sync_inflight:
+                return
+            self._shared_startup_sync_inflight.add(scope_key)
+
+        def _run() -> None:
+            try:
+                self.runtime.market_data.sync_market_data(
+                    portfolio_slug=str(portfolio["slug"]),
+                    days=self.runtime.market_data.history_backfill_days(),
+                    timeframes=self.runtime.market_data.startup_sync_timeframes(),
+                )
+            except Exception as exc:
+                if portfolio_id is not None:
+                    self.runtime.storage.record_audit_event(
+                        actor="system",
+                        action_type="mt5.startup_sync_failed",
+                        object_type="portfolio",
+                        payload={
+                            "portfolio_slug": portfolio["slug"],
+                            "detail": str(exc),
+                            "imported_symbols": imported_symbols,
+                        },
+                        portfolio_id=portfolio_id,
+                    )
+            finally:
+                with self._shared_startup_sync_lock:
+                    self._shared_startup_sync_inflight.discard(scope_key)
+
+        Thread(
+            target=_run,
+            name=f"mt5-startup-sync-{portfolio['slug']}",
+            daemon=True,
+        ).start()
 
     def _normalize_live_state(self, raw_state: dict[str, Any]) -> dict[str, Any]:
         payload = dict(raw_state)
@@ -39,14 +286,19 @@ class DeskMt5Service:
         payload["history_lookback_minutes"] = int(
             payload.get("history_lookback_minutes") or self.runtime.mt5_config.live_history_lookback_minutes
         )
+        payload["effective_history_lookback_minutes"] = int(
+            payload.get("effective_history_lookback_minutes") or payload["history_lookback_minutes"]
+        )
+        payload["market_closed"] = bool(payload.get("market_closed", False))
+        payload["market_closed_reason"] = payload.get("market_closed_reason")
+        payload["market_reference_timestamp"] = payload.get("market_reference_timestamp")
+        payload["market_reference_source"] = payload.get("market_reference_source")
         payload["generated_at"] = str(payload.get("generated_at") or datetime.now(timezone.utc).isoformat())
         payload["last_success_at"] = payload.get("last_success_at") or payload["generated_at"]
         payload["source"] = str(payload.get("source") or "mt5_agent_bridge")
         return payload
 
     def _check_startup_import(self, raw_state: dict[str, Any], *, portfolio_slug: str | None = None) -> None:
-        if self._startup_import_done:
-            return
         if not raw_state.get("connected"):
             return
         live_holdings = list(raw_state.get("holdings") or [])
@@ -65,9 +317,13 @@ class DeskMt5Service:
                     discovered_symbols.add(symbol)
         if not discovered_symbols and not live_holdings:
             return
-        self._startup_import_done = True
 
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        scope_key = self._live_scope_key(portfolio["slug"])
+        if scope_key in self._shared_startup_import_done:
+            return
+        self._shared_startup_import_done.add(scope_key)
+
         portfolio_id = self.runtime.portfolio_ids.get(portfolio["slug"])
         desk_symbols = {
             str(s).upper()
@@ -88,25 +344,11 @@ class DeskMt5Service:
                 },
                 portfolio_id=portfolio_id,
             )
-        try:
-            self.runtime.market_data.sync_market_data(
-                portfolio_slug=portfolio["slug"],
-                days=self.runtime.market_data.history_backfill_days(),
-                timeframes=self.runtime.market_data.startup_sync_timeframes(),
-            )
-        except Exception as exc:
-            if portfolio_id is not None:
-                self.runtime.storage.record_audit_event(
-                    actor="system",
-                    action_type="mt5.startup_sync_failed",
-                    object_type="portfolio",
-                    payload={
-                        "portfolio_slug": portfolio["slug"],
-                        "detail": str(exc),
-                        "imported_symbols": imported_symbols,
-                    },
-                    portfolio_id=portfolio_id,
-                )
+        self._schedule_startup_sync(
+            portfolio=portfolio,
+            portfolio_id=portfolio_id,
+            imported_symbols=imported_symbols,
+        )
 
     def _live_portfolio_scope(
         self,
@@ -136,20 +378,165 @@ class DeskMt5Service:
             "symbols": scoped_symbols,
         }
 
+    def _empty_book_live_analytics(
+        self,
+        *,
+        portfolio: Mapping[str, Any],
+        raw_state: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        snapshot_timestamp = str(
+            raw_state.get("market_reference_timestamp")
+            or raw_state.get("generated_at")
+            or datetime.now(timezone.utc).isoformat()
+        )
+        reference_model = self.runtime._decision_reference_model(portfolio["slug"])
+        preferred_model = self.runtime._preferred_model(portfolio["slug"]) or reference_model
+        model_names = sorted(
+            {
+                *dict(self.runtime.limits_config.get("model_limits_eur") or {}).keys(),
+                reference_model,
+                preferred_model,
+            }
+        )
+        zero_metrics = {str(model): 0.0 for model in model_names if str(model).strip()}
+        live_portfolio = self.runtime.is_live_portfolio(portfolio)
+
+        capital_template = None
+        if self.runtime.storage_ready:
+            source_candidates = ("mt5_live_bridge", "mt5_live") if live_portfolio else ("mt5_live_bridge", "mt5_live", "historical")
+            for source in source_candidates:
+                capital_template = self.runtime.storage.latest_capital_snapshot(
+                    source=source,
+                    portfolio_slug=portfolio["slug"],
+                )
+                if capital_template is not None:
+                    break
+        capital_template = {} if capital_template is None else dict(capital_template)
+
+        total_budget = float(capital_template.get("total_capital_budget_eur") or 0.0)
+        budget_template = dict(capital_template.get("budget") or {})
+        model_template = dict(capital_template.get("models") or {})
+        allocation_template = dict(capital_template.get("allocations") or {})
+
+        capital_usage = {
+            "portfolio_slug": portfolio["slug"],
+            "base_currency": str(portfolio["base_currency"]),
+            "reference_model": reference_model,
+            "snapshot_source": "mt5_live_bridge",
+            "snapshot_timestamp": snapshot_timestamp,
+            "source": "mt5_live_bridge",
+            "created_at": snapshot_timestamp,
+            "total_capital_budget_eur": total_budget,
+            "total_capital_consumed_eur": 0.0,
+            "total_capital_reserved_eur": 0.0,
+            "total_capital_remaining_eur": total_budget,
+            "headroom_ratio": None if total_budget <= 0.0 else 1.0,
+            "status": "OK",
+            "budget": {
+                "reference_model": reference_model,
+                "total_budget_eur": total_budget,
+                "reserve_ratio": float(
+                    budget_template.get("reserve_ratio")
+                    or dict(self.runtime.limits_config.get("capital_management") or {}).get("reserve_ratio")
+                    or 0.0
+                ),
+                "reserved_capital_eur": 0.0,
+                "model_budgets": dict(budget_template.get("model_budgets") or {}),
+                "symbol_budgets": dict(budget_template.get("symbol_budgets") or {}),
+            },
+            "models": {},
+            "allocations": {},
+            "recommendations": [],
+        }
+        for model, template in model_template.items():
+            payload = dict(template or {})
+            budget_eur = float(payload.get("budget_eur") or 0.0)
+            capital_usage["models"][str(model)] = {
+                "model": str(model),
+                "budget_eur": budget_eur,
+                "consumed_eur": 0.0,
+                "remaining_eur": budget_eur,
+                "utilization": None if budget_eur <= 0.0 else 0.0,
+                "status": "OK",
+            }
+        for symbol, template in allocation_template.items():
+            payload = dict(template or {})
+            target = float(
+                payload.get("target_capital_eur")
+                or payload.get("remaining_capital_eur")
+                or 0.0
+            )
+            capital_usage["allocations"][str(symbol)] = {
+                "symbol": str(symbol),
+                "weight": float(payload.get("weight") or 0.0),
+                "target_capital_eur": target,
+                "consumed_capital_eur": 0.0,
+                "reserved_capital_eur": 0.0,
+                "remaining_capital_eur": target,
+                "utilization": None if target <= 0.0 else 0.0,
+                "action": "monitor",
+                "status": "OK",
+            }
+
+        return {
+            "bundle": None,
+            "risk_summary": {
+                "generated_at": snapshot_timestamp,
+                "portfolio_slug": portfolio["slug"],
+                "portfolio_mode": portfolio.get("mode"),
+                "source": "mt5_live_bridge",
+                "reference_model": reference_model,
+                "preferred_model": preferred_model,
+                "alpha": float(self.runtime.risk_defaults["alpha"]),
+                "sample_size": 0,
+                "timeframe": self.runtime._default_timeframe(),
+                "days": int(self.runtime._default_days()),
+                "window": int(self.runtime.risk_defaults["window"]),
+                "latest_observation": raw_state.get("market_reference_timestamp"),
+                "var": zero_metrics,
+                "es": zero_metrics,
+                "risk_surface": {},
+                "headline_risk": [],
+                "stress_surface": {},
+                "data_quality": {
+                    "status": "flat_book",
+                    "estimation_window_days": int(self.runtime.risk_defaults.get("estimation_window_days") or 0),
+                    "minimum_valid_days": int(self.runtime.risk_defaults.get("minimum_valid_days") or 0),
+                    "available_observations": 0,
+                    "oldest_observation": None,
+                    "latest_observation": raw_state.get("market_reference_timestamp"),
+                    "horizon_observations": {},
+                    "symbol_count": 0,
+                },
+                "model_diagnostics": {
+                    "flat_book": True,
+                    "market_closed": bool(raw_state.get("market_closed", False)),
+                },
+            },
+            "risk_budget": {
+                "alpha": float(self.runtime.risk_defaults["alpha"]),
+                "sample_size": 0,
+                "preferred_model": preferred_model,
+                "snapshot_source": "mt5_live_bridge",
+                "snapshot_timestamp": snapshot_timestamp,
+                "models": {},
+            },
+            "capital_usage": capital_usage,
+            "alerts": [],
+        }
+
     def _build_live_analytics(
         self,
         raw_state: dict[str, Any],
         *,
         portfolio_slug: str | None = None,
     ) -> dict[str, Any] | None:
-        holdings = list(raw_state.get("holdings") or [])
-        if not holdings:
-            return None
-
         portfolio = self._live_portfolio_scope(raw_state, portfolio_slug=portfolio_slug)
+        if not list(raw_state.get("holdings") or []):
+            return self._empty_book_live_analytics(portfolio=portfolio, raw_state=raw_state)
         bundle = self.runtime._compute_portfolio_state_for_holdings(
             portfolio=portfolio,
-            holdings=holdings,
+            holdings=list(raw_state.get("holdings") or []),
             timeframe=self.runtime._default_timeframe(),
             days=self.runtime._default_days(),
             min_coverage=float(self.runtime.data_defaults["min_coverage"]),
@@ -159,16 +546,22 @@ class DeskMt5Service:
             snapshot_timestamp=str(raw_state.get("generated_at") or datetime.now(timezone.utc).isoformat()),
         )
         sample = bundle["sample"]
+        latest_observation = None if sample.empty else sample.index[-1].isoformat()
+        snapshot_timestamp = str(
+            raw_state.get("generated_at")
+            or latest_observation
+            or datetime.now(timezone.utc).isoformat()
+        )
         risk_budget = bundle["risk_budget"].to_dict()
         risk_budget["snapshot_source"] = "mt5_live_bridge"
-        risk_budget["snapshot_timestamp"] = str(raw_state.get("generated_at") or sample.index[-1].isoformat())
+        risk_budget["snapshot_timestamp"] = snapshot_timestamp
         capital_usage = dict(bundle["capital"])
         capital_usage["snapshot_source"] = "mt5_live_bridge"
-        capital_usage["snapshot_timestamp"] = str(raw_state.get("generated_at") or sample.index[-1].isoformat())
+        capital_usage["snapshot_timestamp"] = snapshot_timestamp
         return {
             "bundle": bundle,
             "risk_summary": {
-                "generated_at": str(raw_state.get("generated_at") or datetime.now(timezone.utc).isoformat()),
+                "generated_at": snapshot_timestamp,
                 "portfolio_slug": portfolio["slug"],
                 "portfolio_mode": portfolio.get("mode"),
                 "source": "mt5_live_bridge",
@@ -179,7 +572,7 @@ class DeskMt5Service:
                 "timeframe": bundle["timeframe"],
                 "days": int(bundle["days"]),
                 "window": int(bundle["window"]),
-                "latest_observation": sample.index[-1].isoformat(),
+                "latest_observation": latest_observation,
                 "var": bundle["snapshot"].vars_dict(),
                 "es": bundle["snapshot"].es_dict(),
                 "risk_surface": dict(bundle["risk_surface"]),
@@ -212,6 +605,340 @@ class DeskMt5Service:
             deduped.append(normalized)
         return deduped
 
+    @staticmethod
+    def _coerce_float(value: Any) -> float | None:
+        if value in {None, "", "null"}:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _coerce_int(value: Any) -> int | None:
+        if value in {None, "", "null"}:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _build_quality_checks(self, payload: Mapping[str, Any]) -> tuple[list[dict[str, Any]], float | None]:
+        checks: list[dict[str, Any]] = []
+        total = 0.0
+        score = 0.0
+
+        def _append(
+            *,
+            check_id: str,
+            label: str,
+            status: str,
+            message: str,
+            actual: Any = None,
+            expected: Any = None,
+            hint: str | None = None,
+        ) -> None:
+            nonlocal total, score
+            normalized = str(status or "fail").strip().lower()
+            if normalized not in {"pass", "warn", "fail"}:
+                normalized = "fail"
+            total += 1.0
+            if normalized == "pass":
+                score += 1.0
+            elif normalized == "warn":
+                score += 0.5
+            checks.append(
+                {
+                    "id": check_id,
+                    "label": label,
+                    "status": normalized,
+                    "message": message,
+                    "actual": actual,
+                    "expected": expected,
+                    "hint": hint,
+                }
+            )
+
+        capital = dict(payload.get("capital_usage") or {})
+        if capital:
+            budget = self._coerce_float(capital.get("total_capital_budget_eur"))
+            consumed = self._coerce_float(capital.get("total_capital_consumed_eur"))
+            reserved = self._coerce_float(capital.get("total_capital_reserved_eur"))
+            remaining = self._coerce_float(capital.get("total_capital_remaining_eur"))
+            if None not in {budget, consumed, reserved, remaining}:
+                lhs = float(consumed or 0.0) + float(reserved or 0.0) + float(remaining or 0.0)
+                rhs = float(budget or 0.0)
+                tolerance = max(abs(rhs) * 0.005, 1e-6)
+                ok = abs(lhs - rhs) <= tolerance
+                _append(
+                    check_id="capital_identity",
+                    label="Capital identity",
+                    status="pass" if ok else "fail",
+                    message=(
+                        "Capital identity holds."
+                        if ok
+                        else "Consumed + reserved + remaining does not match total budget."
+                    ),
+                    actual=lhs,
+                    expected=rhs,
+                    hint="Verify capital snapshot aggregation if mismatch persists.",
+                )
+            headroom = self._coerce_float(capital.get("headroom_ratio"))
+            if headroom is None:
+                _append(
+                    check_id="capital_headroom",
+                    label="Headroom bounds",
+                    status="warn",
+                    message="Headroom ratio is missing.",
+                    hint="Headroom should normally be in [0, 1].",
+                )
+            else:
+                in_range = -0.01 <= float(headroom) <= 1.01
+                _append(
+                    check_id="capital_headroom",
+                    label="Headroom bounds",
+                    status="pass" if in_range else "fail",
+                    message=(
+                        "Headroom ratio is coherent."
+                        if in_range
+                        else "Headroom ratio is outside the expected [0, 1] range."
+                    ),
+                    actual=headroom,
+                    expected="[0, 1]",
+                )
+
+        exposure = dict(payload.get("exposure") or {})
+        holdings = list(payload.get("holdings") or [])
+        if exposure or holdings:
+            gross = self._coerce_float(exposure.get("gross_exposure_base_ccy"))
+            from_holdings = float(
+                sum(
+                    abs(
+                        float(
+                            (item or {}).get("signed_exposure_base_ccy")
+                            or (item or {}).get("exposure_base_ccy")
+                            or 0.0
+                        )
+                    )
+                    for item in holdings
+                )
+            )
+            if gross is None:
+                _append(
+                    check_id="exposure_identity",
+                    label="Exposure identity",
+                    status="warn",
+                    message="Gross exposure is missing in live payload.",
+                    actual=from_holdings,
+                    expected=None,
+                )
+            else:
+                tolerance = max(1e-6, max(abs(gross), abs(from_holdings)) * 0.01)
+                ok = abs(float(gross) - from_holdings) <= tolerance
+                _append(
+                    check_id="exposure_identity",
+                    label="Exposure identity",
+                    status="pass" if ok else "fail",
+                    message=(
+                        "Exposure from holdings matches aggregate exposure."
+                        if ok
+                        else "Exposure aggregate diverges from holdings-derived value."
+                    ),
+                    actual=float(gross),
+                    expected=from_holdings,
+                )
+
+        risk_summary = dict(payload.get("risk_summary") or {})
+        if capital and risk_summary:
+            reference_model = str(
+                capital.get("reference_model")
+                or risk_summary.get("reference_model")
+                or ""
+            ).lower()
+            var_map = {
+                str(key).lower(): value
+                for key, value in dict(risk_summary.get("var") or {}).items()
+            }
+            es_map = {
+                str(key).lower(): value
+                for key, value in dict(risk_summary.get("es") or {}).items()
+            }
+            model_capitals = {
+                str(key).lower(): dict(value or {})
+                for key, value in dict(capital.get("models") or {}).items()
+            }
+            expected_consumed = max(
+                self._coerce_float(var_map.get(reference_model)) or 0.0,
+                self._coerce_float(es_map.get(reference_model)) or 0.0,
+            )
+            actual_consumed = self._coerce_float(
+                dict(model_capitals.get(reference_model) or {}).get("consumed_eur")
+            )
+            if actual_consumed is None:
+                _append(
+                    check_id="risk_capital_alignment",
+                    label="Risk vs capital",
+                    status="warn",
+                    message="Model capital consumed value is missing.",
+                    hint="Reference model capital should track max(VaR, ES).",
+                )
+            else:
+                tolerance = max(1.0, abs(expected_consumed) * 0.10)
+                ok = abs(float(actual_consumed) - float(expected_consumed)) <= tolerance
+                _append(
+                    check_id="risk_capital_alignment",
+                    label="Risk vs capital",
+                    status="pass" if ok else "fail",
+                    message=(
+                        "Reference model capital aligns with live risk metrics."
+                        if ok
+                        else "Reference model capital diverges from live risk metrics."
+                    ),
+                    actual=actual_consumed,
+                    expected=expected_consumed,
+                    hint="Check risk_summary vs capital_usage model mapping.",
+                )
+
+        reconciliation = dict(payload.get("reconciliation") or {})
+        if reconciliation:
+            status_counts = {
+                str(key): int(value or 0)
+                for key, value in dict(reconciliation.get("status_counts") or {}).items()
+            }
+            mismatch_status_counts = {
+                str(key): int(value or 0)
+                for key, value in dict(reconciliation.get("mismatch_status_counts") or {}).items()
+            }
+            execution_status_counts = {
+                str(key): int(value or 0)
+                for key, value in dict(reconciliation.get("execution_status_counts") or {}).items()
+            }
+            if not mismatch_status_counts and status_counts:
+                mismatch_like = {
+                    "match",
+                    "live_base_incomplete",
+                    "desk_vs_broker_drift",
+                    "orphan_live_position",
+                    "orphan_live_order",
+                }
+                mismatch_status_counts = {
+                    key: value
+                    for key, value in status_counts.items()
+                    if str(key).lower() in mismatch_like
+                }
+            if not execution_status_counts and status_counts:
+                execution_status_counts = {
+                    key: value
+                    for key, value in status_counts.items()
+                    if key not in mismatch_status_counts
+                }
+            mismatch_non_match_total = int(
+                sum(
+                    int(value or 0)
+                    for key, value in mismatch_status_counts.items()
+                    if str(key).lower() != "match"
+                )
+            )
+            mismatches = [dict(item) for item in list(reconciliation.get("mismatches") or [])]
+            mismatch_count = len(mismatches)
+            mismatch_active_count = int(
+                sum(1 for item in mismatches if str(item.get("status") or "").lower() != "match")
+            )
+            market_closed = bool(reconciliation.get("market_closed", False))
+            if mismatch_non_match_total <= 0 and mismatch_count <= 0:
+                _append(
+                    check_id="reconciliation_totals",
+                    label="Reconciliation totals",
+                    status="pass",
+                    message="No active reconciliation mismatches.",
+                    actual=0,
+                    expected=0,
+                )
+            else:
+                expected_active = mismatch_active_count if mismatch_count > 0 else 0
+                consistent = expected_active == mismatch_non_match_total
+                _append(
+                    check_id="reconciliation_totals",
+                    label="Reconciliation totals",
+                    status=(
+                        "pass"
+                        if consistent
+                        else "warn"
+                        if market_closed
+                        else "fail"
+                    ),
+                    message=(
+                        "Reconciliation counters are coherent."
+                        if consistent
+                        else "Mismatch counters and mismatch rows are not aligned."
+                    ),
+                    actual=mismatch_non_match_total,
+                    expected=expected_active,
+                    hint="When market is closed, stale broker windows may temporarily skew counters.",
+                )
+            execution_non_match_total = int(
+                sum(
+                    int(value or 0)
+                    for key, value in execution_status_counts.items()
+                    if str(key).lower() != "match"
+                )
+            )
+            expected_execution_non_match_total = int(
+                reconciliation.get("unmatched_execution_count") or 0
+            ) + int(reconciliation.get("history_window_expired_execution_count") or 0)
+            if execution_status_counts or expected_execution_non_match_total > 0:
+                execution_consistent = execution_non_match_total == expected_execution_non_match_total
+                _append(
+                    check_id="execution_reconciliation_totals",
+                    label="Execution reconciliation totals",
+                    status=(
+                        "pass"
+                        if execution_consistent
+                        else "warn"
+                        if market_closed
+                        else "fail"
+                    ),
+                    message=(
+                        "Execution reconciliation counters are coherent."
+                        if execution_consistent
+                        else "Execution status counters are not aligned with unmatched/expired totals."
+                    ),
+                    actual=execution_non_match_total,
+                    expected=expected_execution_non_match_total,
+                    hint="Verify execution lineage reconciliation rollups when this persists.",
+                )
+            portfolio = self.runtime._resolve_portfolio_context(payload.get("portfolio_slug"))
+            if self.runtime.strict_live_required(portfolio):
+                operational_truth = str(reconciliation.get("operational_truth") or "").lower()
+                truth_ok = operational_truth == "broker"
+                truth_degraded = operational_truth == "broker_delayed"
+                _append(
+                    check_id="strict_live_truth",
+                    label="Strict live truth",
+                    status=(
+                        "pass"
+                        if truth_ok
+                        else "warn"
+                        if truth_degraded or market_closed
+                        else "fail"
+                    ),
+                    message=(
+                        "Broker is the active source of operational truth."
+                        if truth_ok
+                        else "Broker evidence is temporarily delayed; using the latest broker-backed reference."
+                        if truth_degraded
+                        else "Operational truth is not broker-backed in strict live mode."
+                    ),
+                    actual=operational_truth or None,
+                    expected="broker",
+                    hint=(
+                        "If market is closed or broker evidence is delayed, this may remain informational until the next broker session."
+                    ),
+                )
+
+        truth_score = None if total <= 0.0 else round(float(score / total), 4)
+        return checks, truth_score
+
     def _archive_live_ticks_if_needed(
         self,
         raw_state: Mapping[str, Any],
@@ -230,11 +957,12 @@ class DeskMt5Service:
         if not bool(raw_state.get("connected", False)):
             return self.runtime.market_data.tick_archive_summary(symbols=symbols)
         sequence = int(raw_state.get("sequence") or 0)
-        if sequence > 0 and self._last_tick_archive_sequence.get(portfolio_slug) == sequence:
+        scope_key = self._live_scope_key(portfolio_slug)
+        if sequence > 0 and self._shared_last_tick_archive_sequence.get(scope_key) == sequence:
             return self.runtime.market_data.tick_archive_summary(symbols=symbols)
         archived = self.runtime.market_data.archive_live_ticks_from_state(raw_state, portfolio_slug=portfolio_slug)
         if sequence > 0:
-            self._last_tick_archive_sequence[portfolio_slug] = sequence
+            self._shared_last_tick_archive_sequence[scope_key] = sequence
         return dict(archived.get("summary") or {})
 
     def _headline_risk_point(
@@ -255,6 +983,83 @@ class DeskMt5Service:
                 return item
         return None if not candidates else candidates[0]
 
+    def analytics_series(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        window_minutes: int = 240,
+        max_points: int = 300,
+    ) -> dict[str, Any]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        resolved_window_minutes = max(int(window_minutes), 15)
+        resolved_max_points = max(int(max_points), 50)
+        now = datetime.now(timezone.utc)
+        window_start = now - timedelta(minutes=resolved_window_minutes)
+        current_state = self.live_state(portfolio_slug=portfolio["slug"], detail_level="summary")
+        events = self.live_events(
+            portfolio_slug=portfolio["slug"],
+            after=0,
+            limit=max(resolved_max_points * 4, 200),
+            wait_seconds=0.0,
+            detail_level="summary",
+        )
+        states = [dict(item.get("state") or {}) for item in events]
+        states.append(dict(current_state))
+
+        point_by_timestamp: dict[str, dict[str, Any]] = {}
+        for state in states:
+            account = dict(state.get("account") or {})
+            if not account and not state:
+                continue
+            timestamp = self._to_utc_datetime(
+                account.get("timestamp_utc")
+                or dict(state.get("risk_summary") or {}).get("generated_at")
+                or state.get("generated_at")
+            )
+            if timestamp is None:
+                continue
+            if timestamp < window_start:
+                continue
+            tick_reference = self._to_utc_datetime(
+                dict(state.get("tick_quality") or {}).get("market_reference_timestamp")
+                or dict(state.get("reconciliation") or {}).get("market_reference_timestamp")
+                or state.get("market_reference_timestamp")
+            )
+            tick_age_seconds = None
+            if tick_reference is not None:
+                tick_age_seconds = max((timestamp - tick_reference).total_seconds(), 0.0)
+            key = timestamp.isoformat()
+            point_by_timestamp[key] = {
+                "timestamp": key,
+                "balance": self._coerce_float(account.get("balance")),
+                "equity": self._coerce_float(account.get("equity")),
+                "margin_free": self._coerce_float(account.get("margin_free")),
+                "margin_level": self._coerce_float(account.get("margin_level")),
+                "profit": self._coerce_float(account.get("profit")),
+                "avg_spread_bps": self._coerce_float(
+                    dict(state.get("microstructure") or {}).get("avg_spread_bps")
+                ),
+                "tick_age_seconds": tick_age_seconds,
+                "tick_quality_status": dict(state.get("tick_quality") or {}).get("status"),
+            }
+
+        points = [point_by_timestamp[key] for key in sorted(point_by_timestamp.keys())]
+        if len(points) > resolved_max_points:
+            step = max(len(points) // resolved_max_points, 1)
+            sampled = points[::step]
+            if sampled[-1] != points[-1]:
+                sampled.append(points[-1])
+            points = sampled[-resolved_max_points:]
+
+        return {
+            "generated_at": now.isoformat(),
+            "portfolio_slug": portfolio["slug"],
+            "window_minutes": resolved_window_minutes,
+            "market_closed": bool(current_state.get("market_closed", False)),
+            "market_reference_timestamp": current_state.get("market_reference_timestamp"),
+            "points": points,
+        }
+
     def _build_microstructure(
         self,
         raw_state: Mapping[str, Any],
@@ -274,6 +1079,12 @@ class DeskMt5Service:
         widest_symbol: str | None = None
         widest_spread_bps: float | None = None
         regime = str(dict(tick_archive.get("microstructure") or {}).get("regime") or "incomplete")
+        market_closed = bool(raw_state.get("market_closed", False))
+        market_closed_reason = raw_state.get("market_closed_reason")
+        market_reference_timestamp = raw_state.get("market_reference_timestamp") or tick_archive.get("latest_tick_at")
+        market_reference_source = raw_state.get("market_reference_source") or (
+            "tick_archive" if tick_archive.get("latest_tick_at") else None
+        )
         healthy = 0
         stale = 0
         incomplete = 0
@@ -337,18 +1148,26 @@ class DeskMt5Service:
                 }
             )
 
+        status = "healthy" if items and healthy == len(items) else ("stale" if stale > 0 else "incomplete")
+        if market_closed:
+            status = "market_closed"
+        resolved_regime = "closed" if market_closed else regime
         tick_quality = {
             **dict(tick_archive.get("tick_quality") or {}),
-            "status": "healthy" if items and healthy == len(items) else ("stale" if stale > 0 else "incomplete"),
+            "status": status,
             "healthy_symbols": healthy,
             "stale_symbols": stale,
             "incomplete_symbols": incomplete,
+            "market_closed": market_closed,
+            "market_closed_reason": market_closed_reason,
+            "market_reference_timestamp": market_reference_timestamp,
+            "market_reference_source": market_reference_source,
         }
         microstructure = {
             **dict(tick_archive.get("microstructure") or {}),
             "generated_at": str(raw_state.get("generated_at") or datetime.now(timezone.utc).isoformat()),
             "status": str(tick_archive.get("coverage_status") or "incomplete"),
-            "regime": regime,
+            "regime": resolved_regime,
             "avg_spread_bps": None if not spread_bps_values else float(sum(spread_bps_values) / len(spread_bps_values)),
             "widest_spread_bps": widest_spread_bps,
             "widest_symbol": widest_symbol,
@@ -356,6 +1175,11 @@ class DeskMt5Service:
             "retention_tiers": self.runtime.market_data.retention_days_by_timeframe(),
             "tick_archive_rows": int(tick_archive.get("row_count") or 0),
             "tick_archive_partitions": int(tick_archive.get("partition_count") or 0),
+            "market_closed": market_closed,
+            "market_closed_reason": market_closed_reason,
+            "market_reference_timestamp": market_reference_timestamp,
+            "market_reference_source": market_reference_source,
+            "session_regime": regime,
             "items": items,
         }
         return microstructure, tick_quality
@@ -386,7 +1210,7 @@ class DeskMt5Service:
                 scale_factor += 0.15
             elif float(avg_spread_bps) >= 3.0:
                 scale_factor += 0.05
-        if quality_status != "healthy":
+        if quality_status not in {"healthy", "market_closed"}:
             scale_factor += 0.05
         scale_factor = min(max(scale_factor, 0.8), 1.65)
 
@@ -409,7 +1233,7 @@ class DeskMt5Service:
             }
 
         status = "healthy"
-        if quality_status != "healthy":
+        if quality_status not in {"healthy", "market_closed"}:
             status = "degraded"
         return {
             "status": status,
@@ -509,10 +1333,25 @@ class DeskMt5Service:
             "connected": bool(raw_state.get("connected", False)),
             "stale": bool(raw_state.get("stale", False)),
             "symbols": list(raw_state.get("symbols") or []),
+            "ticks": {
+                str(symbol).upper(): {
+                    "bid": dict(tick or {}).get("bid"),
+                    "ask": dict(tick or {}).get("ask"),
+                    "last": dict(tick or {}).get("last"),
+                    "time_utc": dict(tick or {}).get("time_utc"),
+                }
+                for symbol, tick in dict(raw_state.get("ticks") or {}).items()
+                if str(symbol or "").strip()
+            },
             "holdings": list(raw_state.get("holdings") or []),
             "pending_orders": list(raw_state.get("pending_orders") or []),
             "order_history": list(raw_state.get("order_history") or []),
             "deal_history": list(raw_state.get("deal_history") or []),
+            "effective_history_lookback_minutes": raw_state.get("effective_history_lookback_minutes"),
+            "market_closed": bool(raw_state.get("market_closed", False)),
+            "market_closed_reason": raw_state.get("market_closed_reason"),
+            "market_reference_timestamp": raw_state.get("market_reference_timestamp"),
+            "market_reference_source": raw_state.get("market_reference_source"),
         }
         return f"state:{json.dumps(payload, sort_keys=True, default=str)}"
 
@@ -523,7 +1362,7 @@ class DeskMt5Service:
         analytics: dict[str, Any] | None,
         portfolio_slug: str | None = None,
     ) -> None:
-        if analytics is None or not self.runtime.storage_ready:
+        if analytics is None or analytics.get("bundle") is None or not self.runtime.storage_ready:
             return
         if not bool(raw_state.get("connected", False)) or bool(raw_state.get("stale", False)):
             return
@@ -568,6 +1407,29 @@ class DeskMt5Service:
             persist_audit=False,
         )
 
+    def _apply_live_detail_level(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        detail_level: Literal["summary", "full", "inspector"] = "full",
+    ) -> dict[str, Any]:
+        if detail_level in {"full", "inspector"}:
+            return deepcopy(dict(payload))
+
+        compact = deepcopy(dict(payload))
+        compact["order_history"] = []
+        compact["deal_history"] = []
+
+        reconciliation = dict(compact.get("reconciliation") or {})
+        if reconciliation:
+            reconciliation["mismatches"] = []
+            reconciliation["incidents"] = []
+            reconciliation["recent_execution_attempts"] = []
+            reconciliation["recent_fills"] = []
+            compact["reconciliation"] = reconciliation
+
+        return compact
+
     def _build_live_state_direct(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         connector = self.runtime._build_mt5_connector()
@@ -584,9 +1446,248 @@ class DeskMt5Service:
             connector.shutdown()
         return self._normalize_live_state(raw_state)
 
+    def _clear_scope_caches(self, *, portfolio_slug: str) -> None:
+        scope_key = self._live_scope_key(portfolio_slug)
+        for key in list(self._shared_enriched_live_state_cache):
+            if key[:2] == scope_key:
+                del self._shared_enriched_live_state_cache[key]
+        for key in list(self._shared_live_state_response_cache):
+            if key[:2] == scope_key:
+                del self._shared_live_state_response_cache[key]
+
+    def _reconciliation_heal_interval_seconds(self) -> float:
+        configured = max(float(self.runtime.mt5_config.live_poll_seconds), 0.5)
+        return min(max(configured * 20.0, 30.0), 180.0)
+
+    def _reconciliation_auto_resolve_streak_threshold(self) -> int:
+        return 2
+
+    def _reconciliation_heal_window_days(self) -> int:
+        return 30
+
+    def _auto_heal_execution_reconciliation(self, *, portfolio_slug: str) -> dict[str, int] | None:
+        if not self.runtime.storage_ready:
+            return None
+        scope_key = self._live_scope_key(portfolio_slug)
+        now_monotonic = time.monotonic()
+        last_run = float(self._shared_last_execution_reconciliation_heal_at.get(scope_key) or 0.0)
+        if (now_monotonic - last_run) < self._reconciliation_heal_interval_seconds():
+            return None
+        self._shared_last_execution_reconciliation_heal_at[scope_key] = now_monotonic
+
+        executions = self.runtime.storage.recent_execution_results(limit=500, portfolio_slug=portfolio_slug)
+        candidates: list[dict[str, Any]] = []
+        oldest_created_at: datetime | None = None
+        for execution in executions:
+            status = str(execution.get("reconciliation_status") or "").strip().lower()
+            if status not in {"pending_broker", "history_window_expired"}:
+                continue
+            deal_ticket = self._coerce_int(execution.get("mt5_deal_ticket"))
+            order_ticket = self._coerce_int(execution.get("mt5_order_ticket"))
+            if deal_ticket is None and order_ticket is None:
+                continue
+            execution_id = self._coerce_int(execution.get("id"))
+            if execution_id is None:
+                continue
+            created_at = self._to_utc_datetime(execution.get("created_at") or execution.get("time_utc"))
+            if created_at is not None and (oldest_created_at is None or created_at < oldest_created_at):
+                oldest_created_at = created_at
+            candidates.append(
+                {
+                    "id": execution_id,
+                    "payload": dict(execution),
+                    "deal_ticket": deal_ticket,
+                    "order_ticket": order_ticket,
+                }
+            )
+
+        if not candidates:
+            return {"checked": 0, "healed": 0}
+
+        date_to = datetime.now(timezone.utc) + timedelta(minutes=5)
+        floor_from = date_to - timedelta(days=self._reconciliation_heal_window_days())
+        if oldest_created_at is None:
+            date_from = floor_from
+        else:
+            date_from = max(oldest_created_at - timedelta(days=1), floor_from)
+
+        checked = 0
+        healed = 0
+        with self.runtime._mt5_gateway() as live:
+            for candidate in candidates:
+                checked += 1
+                payload = dict(candidate["payload"])
+                submitted_volume_lots = float(
+                    payload.get("submitted_volume_lots")
+                    or payload.get("approved_volume_lots")
+                    or payload.get("requested_volume_lots")
+                    or 0.0
+                )
+                deals: list[dict[str, Any]] = []
+                if candidate["deal_ticket"] is not None:
+                    try:
+                        deals = [
+                            dict(item)
+                            for item in live.connector.history_deals_get(
+                                date_from,
+                                date_to,
+                                ticket=int(candidate["deal_ticket"]),
+                            )
+                        ]
+                    except Exception:
+                        deals = []
+                if not deals and candidate["order_ticket"] is not None:
+                    try:
+                        deals = [
+                            dict(item)
+                            for item in live.connector.history_deals_get(
+                                date_from,
+                                date_to,
+                                ticket=int(candidate["order_ticket"]),
+                            )
+                        ]
+                    except Exception:
+                        deals = []
+                if not deals:
+                    continue
+
+                filled_volume_lots = float(
+                    sum(
+                        float(item.get("volume_lots") or item.get("volume") or 0.0)
+                        for item in deals
+                    )
+                )
+                if submitted_volume_lots <= 1e-9:
+                    fill_ratio = 1.0 if filled_volume_lots > 0.0 else 0.0
+                else:
+                    fill_ratio = float(filled_volume_lots / submitted_volume_lots)
+                if fill_ratio <= 1e-9:
+                    reconciliation_status = "pending_broker"
+                elif fill_ratio < 0.999:
+                    reconciliation_status = "partial_fill"
+                elif fill_ratio > 1.001:
+                    reconciliation_status = "overfill_or_volume_drift"
+                else:
+                    reconciliation_status = "match"
+                remaining_volume_lots = (
+                    0.0
+                    if submitted_volume_lots <= 1e-9
+                    else max(submitted_volume_lots - filled_volume_lots, 0.0)
+                )
+                position_id = self._coerce_int(deals[0].get("position_id"))
+                deal_ticket = self._coerce_int(deals[0].get("ticket")) or candidate["deal_ticket"]
+                updated = self.runtime.storage.update_execution_reconciliation(
+                    int(candidate["id"]),
+                    reconciliation_status=reconciliation_status,
+                    filled_volume_lots=filled_volume_lots,
+                    remaining_volume_lots=remaining_volume_lots,
+                    fill_ratio=fill_ratio,
+                    broker_status="filled" if fill_ratio > 0.0 else "pending_broker",
+                    position_id=position_id,
+                    mt5_order_ticket=candidate["order_ticket"],
+                    mt5_deal_ticket=deal_ticket,
+                )
+                if updated is not None and str(payload.get("reconciliation_status") or "").lower() != reconciliation_status:
+                    healed += 1
+
+        return {"checked": checked, "healed": healed}
+
+    def _auto_resolve_reconciliation_incidents(
+        self,
+        *,
+        portfolio_slug: str,
+        summary: Mapping[str, Any],
+    ) -> dict[str, int] | None:
+        if not self.runtime.storage_ready:
+            return None
+
+        threshold = self._reconciliation_auto_resolve_streak_threshold()
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        portfolio_id = self.runtime._resolve_portfolio_id(portfolio["slug"])
+        scope_key = self._live_scope_key(portfolio["slug"])
+
+        mismatch_status_by_symbol = {
+            str(item.get("symbol") or "").upper(): str(item.get("status") or "").strip().lower()
+            for item in list(summary.get("mismatches") or [])
+            if str(item.get("symbol") or "").strip()
+        }
+        incidents = list(summary.get("incidents") or [])
+        resolved = 0
+        checked = 0
+
+        for incident in incidents:
+            symbol = str(incident.get("symbol") or "").upper().strip()
+            if not symbol:
+                continue
+            checked += 1
+            streak_key = (*scope_key, symbol)
+            incident_status = str(incident.get("incident_status") or "acknowledged").strip().lower()
+            if incident_status not in {"acknowledged", "investigating"}:
+                self._shared_reconciliation_match_streak.pop(streak_key, None)
+                continue
+
+            mismatch_status = mismatch_status_by_symbol.get(symbol)
+            if mismatch_status != "match":
+                self._shared_reconciliation_match_streak.pop(streak_key, None)
+                continue
+
+            next_streak = int(self._shared_reconciliation_match_streak.get(streak_key) or 0) + 1
+            self._shared_reconciliation_match_streak[streak_key] = next_streak
+            if next_streak < threshold:
+                continue
+
+            resolution_note = (
+                str(incident.get("resolution_note") or "").strip()
+                or "Auto-resolved after 2 consecutive MATCH reconciliation cycles."
+            )
+            reason = str(incident.get("reason") or "resolved_after_reconciliation").strip() or "resolved_after_reconciliation"
+            operator_note = str(incident.get("operator_note") or "").strip()
+            payload = {
+                "portfolio_slug": portfolio["slug"],
+                "auto_resolved": True,
+                "auto_resolve_streak": next_streak,
+                "auto_resolved_at": datetime.now(timezone.utc).isoformat(),
+                "live_window_minutes": summary.get("live_window_minutes"),
+                "history_window_minutes": summary.get("history_window_minutes"),
+                "heal_window_days": summary.get("heal_window_days"),
+            }
+            acknowledgement_id = self.runtime.storage.upsert_reconciliation_acknowledgement(
+                portfolio_id=portfolio_id,
+                symbol=symbol,
+                reason=reason,
+                operator_note=operator_note,
+                mismatch_status="match",
+                incident_status="resolved",
+                resolution_note=resolution_note,
+                payload=payload,
+            )
+            self.runtime.storage.record_audit_event(
+                actor="system",
+                action_type="reconciliation.auto_resolve",
+                object_type="reconciliation_mismatch",
+                object_id=acknowledgement_id,
+                payload={
+                    "portfolio_slug": portfolio["slug"],
+                    "symbol": symbol,
+                    "auto_resolve_streak": next_streak,
+                    "resolution_note": resolution_note,
+                },
+                portfolio_id=portfolio_id,
+            )
+            self._shared_reconciliation_match_streak.pop(streak_key, None)
+            resolved += 1
+
+        return {"checked": checked, "resolved": resolved}
+
     def _enrich_live_state(self, raw_state: dict[str, Any], *, portfolio_slug: str | None = None) -> dict[str, Any]:
         self._check_startup_import(raw_state, portfolio_slug=portfolio_slug)
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        try:
+            healed = self._auto_heal_execution_reconciliation(portfolio_slug=portfolio["slug"])
+        except Exception:
+            healed = None
+        if healed is not None and int(healed.get("healed") or 0) > 0:
+            self._clear_scope_caches(portfolio_slug=portfolio["slug"])
         exposure = self.runtime.market_data.exposure_from_holdings(
             list(raw_state.get("holdings") or []),
             portfolio_slug=portfolio["slug"],
@@ -595,6 +1696,22 @@ class DeskMt5Service:
             raw_state,
             portfolio_slug=portfolio["slug"],
         )
+        try:
+            autoresolve = self._auto_resolve_reconciliation_incidents(
+                portfolio_slug=portfolio["slug"],
+                summary=reconciliation,
+            )
+        except Exception:
+            autoresolve = None
+        if autoresolve is not None and int(autoresolve.get("resolved") or 0) > 0:
+            self._clear_scope_caches(portfolio_slug=portfolio["slug"])
+            reconciliation = self.runtime.market_data.reconciliation_summary_from_live_state(
+                raw_state,
+                portfolio_slug=portfolio["slug"],
+            )
+        reconciliation["autoresolved_count"] = int((autoresolve or {}).get("resolved") or 0)
+        strict_live = self.runtime.strict_live_required(portfolio)
+        live_base_ready = bool(reconciliation.get("live_base_ready", False))
         enriched = {
             **dict(raw_state),
             "portfolio_slug": portfolio["slug"],
@@ -602,6 +1719,22 @@ class DeskMt5Service:
             "exposure": exposure,
             "reconciliation": reconciliation,
         }
+        enriched["market_closed"] = bool(reconciliation.get("market_closed", enriched.get("market_closed", False)))
+        enriched["market_closed_reason"] = reconciliation.get("market_closed_reason") or enriched.get("market_closed_reason")
+        enriched["market_reference_timestamp"] = (
+            reconciliation.get("market_reference_timestamp")
+            or enriched.get("market_reference_timestamp")
+        )
+        enriched["market_reference_source"] = (
+            reconciliation.get("market_reference_source")
+            or enriched.get("market_reference_source")
+        )
+        enriched["effective_history_lookback_minutes"] = int(
+            reconciliation.get("effective_history_lookback_minutes")
+            or enriched.get("effective_history_lookback_minutes")
+            or enriched.get("history_lookback_minutes")
+            or self.runtime.mt5_config.live_history_lookback_minutes
+        )
         tick_archive = self._archive_live_ticks_if_needed(enriched, portfolio_slug=portfolio["slug"])
         microstructure, tick_quality = self._build_microstructure(enriched, tick_archive=tick_archive)
         pnl_explain = self._build_pnl_explain(enriched, microstructure=microstructure)
@@ -610,7 +1743,7 @@ class DeskMt5Service:
         enriched["pnl_explain"] = pnl_explain
         operator_alerts = [alert.to_dict() for alert in alerts_from_live_operator_state(enriched)]
         try:
-            analytics = self._build_live_analytics(enriched, portfolio_slug=portfolio["slug"])
+            analytics = self._cached_build_live_analytics(enriched, portfolio_slug=portfolio["slug"])
         except Exception as exc:
             analytics = None
             operator_alerts.append(
@@ -625,6 +1758,38 @@ class DeskMt5Service:
                     },
                 }
             )
+        if analytics is not None and live_base_ready:
+            self._remember_last_broker_analytics(
+                portfolio_slug=portfolio["slug"],
+                analytics=analytics,
+            )
+
+        using_cached_broker_fallback = False
+        if strict_live and not live_base_ready:
+            fallback_analytics = self._latest_broker_analytics(portfolio_slug=portfolio["slug"])
+            if fallback_analytics is not None:
+                analytics = fallback_analytics
+                using_cached_broker_fallback = True
+                fallback_generated_at = (
+                    dict(fallback_analytics.get("risk_summary") or {}).get("generated_at")
+                )
+                operator_alerts.append(
+                    {
+                        "source": "risk_live",
+                        "severity": "INFO",
+                        "code": "LIVE_ANALYTICS_FALLBACK",
+                        "message": (
+                            "Broker evidence is temporarily delayed; showing the latest broker-backed "
+                            "risk/capital analytics."
+                        ),
+                        "context": {
+                            "portfolio_slug": portfolio["slug"],
+                            "fallback_generated_at": fallback_generated_at,
+                            "market_reference_timestamp": reconciliation.get("market_reference_timestamp"),
+                        },
+                    }
+                )
+
         if analytics is not None:
             enriched["risk_summary"] = analytics["risk_summary"]
             risk_nowcast = self._compute_risk_nowcast(
@@ -639,26 +1804,62 @@ class DeskMt5Service:
             enriched["risk_summary"]["pnl_explain"] = dict(pnl_explain)
             enriched["risk_budget"] = analytics["risk_budget"]
             enriched["capital_usage"] = analytics["capital_usage"]
-            analytics["bundle"] = {
-                **dict(analytics["bundle"]),
-                "risk_nowcast": dict(risk_nowcast),
-                "microstructure": dict(microstructure),
-                "tick_quality": dict(tick_quality),
-                "pnl_explain": dict(pnl_explain),
-            }
+            if analytics.get("bundle") is not None:
+                analytics["bundle"] = {
+                    **dict(analytics["bundle"]),
+                    "risk_nowcast": dict(risk_nowcast),
+                    "microstructure": dict(microstructure),
+                    "tick_quality": dict(tick_quality),
+                    "pnl_explain": dict(pnl_explain),
+                }
             operator_alerts.extend(list(analytics["alerts"]))
-            self._persist_live_analytics_if_needed(
-                raw_state=enriched,
-                analytics=analytics,
-                portfolio_slug=portfolio["slug"],
-            )
+            if not using_cached_broker_fallback:
+                self._persist_live_analytics_if_needed(
+                    raw_state=enriched,
+                    analytics=analytics,
+                    portfolio_slug=portfolio["slug"],
+                )
         else:
             enriched["risk_nowcast"] = {}
+        analytics_generated_at = (
+            (dict(enriched.get("risk_summary") or {}).get("generated_at"))
+            or enriched.get("generated_at")
+        )
+        analytics_timestamp = self._to_utc_datetime(analytics_generated_at)
+        max_age_seconds = max(
+            60.0,
+            float(self.runtime.mt5_config.live_history_poll_seconds) * 3.0,
+        )
+        analytics_stale = True
+        if analytics_timestamp is not None:
+            analytics_stale = (
+                max((datetime.now(timezone.utc) - analytics_timestamp).total_seconds(), 0.0)
+                > max_age_seconds
+            )
+        quality_checks, truth_score = self._build_quality_checks(enriched)
+        enriched["operational_truth"] = dict(enriched.get("reconciliation") or {}).get("operational_truth")
+        enriched["quality_checks"] = quality_checks
+        enriched["truth_score"] = truth_score
+        enriched["analytics_generated_at"] = analytics_generated_at
+        enriched["analytics_stale"] = bool(analytics_stale)
         enriched["operator_alerts"] = self._dedupe_alerts(operator_alerts)
         return enriched
 
-    def live_state(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
+    def live_state(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        detail_level: Literal["summary", "full", "inspector"] = "full",
+    ) -> dict[str, Any]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        if detail_level == "summary":
+            cache_key = self._live_state_response_cache_key(
+                portfolio_slug=portfolio["slug"],
+                detail_level=detail_level,
+            )
+            cached = self._shared_live_state_response_cache.get(cache_key)
+            if cached is not None and float(cached.get("expires_at") or 0.0) > time.monotonic():
+                return deepcopy(dict(cached.get("payload") or {}))
         connector = self.runtime._build_mt5_connector()
         try:
             connector.init()
@@ -686,7 +1887,18 @@ class DeskMt5Service:
             )
         finally:
             connector.shutdown()
-        return self._enrich_live_state(raw_state, portfolio_slug=portfolio["slug"])
+        enriched = self._cached_enrich_live_state(raw_state, portfolio_slug=portfolio["slug"])
+        payload = self._apply_live_detail_level(enriched, detail_level=detail_level)
+        if detail_level == "summary":
+            cache_key = self._live_state_response_cache_key(
+                portfolio_slug=portfolio["slug"],
+                detail_level=detail_level,
+            )
+            self._shared_live_state_response_cache[cache_key] = {
+                "expires_at": time.monotonic() + self._summary_cache_ttl_seconds(),
+                "payload": deepcopy(payload),
+            }
+        return payload
 
     def live_events(
         self,
@@ -695,6 +1907,7 @@ class DeskMt5Service:
         after: int = 0,
         limit: int = 100,
         wait_seconds: float = 15.0,
+        detail_level: Literal["summary", "full", "inspector"] = "full",
     ) -> list[dict[str, Any]]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         connector = self.runtime._build_mt5_connector()
@@ -741,9 +1954,13 @@ class DeskMt5Service:
         enriched = []
         for event in events[: max(int(limit), 1)]:
             payload = dict(event)
-            payload["state"] = self._enrich_live_state(
+            enriched_state = self._cached_enrich_live_state(
                 self._normalize_live_state(dict(event.get("state") or {})),
                 portfolio_slug=portfolio["slug"],
+            )
+            payload["state"] = self._apply_live_detail_level(
+                enriched_state,
+                detail_level=detail_level,
             )
             enriched.append(payload)
         return enriched
@@ -782,7 +1999,7 @@ class DeskMt5Service:
         except Exception:
             analytics = None
 
-        if analytics is not None:
+        if analytics is not None and analytics.get("bundle") is not None:
             self.runtime._persist_live_bundle(
                 bundle=analytics["bundle"],
                 portfolio_id=portfolio_id,

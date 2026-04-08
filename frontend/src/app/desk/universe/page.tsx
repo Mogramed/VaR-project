@@ -18,10 +18,10 @@ export default async function DeskUniversePage({
     typeof query.portfolio === "string" ? query.portfolio : undefined;
   const resolvedPortfolio = portfolioSlug ?? (await api.safeHealth()).portfolio_slug;
 
-  const [instruments, marketStatus, liveState] = await Promise.all([
+  const [instruments, marketStatus, mt5Status] = await Promise.all([
     api.instruments(resolvedPortfolio).catch(() => []),
     api.marketDataStatus(resolvedPortfolio).catch(() => null),
-    api.mt5LiveState(resolvedPortfolio).catch(() => null),
+    api.mt5Status().catch(() => null),
   ]);
 
   const classCounts = buildInstrumentClassCounts(instruments);
@@ -31,6 +31,8 @@ export default async function DeskUniversePage({
   const syncedSymbols = instruments.length - missingSymbols.length;
   const retentionTiers = marketStatus?.retention_tiers ?? {};
   const tickArchive = marketStatus?.tick_archive ?? null;
+  const liveBridgeStatus = marketStatus?.live_bridge_status ?? (mt5Status?.connected ? "ok" : mt5Status?.message ?? null);
+  const liveBridgeTimestamp = marketStatus?.live_bridge_generated_at ?? mt5Status?.timestamp_utc ?? null;
   const tierSummary = Object.entries(retentionTiers)
     .map(([timeframe, days]) => `${timeframe} ${days}d`)
     .join(" / ");
@@ -42,8 +44,8 @@ export default async function DeskUniversePage({
         title="Instrument definitions and tradability constraints from MT5."
         aside={
           <StatusBadge
-            label={liveState?.status ?? marketStatus?.status ?? "unknown"}
-            tone={(liveState?.status ?? marketStatus?.status) === "ok" ? "success" : "warning"}
+            label={liveBridgeStatus ?? marketStatus?.status ?? "unknown"}
+            tone={(liveBridgeStatus ?? marketStatus?.status) === "ok" ? "success" : "warning"}
           />
         }
       />
@@ -70,8 +72,8 @@ export default async function DeskUniversePage({
           label="Missing bars"
           value={String(missingBars.length)}
           hint={
-            liveState?.generated_at
-              ? `Live ${formatTimestamp(liveState.generated_at)}`
+            liveBridgeTimestamp
+              ? `Live ${formatTimestamp(liveBridgeTimestamp)}`
               : "Current default timeframe"
           }
           tone={missingBars.length > 0 ? "warning" : "success"}

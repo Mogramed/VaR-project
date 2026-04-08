@@ -11,7 +11,6 @@ export default async function DeskMt5OpsPage({
     typeof query.portfolio === "string" ? query.portfolio : undefined;
   const health = await api.safeHealth();
   const resolvedPortfolio = portfolioSlug ?? health.portfolio_slug;
-  const liveState = await api.mt5LiveState(resolvedPortfolio);
 
-  return <Mt5LiveOpsFeed initialState={liveState} />;
+  return <Mt5LiveOpsFeed key={resolvedPortfolio} />;
 }

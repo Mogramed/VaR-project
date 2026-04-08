@@ -1,10 +1,10 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
 import { FileDown, RefreshCw } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { api } from "@/lib/api/client";
+import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import type { ReportRunResponse } from "@/lib/api/types";
+import { api } from "@/lib/api/client";
+import { useOperatorRunAction } from "@/lib/use-operator-run";
 
 export function ReportActions({
   portfolioSlug,
@@ -13,12 +13,15 @@ export function ReportActions({
   portfolioSlug?: string;
   onGenerated?: (result: ReportRunResponse) => void | Promise<void>;
 }) {
-  const router = useRouter();
-  const mutation = useMutation({
-    mutationFn: async () => api.runReport(undefined, portfolioSlug),
-    onSuccess: (result) => {
-      onGenerated?.(result);
-      if (!onGenerated) router.refresh();
+  const { notifyOperatorRunCompleted } = useDeskLive();
+  const operatorRun = useOperatorRunAction({
+    action: "report",
+    portfolioSlug,
+    enqueue: async (payload: { portfolio_slug?: string }) => api.enqueueOperatorReport(payload),
+    onSucceeded: async (run) => {
+      notifyOperatorRunCompleted(run);
+      const report = (run.result?.report ?? {}) as ReportRunResponse;
+      await onGenerated?.(report);
     },
   });
 
@@ -30,11 +33,11 @@ export function ReportActions({
     <div className="flex items-center gap-2 print:hidden">
       <button
         type="button"
-        onClick={() => mutation.mutate()}
-        disabled={mutation.isPending}
+        onClick={() => operatorRun.execute({ portfolio_slug: portfolioSlug })}
+        disabled={operatorRun.pending}
         className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2.5 text-[11px] font-medium text-[var(--color-text-soft)] transition-colors hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)] disabled:opacity-50"
       >
-        <RefreshCw className={`size-3 ${mutation.isPending ? "animate-spin" : ""}`} />
+        <RefreshCw className={`size-3 ${operatorRun.pending ? "animate-spin" : ""}`} />
         Generate
       </button>
       <a
@@ -44,9 +47,9 @@ export function ReportActions({
         <FileDown className="size-3" />
         PDF
       </a>
-      {mutation.error ? (
+      {operatorRun.error ? (
         <span className="text-[10px] text-[var(--color-red)]">
-          {mutation.error instanceof Error ? mutation.error.message : "Failed"}
+          {operatorRun.error instanceof Error ? operatorRun.error.message : "Failed"}
         </span>
       ) : null}
     </div>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import math
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -86,6 +87,71 @@ def _partition_start(parquet_path: Path) -> datetime | None:
         hour = hour_dir.split("=", 1)[1]
         return datetime.fromisoformat(f"{day}T{hour}:00:00+00:00")
     except Exception:
+        return None
+
+
+def _summary_index_path(root: Path) -> Path:
+    return root / ".summary_index.json"
+
+
+def _load_summary_index(root: Path) -> dict[str, dict[str, Any]]:
+    path = _summary_index_path(root)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    partitions = payload.get("partitions")
+    if not isinstance(partitions, dict):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for key, value in partitions.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            continue
+        result[key] = dict(value)
+    return result
+
+
+def _write_summary_index(root: Path, partitions: Mapping[str, Mapping[str, Any]]) -> None:
+    path = _summary_index_path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": 1,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "partitions": {str(key): dict(value) for key, value in partitions.items()},
+    }
+    try:
+        path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+    except OSError:
+        return
+
+
+def _from_iso(value: Any) -> datetime | None:
+    if value in {None, "", "null"}:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _quarantine_corrupt_partition(parquet_path: Path) -> Path | None:
+    if not parquet_path.exists():
+        return None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+    quarantined = parquet_path.with_name(f"{parquet_path.stem}.corrupt_{stamp}{parquet_path.suffix}")
+    try:
+        parquet_path.replace(quarantined)
+        return quarantined
+    except OSError:
+        try:
+            parquet_path.unlink()
+        except OSError:
+            return None
         return None
 
 
@@ -185,8 +251,13 @@ def _purge_old_partitions(root: Path, *, retention_days: int) -> dict[str, Any]:
         if partition_day >= cutoff.replace(hour=0, minute=0, second=0, microsecond=0):
             continue
         if parquet_path.exists():
-            parquet_path.unlink()
-            deleted_files += 1
+            try:
+                parquet_path.unlink()
+                deleted_files += 1
+            except PermissionError:
+                # Windows can keep a parquet handle briefly open across near-concurrent readers.
+                # Skip this partition for now; it will be purged on a later cycle.
+                continue
         hour_dir = parquet_path.parent
         date_dir = hour_dir.parent
         symbol_dir = date_dir.parent
@@ -224,13 +295,30 @@ def archive_ticks(
 
     partitions = 0
     written_rows = 0
+    recovered_corrupt_partitions: list[str] = []
     base_details = dict(artifact_base_details or {})
     for _, group in frame.groupby(frame["time_utc"].dt.strftime("%Y-%m-%d %H"), sort=True):
         target = _partition_path(root, str(symbol).upper(), group["time_utc"].iloc[0])
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
-            existing = pd.read_parquet(target)
-            merged = pd.concat([existing, group], ignore_index=True)
+            try:
+                existing = pd.read_parquet(target)
+            except Exception:
+                quarantined = _quarantine_corrupt_partition(target)
+                if quarantined is not None:
+                    recovered_corrupt_partitions.append(str(quarantined))
+                existing = pd.DataFrame(columns=group.columns)
+            if existing.empty:
+                merged = group.copy()
+            else:
+                existing_aligned = existing.reindex(columns=group.columns)
+                existing_non_na = existing_aligned.dropna(axis=1, how="all")
+                if existing_non_na.empty or existing_aligned.dropna(how="all").empty:
+                    merged = group.copy()
+                else:
+                    group_non_na = group.dropna(axis=1, how="all")
+                    merged = pd.concat([existing_non_na, group_non_na], ignore_index=True, sort=False)
+                    merged = merged.reindex(columns=group.columns)
         else:
             merged = group.copy()
         merged = merged.drop_duplicates(subset=["symbol", "time_utc", "bid", "ask", "last"]).sort_values("time_utc")
@@ -260,6 +348,8 @@ def archive_ticks(
         "partitions": int(partitions),
         "oldest_tick_at": frame["time_utc"].min().isoformat(),
         "latest_tick_at": frame["time_utc"].max().isoformat(),
+        "recovered_corrupt_partition_count": int(len(recovered_corrupt_partitions)),
+        "recovered_corrupt_partitions": recovered_corrupt_partitions,
         "purged": purge,
     }
 
@@ -279,32 +369,77 @@ def summarize_tick_archive(
     oldest_tick_at: datetime | None = None
     latest_tick_at: datetime | None = None
     now = datetime.now(timezone.utc)
+    cached_index = _load_summary_index(root)
+    next_index: dict[str, dict[str, Any]] = {}
 
     for parquet_path in root.glob("symbol=*/date=*/hour=*/ticks.parquet"):
         symbol_dir = parquet_path.parent.parent.parent.name
         if not symbol_dir.startswith("symbol="):
             continue
         symbol = symbol_dir.split("=", 1)[1].upper()
+
+        rel_key = str(parquet_path.relative_to(root)).replace("\\", "/")
+        try:
+            stat = parquet_path.stat()
+        except OSError:
+            continue
+        if stat.st_size <= 0:
+            _quarantine_corrupt_partition(parquet_path)
+            continue
+
+        cached = dict(cached_index.get(rel_key) or {})
+        cached_mtime_ns = int(cached.get("mtime_ns") or -1)
+        cached_size = int(cached.get("size") or -1)
+        rows: int
+        part_oldest: datetime | None
+        part_latest: datetime | None
+        if cached and cached_mtime_ns == int(stat.st_mtime_ns) and cached_size == int(stat.st_size):
+            rows = int(cached.get("rows") or 0)
+            part_oldest = _from_iso(cached.get("oldest_tick_at"))
+            part_latest = _from_iso(cached.get("latest_tick_at"))
+        else:
+            try:
+                metadata = pq.read_metadata(parquet_path)
+            except Exception:
+                _quarantine_corrupt_partition(parquet_path)
+                continue
+            rows = int(metadata.num_rows)
+            try:
+                frame = pd.read_parquet(parquet_path, columns=["time_utc"])
+            except Exception:
+                _quarantine_corrupt_partition(parquet_path)
+                continue
+            if frame.empty:
+                part_oldest = None
+                part_latest = None
+            else:
+                frame["time_utc"] = pd.to_datetime(frame["time_utc"], utc=True, errors="coerce")
+                frame = frame.dropna(subset=["time_utc"])
+                if frame.empty:
+                    part_oldest = None
+                    part_latest = None
+                else:
+                    part_oldest = frame["time_utc"].min().to_pydatetime()
+                    part_latest = frame["time_utc"].max().to_pydatetime()
+
+        next_index[rel_key] = {
+            "symbol": symbol,
+            "rows": int(rows),
+            "oldest_tick_at": None if part_oldest is None else part_oldest.isoformat(),
+            "latest_tick_at": None if part_latest is None else part_latest.isoformat(),
+            "mtime_ns": int(stat.st_mtime_ns),
+            "size": int(stat.st_size),
+        }
+
         if normalized_symbols and symbol not in normalized_symbols:
             continue
-        try:
-            metadata = pq.read_metadata(parquet_path)
-        except Exception:
-            continue
-        rows = int(metadata.num_rows)
+
         partition_count += 1
         total_rows += rows
-        frame = pd.read_parquet(parquet_path, columns=["time_utc"])
-        if frame.empty:
-            continue
-        frame["time_utc"] = pd.to_datetime(frame["time_utc"], utc=True, errors="coerce")
-        frame = frame.dropna(subset=["time_utc"])
-        if frame.empty:
-            continue
-        part_oldest = frame["time_utc"].min().to_pydatetime()
-        part_latest = frame["time_utc"].max().to_pydatetime()
-        oldest_tick_at = part_oldest if oldest_tick_at is None or part_oldest < oldest_tick_at else oldest_tick_at
-        latest_tick_at = part_latest if latest_tick_at is None or part_latest > latest_tick_at else latest_tick_at
+        if part_oldest is not None:
+            oldest_tick_at = part_oldest if oldest_tick_at is None or part_oldest < oldest_tick_at else oldest_tick_at
+        if part_latest is not None:
+            latest_tick_at = part_latest if latest_tick_at is None or part_latest > latest_tick_at else latest_tick_at
         bucket = symbol_stats.setdefault(
             symbol,
             {
@@ -317,16 +452,15 @@ def summarize_tick_archive(
         )
         bucket["row_count"] = int(bucket["row_count"] + rows)
         bucket["partition_count"] = int(bucket["partition_count"] + 1)
-        bucket["oldest_tick_at"] = (
-            part_oldest.isoformat()
-            if bucket["oldest_tick_at"] is None or part_oldest < datetime.fromisoformat(str(bucket["oldest_tick_at"]))
-            else bucket["oldest_tick_at"]
-        )
-        bucket["latest_tick_at"] = (
-            part_latest.isoformat()
-            if bucket["latest_tick_at"] is None or part_latest > datetime.fromisoformat(str(bucket["latest_tick_at"]))
-            else bucket["latest_tick_at"]
-        )
+        current_oldest = _from_iso(bucket["oldest_tick_at"])
+        current_latest = _from_iso(bucket["latest_tick_at"])
+        if part_oldest is not None and (current_oldest is None or part_oldest < current_oldest):
+            bucket["oldest_tick_at"] = part_oldest.isoformat()
+        if part_latest is not None and (current_latest is None or part_latest > current_latest):
+            bucket["latest_tick_at"] = part_latest.isoformat()
+
+    if next_index != cached_index:
+        _write_summary_index(root, next_index)
 
     enriched_symbols: list[dict[str, Any]] = []
     quality_counts = {"healthy": 0, "stale": 0, "incomplete": 0}

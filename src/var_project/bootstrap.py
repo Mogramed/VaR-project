@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from var_project.api.service import DeskApiService
+from var_project.core.config_validation import validate_backtest_history_compatibility
 from var_project.storage import upgrade_database
 
 
@@ -16,6 +17,12 @@ def seed_demo_environment(root: Path, *, portfolio_slug: str | None = None) -> d
         [service.runtime._resolve_portfolio_context(portfolio_slug)]
         if portfolio_slug is not None
         else [dict(portfolio) for portfolio in service.portfolios]
+    )
+
+    validate_backtest_history_compatibility(
+        service.runtime.data_defaults,
+        service.runtime.risk_defaults,
+        context="seed-demo backtest",
     )
 
     seeded: list[dict[str, Any]] = []

@@ -151,6 +151,32 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return frame.to_dict(orient="records")
 
+    @app.get("/bars-range/{symbol}")
+    def bars_range(
+        symbol: str,
+        timeframe: str = Query(...),
+        date_from: str = Query(...),
+        date_to: str = Query(...),
+        _: None = Depends(authorize),
+    ) -> list[dict[str, Any]]:
+        try:
+            start = datetime.fromisoformat(date_from)
+            end = datetime.fromisoformat(date_to)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid bar date range.") from exc
+        try:
+            frame = app.state.mt5_runtime.execute(
+                lambda connector: connector.fetch_bars_range(
+                    symbol,
+                    timeframe,
+                    start,
+                    end,
+                )
+            )
+        except MT5ConnectionError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return frame.to_dict(orient="records")
+
     @app.get("/ticks/{symbol}")
     def ticks(
         symbol: str,

@@ -1,9 +1,40 @@
 "use client";
 
 import type { ReactNode } from "react";
-import ReactECharts from "echarts-for-react";
+import dynamic from "next/dynamic";
 import type { ChartMode } from "@/lib/chart-options";
 import { cn } from "@/lib/utils";
+
+function ChartSkeleton({ height }: { height: number }) {
+  return (
+    <div className="relative overflow-hidden" style={{ height }}>
+      {/* Animated shimmer bars to simulate a bar chart loading */}
+      <div className="absolute inset-0 flex items-end justify-center gap-3 px-8 pb-8 pt-4">
+        {[0.6, 0.85, 0.45, 0.72, 0.55, 0.9, 0.38, 0.65].map((h, i) => (
+          <div
+            key={i}
+            className="flex-1 animate-pulse rounded-t-[4px] bg-[var(--color-border)]"
+            style={{
+              height: `${h * 100}%`,
+              animationDelay: `${i * 120}ms`,
+              opacity: 0.3 + (i % 3) * 0.15,
+            }}
+          />
+        ))}
+      </div>
+      {/* Shimmer overlay */}
+      <div className="absolute inset-0 -translate-x-full animate-[shimmer_2s_infinite] bg-gradient-to-r from-transparent via-[rgba(255,255,255,0.04)] to-transparent" />
+    </div>
+  );
+}
+
+const ChartCore = dynamic(
+  () => import("@/components/charts/chart-core").then((module) => module.ChartCore),
+  {
+    ssr: false,
+    loading: () => <ChartSkeleton height={340} />,
+  },
+);
 
 function resolveHeight(mode: ChartMode, dataCount: number) {
   if (mode === "trace") {
@@ -34,6 +65,7 @@ export function ChartSurface({
   footer,
   insight,
   insightLayout = "auto",
+  loading = false,
   emptyState,
   showDescription = false,
   className,
@@ -50,6 +82,7 @@ export function ChartSurface({
   footer?: ReactNode;
   insight?: ReactNode;
   insightLayout?: "auto" | "side" | "stack";
+  loading?: boolean;
   emptyState?: ReactNode;
   showDescription?: boolean;
   className?: string;
@@ -109,30 +142,20 @@ export function ChartSurface({
       ) : null}
 
       {/* Chart body */}
-      {!hasData && emptyState ? (
+      {loading ? (
+        <ChartSkeleton height={resolvedHeight} />
+      ) : !hasData && emptyState ? (
         <div className="px-4 py-6">{emptyState}</div>
       ) : sparseMode && insight ? (
         <div className={cn("grid gap-4 p-4", insightGridClass)}>
           <div className="mx-auto w-full max-w-[380px]">
-            <ReactECharts
-              option={option}
-              style={{ height: `${resolvedHeight}px`, width: "100%" }}
-              opts={{ renderer: "svg" }}
-              notMerge
-              lazyUpdate
-            />
+            <ChartCore option={option} height={resolvedHeight} />
           </div>
           <div className="min-w-0">{insight}</div>
         </div>
       ) : (
         <div className="relative px-1 py-1">
-          <ReactECharts
-            option={option}
-            style={{ height: `${resolvedHeight}px`, width: "100%" }}
-            opts={{ renderer: "svg" }}
-            notMerge
-            lazyUpdate
-          />
+          <ChartCore option={option} height={resolvedHeight} />
         </div>
       )}
 

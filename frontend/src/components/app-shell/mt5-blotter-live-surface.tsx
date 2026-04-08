@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { DealHistoryTable, ExecutionFillsTable, ExecutionHistoryTable, OrderHistoryTable, ReconciliationTable } from "@/components/data/risk-tables";
@@ -12,11 +13,9 @@ import type {
   AuditEventResponse,
   ExecutionFillResponse,
   ExecutionResultResponse,
-  MT5LiveStateResponse,
   ReconciliationSummaryResponse,
 } from "@/lib/api/types";
 import { buildIncidentTimeline } from "@/lib/incidents";
-import { useMt5LiveState } from "@/lib/use-mt5-live-state";
 import { useRecentExecutionActivity } from "@/lib/use-recent-execution-activity";
 import { formatCurrency, formatTimestamp, humanizeIdentifier } from "@/lib/utils";
 import { countManualMt5Events } from "@/lib/view-models";
@@ -36,26 +35,25 @@ function selectedMismatch(
 }
 
 export function Mt5BlotterLiveSurface({
-  portfolioSlug, initialLiveState, initialExecutions, initialFills, initialAudit,
+  portfolioSlug, initialExecutions, initialFills, initialAudit,
 }: {
   portfolioSlug: string;
-  initialLiveState: MT5LiveStateResponse | null;
   initialExecutions: ExecutionResultResponse[];
   initialFills: ExecutionFillResponse[];
   initialAudit: AuditEventResponse[];
 }) {
-  const { liveState, transport } = useMt5LiveState(portfolioSlug, initialLiveState);
+  const { liveState, transport } = useDeskLive();
   const { executions, fills } = useRecentExecutionActivity({ portfolioSlug, initialExecutions, initialFills, liveSequence: liveState?.sequence, executionLimit: 20, fillLimit: 20 });
   const orders = useMemo(() => liveState?.order_history ?? [], [liveState?.order_history]);
   const deals = useMemo(() => liveState?.deal_history ?? [], [liveState?.deal_history]);
   const manual = countManualMt5Events(orders, deals);
 
   const [reconciliationState, setReconciliationState] = useState<ReconciliationSummaryResponse | null>(
-    initialLiveState?.reconciliation ?? null,
+    null,
   );
   const [auditState, setAuditState] = useState<AuditEventResponse[]>(initialAudit);
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(
-    (initialLiveState?.reconciliation?.mismatches ?? []).find((item) => item.status !== "match")?.symbol ?? null,
+    null,
   );
   const [incidentStatus, setIncidentStatus] = useState<IncidentStatus>("acknowledged");
   const [reason, setReason] = useState("operator_reviewed");
@@ -102,7 +100,13 @@ export function Mt5BlotterLiveSurface({
   const reconciliation = reconciliationState;
   const mismatchCount = (reconciliation?.mismatches ?? []).filter((i) => i.status !== "match").length;
   const incidents = reconciliation?.incidents ?? [];
-  const openIncidentCount = incidents.filter((item) => item.incident_status !== "resolved").length;
+  const openIncidentCount =
+    reconciliation?.active_incident_count
+    ?? incidents.filter((item) => item.incident_status !== "resolved").length;
+  const resolvedIncidentCount =
+    reconciliation?.resolved_incident_count
+    ?? incidents.filter((item) => item.incident_status === "resolved").length;
+  const autoResolvedCount = reconciliation?.autoresolved_count ?? 0;
   const incidentTimeline = useMemo(
     () => buildIncidentTimeline(selectedSymbol, auditState, orders, deals),
     [auditState, deals, orders, selectedSymbol],
@@ -164,6 +168,38 @@ export function Mt5BlotterLiveSurface({
       </section>
 
       <LiveOperatorAlerts alerts={liveState?.operator_alerts ?? []} />
+
+      {reconciliation ? (
+        <section className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[var(--color-text-muted)]">
+            <span>
+              Live window: {reconciliation.live_window_minutes ?? 180}m
+            </span>
+            <span>
+              Historical reconciliation: {reconciliation.heal_window_days ?? 30}d
+            </span>
+            <span>
+              Evidence history window: {reconciliation.history_window_minutes ?? reconciliation.live_window_minutes ?? 180}m
+            </span>
+            {reconciliation.history_backfill_applied ? (
+              <span>
+                Historical backfill active
+              </span>
+            ) : null}
+            <span>
+              Active incidents: {openIncidentCount}
+            </span>
+            <span>
+              Resolved incidents: {resolvedIncidentCount}
+            </span>
+            {autoResolvedCount > 0 ? (
+              <span>
+                Auto-resolved this cycle: {autoResolvedCount}
+              </span>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-2">
         <div className="space-y-2">
@@ -287,7 +323,7 @@ export function Mt5BlotterLiveSurface({
                         className="rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 py-1 text-[10px] font-medium text-[var(--color-text)] transition hover:bg-[var(--color-surface-hover)]"
                         onClick={() => setSelectedSymbol(incident.symbol)}
                       >
-                        {incident.symbol} · {incident.incident_status ?? "acknowledged"}
+                        {incident.symbol} | {incident.incident_status ?? "acknowledged"}
                       </button>
                     ))}
                   </div>

@@ -3,13 +3,14 @@
 import { useMutation } from "@tanstack/react-query";
 import { DollarSign, Percent } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FieldInputWithIcon,
   FieldLabel,
   FormError,
   FormMetaTile,
   FormSection,
+  FormSuccess,
   SubmitButton,
 } from "@/components/forms/shared";
 import { api } from "@/lib/api/client";
@@ -28,6 +29,24 @@ export function CapitalRebalancePanel({
   const router = useRouter();
   const [budget, setBudget] = useState("12000000");
   const [reserveRatio, setReserveRatio] = useState("0.18");
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const successTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  const validate = useCallback(() => {
+    const numericBudget = Number(budget);
+    if (!Number.isFinite(numericBudget) || numericBudget <= 0) {
+      setValidationError("Budget must be a positive number");
+      return false;
+    }
+    const numericReserve = Number(reserveRatio);
+    if (!Number.isFinite(numericReserve) || numericReserve < 0 || numericReserve > 1) {
+      setValidationError("Reserve ratio must be between 0 and 1");
+      return false;
+    }
+    setValidationError(null);
+    return true;
+  }, [budget, reserveRatio]);
 
   const mutation = useMutation({
     mutationFn: async () =>
@@ -40,13 +59,18 @@ export function CapitalRebalancePanel({
     onSuccess: (result) => {
       onRebalanced?.(result);
       if (!onRebalanced) router.refresh();
+      setShowSuccess(true);
+      clearTimeout(successTimerRef.current);
+      successTimerRef.current = setTimeout(() => setShowSuccess(false), 4000);
     },
   });
+
+  useEffect(() => () => clearTimeout(successTimerRef.current), []);
 
   return (
     <div className="grid gap-4 xl:grid-cols-2">
       <form className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4"
-        onSubmit={(e) => { e.preventDefault(); mutation.mutate(); }}>
+        onSubmit={(e) => { e.preventDefault(); if (validate()) { setShowSuccess(false); mutation.mutate(); } }}>
         <h3 className="text-[13px] font-semibold text-[var(--color-text)]">Capital Rebalance</h3>
 
         <FormSection title="Parameters">
@@ -69,7 +93,8 @@ export function CapitalRebalancePanel({
 
         <div className="mt-4 flex items-center gap-2">
           <SubmitButton isPending={mutation.isPending} label="Rebalance" pendingLabel="Rebalancing..." />
-          <FormError message={mutation.error instanceof Error ? mutation.error.message : mutation.error ? "Failed" : null} />
+          <FormError message={validationError ?? (mutation.error instanceof Error ? mutation.error.message : mutation.error ? "Failed" : null)} />
+          <FormSuccess message="Rebalance applied" visible={showSuccess} />
         </div>
       </form>
 

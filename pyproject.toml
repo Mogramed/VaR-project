@@ -21,7 +21,8 @@ dependencies = [
   "pydantic",
   "psycopg[binary]",
   "SQLAlchemy",
-  "uvicorn"
+  "uvicorn",
+  "celery[redis]"
 ]
 
 [project.scripts]

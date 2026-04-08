@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy.exc import OperationalError, ProgrammingError
+
 from var_project.core.settings import (
     get_data_defaults,
     get_mt5_config,
@@ -15,6 +17,7 @@ from var_project.core.settings import (
     load_settings,
 )
 from var_project.storage import AppStorage
+from var_project.jobs.operator_queue import dispatch_operator_run
 
 
 @dataclass(frozen=True)
@@ -147,6 +150,42 @@ def load_worker_settings(root: Path) -> WorkerSettings:
     )
 
 
+def evaluate_worker_health(root: Path) -> dict[str, Any]:
+    raw_cfg = load_settings(root)
+    portfolios = get_portfolio_contexts(raw_cfg)
+    mt5_config = get_mt5_config(raw_cfg)
+    live_portfolios = [
+        str(portfolio.get("slug") or "")
+        for portfolio in portfolios
+        if str(portfolio.get("mode") or "").lower() in {"live_mt5", "hybrid"}
+    ]
+    mt5_configured = bool(
+        mt5_config.agent_base_url
+        or mt5_config.path
+        or mt5_config.login
+        or mt5_config.server
+    )
+    if live_portfolios and not mt5_configured:
+        return {
+            "status": "degraded",
+            "code": "mt5_not_configured",
+            "message": (
+                "Worker is running for live/hybrid portfolios but MT5 is not configured in this process."
+            ),
+            "hint": (
+                "Set VAR_PROJECT_MT5_AGENT_BASE_URL (and VAR_PROJECT_MT5_AGENT_API_KEY if needed) "
+                "for worker and celery-worker."
+            ),
+            "live_portfolios": live_portfolios,
+        }
+    return {
+        "status": "ok",
+        "code": "ok",
+        "message": "Worker dependencies look healthy.",
+        "live_portfolios": live_portfolios,
+    }
+
+
 class JobRunner:
     def __init__(
         self,
@@ -162,9 +201,19 @@ class JobRunner:
         self.mt5_connector_factory = mt5_connector_factory
         self.last_run: dict[str, float] = {}
         self.log = logging.getLogger("var_project.jobs")
+        self.worker_health = evaluate_worker_health(self.root)
+        if str(self.worker_health.get("status") or "").lower() == "degraded":
+            self.log.warning(
+                "%s [%s]",
+                self.worker_health.get("message"),
+                self.worker_health.get("code"),
+            )
 
     def run_pending(self, *, force_all: bool = False) -> dict[str, Any]:
         results: dict[str, Any] = {}
+        operator_results = self._drain_operator_runs()
+        if operator_results:
+            results["operator_runs"] = operator_results
         for job_name in ("snapshot", "backtest", "live_refresh", "report"):
             job_cfg = getattr(self.settings, job_name)
             if not job_cfg.enabled:
@@ -178,6 +227,90 @@ class JobRunner:
                 self.log.exception("job %s failed: %s", job_name, exc)
                 results[job_name] = {"status": "error", "error": str(exc)}
         return results
+
+    def _drain_operator_runs(self) -> list[dict[str, Any]]:
+        from var_project.api.service import DeskApiService
+
+        service = DeskApiService(
+            self.root,
+            mt5_connector_factory=self.mt5_connector_factory,
+            bootstrap_storage=self.bootstrap_storage,
+        )
+        try:
+            stale_updates = service.reap_stale_operator_runs(limit=50)
+            runs = service.operator_runs(limit=10, statuses=["queued"])
+        except (OperationalError, ProgrammingError) as exc:
+            self.log.warning("operator run storage not ready: %s", exc)
+            return []
+        processed: list[dict[str, Any]] = []
+        for stale in stale_updates:
+            processed.append(
+                {
+                    "id": stale.get("id"),
+                    "action": stale.get("action"),
+                    "status": stale.get("status"),
+                    "stage": stale.get("stage"),
+                    "reason": stale.get("error_code") or "stale",
+                }
+            )
+        for run in runs:
+            run_id = int(run["id"])
+            if str(run.get("queue_task_id") or "").strip():
+                processed.append(
+                    {
+                        "id": run_id,
+                        "action": run.get("action"),
+                        "status": "queued",
+                        "stage": run.get("stage"),
+                        "dispatch_mode": "already_dispatched",
+                        "task_id": run.get("queue_task_id"),
+                    }
+                )
+                continue
+            try:
+                dispatch = dispatch_operator_run(
+                    run_id=run_id,
+                    action=str(run.get("action") or ""),
+                    repo_root=self.root,
+                )
+                if dispatch is None:
+                    updated = service.process_operator_run(run_id)
+                    processed.append(
+                        {
+                            "id": updated.get("id"),
+                            "action": updated.get("action"),
+                            "status": updated.get("status"),
+                            "stage": updated.get("stage"),
+                            "dispatch_mode": "fallback",
+                        }
+                    )
+                    continue
+                if dispatch.get("task_id"):
+                    service.storage.update_operator_run(
+                        run_id,
+                        queue_task_id=str(dispatch["task_id"]),
+                    )
+                processed.append(
+                    {
+                        "id": run_id,
+                        "action": run.get("action"),
+                        "status": "queued",
+                        "stage": run.get("stage"),
+                        "dispatch_mode": dispatch.get("mode"),
+                        "task_id": dispatch.get("task_id"),
+                    }
+                )
+            except Exception as exc:
+                self.log.exception("operator run %s failed: %s", run.get("id"), exc)
+                processed.append(
+                    {
+                        "id": run.get("id"),
+                        "action": run.get("action"),
+                        "status": "error",
+                        "error": str(exc),
+                    }
+                )
+        return processed
 
     def run_forever(self, *, once: bool = False) -> None:
         if once:
@@ -203,6 +336,17 @@ class JobRunner:
             bootstrap_storage=self.bootstrap_storage,
         )
         if job_name == "snapshot":
+            portfolio = service.runtime._resolve_portfolio_context(None)
+            if (
+                str(portfolio.get("mode") or "").lower() in {"live_mt5", "hybrid"}
+                and service.runtime.market_data.should_use_mt5_market_data(portfolio)
+            ):
+                service.runtime.market_data.sync_market_data_if_stale(
+                    portfolio_slug=portfolio["slug"],
+                    max_age_seconds=300.0,
+                    days=job_cfg.days,
+                    timeframes=[job_cfg.timeframe] if job_cfg.timeframe else None,
+                )
             result = service.run_snapshot(
                 timeframe=job_cfg.timeframe,
                 days=job_cfg.days,
@@ -218,6 +362,17 @@ class JobRunner:
             return result
 
         if job_name == "backtest":
+            portfolio = service.runtime._resolve_portfolio_context(None)
+            if (
+                str(portfolio.get("mode") or "").lower() in {"live_mt5", "hybrid"}
+                and service.runtime.market_data.should_use_mt5_market_data(portfolio)
+            ):
+                service.runtime.market_data.sync_market_data_if_stale(
+                    portfolio_slug=portfolio["slug"],
+                    max_age_seconds=300.0,
+                    days=job_cfg.days,
+                    timeframes=[job_cfg.timeframe] if job_cfg.timeframe else None,
+                )
             result = service.run_backtest(
                 timeframe=job_cfg.timeframe,
                 days=job_cfg.days,
@@ -290,6 +445,28 @@ class JobRunner:
                     else None
                 )
 
+                fallback_report_result: dict[str, Any] | None = None
+                if storage_ready and after_report is None:
+                    try:
+                        latest_backtest = service.latest_backtest(portfolio_slug=slug)
+                        compare_path = None
+                        if latest_backtest is not None:
+                            artifact_id = latest_backtest.get("artifact_id")
+                            if artifact_id:
+                                artifact = service.storage.artifact_by_id(int(artifact_id))
+                                compare_path = None if artifact is None else artifact.get("path")
+                        if compare_path is None:
+                            backtest_result = service.run_backtest(
+                                portfolio_slug=slug,
+                                timeframe=service.runtime._default_timeframe(),
+                                days=service.runtime._default_days(),
+                            )
+                            compare_path = backtest_result.get("compare_csv")
+                        fallback_report_result = service.run_report(compare_path=compare_path, portfolio_slug=slug)
+                        after_report = service.storage.latest_artifact("daily_report", portfolio_slug=slug)
+                    except Exception as exc:
+                        self.log.warning("auto report fallback failed for %s: %s", slug, exc)
+
                 report_changed = False
                 report_auto_generated = False
                 report_path = None
@@ -300,8 +477,12 @@ class JobRunner:
                         or before_report.get("updated_at") != after_report.get("updated_at")
                         or before_report.get("id") != after_report.get("id")
                     )
-                    report_auto_generated = bool(report_details.get("auto_generated"))
-                    report_path = after_report.get("path")
+                    report_auto_generated = bool(report_details.get("auto_generated") or fallback_report_result is not None)
+                    report_path = (
+                        fallback_report_result.get("report_markdown")
+                        if fallback_report_result is not None
+                        else after_report.get("path")
+                    )
                     if report_changed and report_auto_generated:
                         auto_report_count += 1
 
@@ -367,11 +548,12 @@ def _coerce_age(timestamp: str | None, *, now: datetime) -> float | None:
 def build_worker_status(root: Path, *, storage: AppStorage | None = None) -> dict[str, Any]:
     repo_root = root.resolve()
     settings = load_worker_settings(repo_root)
+    worker_health = evaluate_worker_health(repo_root)
     active_storage = storage or AppStorage.from_root(repo_root)
     database_ready = active_storage.schema_ready()
     now = datetime.now(timezone.utc)
 
-    latest_snapshot = active_storage.latest_snapshot(source="historical") if database_ready else None
+    latest_snapshot = active_storage.latest_snapshot() if database_ready else None
     latest_backtest = active_storage.latest_backtest_run() if database_ready else None
     latest_live_refresh = active_storage.latest_snapshot(source="mt5_live_bridge") if database_ready else None
     latest_report = active_storage.latest_artifact("daily_report") if database_ready else None
@@ -418,5 +600,6 @@ def build_worker_status(root: Path, *, storage: AppStorage | None = None) -> dic
         "generated_at": now.isoformat(),
         "loop_sleep_seconds": int(settings.loop_sleep_seconds),
         "database_ready": database_ready,
+        "health": worker_health,
         "jobs": jobs,
     }

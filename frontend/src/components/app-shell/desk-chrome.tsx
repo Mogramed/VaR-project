@@ -27,8 +27,10 @@ import type {
   WorkerStatusResponse,
 } from "@/lib/api/types";
 import { OperatorActions } from "@/components/app-shell/operator-actions";
-import { useMt5LiveState } from "@/lib/use-mt5-live-state";
+import { DeskLiveProvider, useDeskLive } from "@/components/app-shell/desk-live-provider";
+import { dedupeOperatorAlerts, dedupePersistedAlerts } from "@/lib/alerts";
 import { cn, formatTimestamp } from "@/lib/utils";
+import { useRelativeTime } from "@/lib/use-relative-time";
 
 const navItems = [
   { href: "/desk", label: "Overview", icon: Gauge },
@@ -45,6 +47,14 @@ const navItems = [
   { href: "/desk/reports", label: "Reports", icon: FileText },
 ] as const;
 
+const mobileNavItems = [
+  { href: "/desk", label: "Overview", icon: Gauge },
+  { href: "/desk/live", label: "MT5 Ops", icon: Activity },
+  { href: "/desk/capital", label: "Capital", icon: Landmark },
+  { href: "/desk/execution", label: "Execute", icon: BriefcaseBusiness },
+  { href: "/desk/blotter", label: "Blotter", icon: Orbit },
+] as const;
+
 function StatusDot({ status }: { status: "ok" | "warn" | "off" }) {
   const color =
     status === "ok"
@@ -55,31 +65,108 @@ function StatusDot({ status }: { status: "ok" | "warn" | "off" }) {
   return <span className={cn("inline-block size-1.5 rounded-full", color)} />;
 }
 
+function isAlertScopedToPortfolio(
+  alert: AlertSummary,
+  activePortfolioId: number | null,
+  activePortfolioSlug: string | null,
+) {
+  if (activePortfolioId == null) {
+    return true;
+  }
+  const alertPortfolioId =
+    typeof alert.portfolio_id === "number" ? alert.portfolio_id : null;
+  if (alertPortfolioId == null) {
+    const contextPortfolioSlug = String(
+      (alert.context as { portfolio_slug?: string } | undefined)?.portfolio_slug ?? "",
+    )
+      .trim()
+      .toLowerCase();
+    if (!contextPortfolioSlug || !activePortfolioSlug) {
+      return true;
+    }
+    return contextPortfolioSlug === activePortfolioSlug.toLowerCase();
+  }
+  return alertPortfolioId === activePortfolioId;
+}
+
 export function DeskChrome({
   children,
   health,
   portfolios,
-  alerts,
+  activeAlerts,
+  recentAlerts,
   audit,
   jobsStatus,
 }: {
   children: React.ReactNode;
   health: HealthResponse;
   portfolios: PortfolioSummary[];
-  alerts: AlertSummary[];
+  activeAlerts: AlertSummary[];
+  recentAlerts: AlertSummary[];
   audit: AuditEventResponse[];
   jobsStatus: WorkerStatusResponse | null;
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const portfolioSlug = searchParams.get("portfolio") ?? health.portfolio_slug;
+  return (
+    <DeskLiveProvider portfolioSlug={portfolioSlug ?? undefined}>
+      <DeskChromeFrame
+        pathname={pathname}
+        portfolioSlug={portfolioSlug}
+        health={health}
+        portfolios={portfolios}
+        activeAlerts={activeAlerts}
+        recentAlerts={recentAlerts}
+        audit={audit}
+        jobsStatus={jobsStatus}
+      >
+        {children}
+      </DeskChromeFrame>
+    </DeskLiveProvider>
+  );
+}
+
+function DeskChromeFrame({
+  children,
+  pathname,
+  portfolioSlug,
+  health,
+  portfolios,
+  activeAlerts,
+  recentAlerts,
+  audit,
+  jobsStatus,
+}: {
+  children: React.ReactNode;
+  pathname: string;
+  portfolioSlug: string;
+  health: HealthResponse;
+  portfolios: PortfolioSummary[];
+  activeAlerts: AlertSummary[];
+  recentAlerts: AlertSummary[];
+  audit: AuditEventResponse[];
+  jobsStatus: WorkerStatusResponse | null;
+}) {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [portfolioDropdownOpen, setPortfolioDropdownOpen] = useState(false);
-  const { liveState, transport } = useMt5LiveState(portfolioSlug ?? undefined);
+  const { liveState, transport } = useDeskLive();
+  const liveAlerts = dedupeOperatorAlerts(liveState?.operator_alerts ?? []);
+  const activePortfolioSlug = portfolioSlug ?? null;
+  const activePortfolioId =
+    portfolios.find((portfolio) => portfolio.slug === portfolioSlug)?.id ?? null;
+  const persistedActiveAlerts = dedupePersistedAlerts(activeAlerts).filter((alert) =>
+    isAlertScopedToPortfolio(alert, activePortfolioId, activePortfolioSlug),
+  );
+  const persistedRecentAlerts = dedupePersistedAlerts(recentAlerts).filter((alert) =>
+    isAlertScopedToPortfolio(alert, activePortfolioId, activePortfolioSlug),
+  );
 
   const apiStatus = health.status === "ok" ? "ok" : "off";
   const mt5Status = liveState?.status === "ok" ? "ok" : liveState?.degraded ? "warn" : "off";
-  const alertCount = (liveState?.operator_alerts ?? []).length + alerts.length;
+  const alertCount = liveAlerts.length;
+  const liveRelativeTime = useRelativeTime(liveState?.generated_at);
+  const liveProfit = liveState?.account?.profit ?? null;
 
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--color-bg)]">
@@ -191,13 +278,28 @@ export function DeskChrome({
                 API
               </span>
               <span className="flex items-center gap-1.5">
-                <StatusDot status={mt5Status as "ok" | "warn" | "off"} />
+                {mt5Status === "ok" ? (
+                  <span className="relative inline-block size-1.5">
+                    <span className="absolute inset-0 animate-ping rounded-full bg-[var(--color-green)] opacity-40" />
+                    <span className="relative inline-block size-1.5 rounded-full bg-[var(--color-green)]" />
+                  </span>
+                ) : (
+                  <StatusDot status={mt5Status as "ok" | "warn" | "off"} />
+                )}
                 MT5
-                {transport === "stream" ? " · SSE" : transport === "polling" ? " · Poll" : ""}
+                {transport === "stream" ? " | SSE" : transport === "polling" ? " | Poll" : ""}
               </span>
+              {liveProfit != null ? (
+                <span className={cn(
+                  "mono text-[11px] font-semibold tabular-nums",
+                  liveProfit >= 0 ? "text-[var(--color-green)]" : "text-[var(--color-red)]",
+                )}>
+                  {liveProfit >= 0 ? "+" : ""}{liveProfit.toFixed(2)}
+                </span>
+              ) : null}
               {liveState?.generated_at ? (
-                <span className="mono text-[10px]">
-                  {formatTimestamp(liveState.generated_at)}
+                <span className="mono text-[10px] tabular-nums" title={formatTimestamp(liveState.generated_at)}>
+                  {liveRelativeTime}
                 </span>
               ) : null}
             </div>
@@ -234,10 +336,32 @@ export function DeskChrome({
         {/* ── Page content ── */}
         <main
           data-desk-main
-          className="flex-1 overflow-y-auto px-4 py-4 lg:px-6 lg:py-5"
+          className="flex-1 overflow-y-auto px-4 py-4 pb-20 lg:px-6 lg:py-5 xl:pb-5"
         >
           {children}
         </main>
+
+        {/* ── Mobile bottom nav ── */}
+        <nav className="fixed inset-x-0 bottom-0 z-30 flex h-14 items-center justify-around border-t border-[var(--color-border)] bg-[var(--color-bg)]/95 backdrop-blur-md xl:hidden">
+          {mobileNavItems.map(({ href, label, icon: Icon }) => {
+            const active = pathname === href;
+            return (
+              <Link
+                key={href}
+                href={`${href}?portfolio=${portfolioSlug}`}
+                className={cn(
+                  "flex flex-col items-center gap-0.5 px-2 py-1 text-[9px] font-medium transition-colors",
+                  active
+                    ? "text-[var(--color-accent)]"
+                    : "text-[var(--color-text-muted)]",
+                )}
+              >
+                <Icon className="size-4" strokeWidth={active ? 2 : 1.5} />
+                {label}
+              </Link>
+            );
+          })}
+        </nav>
       </div>
 
       {/* ── Inspector drawer ── */}
@@ -269,10 +393,12 @@ export function DeskChrome({
         <div className="flex-1 overflow-y-auto p-4">
           <InspectorContent
             health={health}
-            alerts={alerts}
+            activeAlerts={persistedActiveAlerts}
+            recentAlerts={persistedRecentAlerts}
             audit={audit}
             jobsStatus={jobsStatus}
             liveState={liveState}
+            liveAlerts={liveAlerts}
             transport={transport}
           />
         </div>
@@ -285,17 +411,21 @@ export function DeskChrome({
 
 function InspectorContent({
   health,
-  alerts,
+  activeAlerts,
+  recentAlerts,
   audit,
   jobsStatus,
   liveState,
+  liveAlerts,
   transport,
 }: {
   health: HealthResponse;
-  alerts: AlertSummary[];
+  activeAlerts: AlertSummary[];
+  recentAlerts: AlertSummary[];
   audit: AuditEventResponse[];
   jobsStatus: WorkerStatusResponse | null;
   liveState: MT5LiveStateResponse | null;
+  liveAlerts: NonNullable<MT5LiveStateResponse["operator_alerts"]>;
   transport: "stream" | "polling" | "connecting";
 }) {
   const dbDep = health.dependencies?.database as { reachable?: boolean; schema_ready?: boolean } | undefined;
@@ -331,16 +461,16 @@ function InspectorContent({
             <InspectorRow
               key={name}
               label={name}
-              value={`${job.state} · ${job.interval_seconds}s`}
+              value={`${job.state} | ${job.interval_seconds}s`}
             />
           ))}
         </InspectorSection>
       ) : null}
 
       {/* Live alerts */}
-      {(liveState?.operator_alerts ?? []).length > 0 ? (
-        <InspectorSection title={`Live Alerts (${(liveState?.operator_alerts ?? []).length})`}>
-          {(liveState?.operator_alerts ?? []).slice(0, 5).map((alert) => (
+      {liveAlerts.length > 0 ? (
+        <InspectorSection title={`Live Alerts (${liveAlerts.length})`}>
+          {liveAlerts.slice(0, 5).map((alert) => (
             <div key={`${alert.code}:${JSON.stringify(alert.context)}`} className="border-b border-[var(--color-border)] pb-2 last:border-b-0 last:pb-0">
               <div className="flex items-start justify-between gap-2">
                 <span className="text-[11px] font-medium text-[var(--color-text)]">{alert.code}</span>
@@ -354,17 +484,43 @@ function InspectorContent({
         </InspectorSection>
       ) : null}
 
-      {/* Persisted alerts */}
-      {alerts.length > 0 ? (
-        <InspectorSection title={`Alerts (${alerts.length})`}>
-          {alerts.slice(0, 5).map((alert) => (
+      {/* Active alerts (API) */}
+      {activeAlerts.length > 0 ? (
+        <InspectorSection title={`Active Alerts (${activeAlerts.length})`}>
+          {activeAlerts.slice(0, 5).map((alert) => (
             <div key={alert.id} className="border-b border-[var(--color-border)] pb-2 last:border-b-0 last:pb-0">
               <div className="flex items-start justify-between gap-2">
                 <span className="text-[11px] font-medium text-[var(--color-text)]">{alert.code}</span>
+                <span className="rounded-[2px] bg-[var(--color-accent-soft)] px-1 py-0.5 text-[9px] font-semibold uppercase text-[var(--color-accent)]">
+                  ACTIVE
+                </span>
                 <AlertSeverityBadge severity={alert.severity} />
               </div>
               <p className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
                 {alert.message}
+              </p>
+            </div>
+          ))}
+        </InspectorSection>
+      ) : null}
+
+      {/* Historical events (API) */}
+      {recentAlerts.length > 0 ? (
+        <InspectorSection title={`Recent Events (${recentAlerts.length})`}>
+          {recentAlerts.slice(0, 5).map((alert) => (
+            <div key={`history-${alert.id}`} className="border-b border-[var(--color-border)] pb-2 last:border-b-0 last:pb-0">
+              <div className="flex items-start justify-between gap-2">
+                <span className="text-[11px] font-medium text-[var(--color-text)]">{alert.code}</span>
+                <span className="rounded-[2px] bg-[var(--color-surface-hover)] px-1 py-0.5 text-[9px] font-semibold uppercase text-[var(--color-text-muted)]">
+                  HISTORY
+                </span>
+                <AlertSeverityBadge severity={alert.severity} />
+              </div>
+              <p className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
+                {alert.message}
+              </p>
+              <p className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">
+                {formatTimestamp(alert.created_at)}
               </p>
             </div>
           ))}

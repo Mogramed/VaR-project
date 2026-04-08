@@ -211,6 +211,29 @@ export function FormError({ message }: { message: string | null | undefined }) {
   );
 }
 
+/* ─── Form Success ─── */
+
+export function FormSuccess({ message, visible }: { message: string; visible: boolean }) {
+  return (
+    <AnimatePresence>
+      {visible ? (
+        <motion.span
+          initial={{ opacity: 0, x: -6, scale: 0.95 }}
+          animate={{ opacity: 1, x: 0, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.95 }}
+          className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--color-green)]"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="shrink-0">
+            <circle cx="6" cy="6" r="5.5" stroke="currentColor" strokeWidth="1" />
+            <path d="M3.5 6L5.25 7.75L8.5 4.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          {message}
+        </motion.span>
+      ) : null}
+    </AnimatePresence>
+  );
+}
+
 /* ─── Form Section ─── */
 
 export function FormSection({ title, children }: { title?: string; children: React.ReactNode }) {

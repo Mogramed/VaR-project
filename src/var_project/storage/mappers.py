@@ -16,6 +16,7 @@ from var_project.storage.models import (
     MT5OrderHistoryRecord,
     MarketBarRecord,
     MarketDataSyncRecord,
+    OperatorRunRecord,
     PortfolioRecord,
     ReconciliationAcknowledgementRecord,
     SnapshotRecord,
@@ -269,6 +270,30 @@ def market_data_sync_to_dict(record: MarketDataSyncRecord) -> dict[str, Any]:
         "status": record.status,
         "details": record.details_json or {},
         "synced_at": to_iso(record.synced_at),
+    }
+
+
+def operator_run_to_dict(record: OperatorRunRecord) -> dict[str, Any]:
+    return {
+        "id": int(record.id),
+        "portfolio_id": record.portfolio_id,
+        "portfolio_slug": record.portfolio_slug,
+        "action": record.action,
+        "request_id": record.request_id,
+        "status": record.status,
+        "stage": record.stage,
+        "request_payload": record.request_payload_json or {},
+        "artifact_refs": record.artifact_refs_json or {},
+        "result": record.result_json or {},
+        "error_code": record.error_code,
+        "error_message": record.error_message,
+        "hint": record.hint,
+        "queue_task_id": record.queue_task_id,
+        "reused_run_id": record.reused_run_id,
+        "started_at": to_iso(record.started_at),
+        "finished_at": to_iso(record.finished_at),
+        "created_at": to_iso(record.created_at),
+        "updated_at": to_iso(record.updated_at),
     }
 
 

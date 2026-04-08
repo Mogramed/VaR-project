@@ -11,8 +11,7 @@ export default async function DeskIncidentsPage({
     typeof query.portfolio === "string" ? query.portfolio : undefined;
   const resolvedPortfolio = portfolioSlug ?? (await api.safeHealth()).portfolio_slug;
 
-  const [liveState, incidents, audit] = await Promise.all([
-    api.mt5LiveState(resolvedPortfolio).catch(() => null),
+  const [incidents, audit] = await Promise.all([
     api.reconciliationIncidents({ portfolioSlug: resolvedPortfolio, includeResolved: true, limit: 200 }).catch(() => []),
     api.recentAudit(resolvedPortfolio, 150).catch(() => []),
   ]);
@@ -21,7 +20,6 @@ export default async function DeskIncidentsPage({
     <IncidentCenterSurface
       key={resolvedPortfolio}
       portfolioSlug={resolvedPortfolio}
-      initialLiveState={liveState}
       initialIncidents={incidents}
       initialAudit={audit}
     />

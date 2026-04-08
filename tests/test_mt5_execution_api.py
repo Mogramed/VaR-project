@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +11,9 @@ from fastapi.testclient import TestClient
 
 from var_project.api import create_app
 from var_project.api.service import DeskApiService
+from var_project.api.routers.mt5 import iter_mt5_live_stream
 from var_project.core.exceptions import MT5ConnectionError
+from var_project.execution.mt5_bridge import _is_fx_weekend_closed
 
 
 def _write_settings(
@@ -136,6 +139,8 @@ class FakeMT5Connector:
     terminal_tradeapi_disabled: bool = False
     order_history: list[dict[str, object]] = []
     deal_history: list[dict[str, object]] = []
+    last_n_calls: list[dict[str, object]] = []
+    range_calls: list[dict[str, object]] = []
 
     def __init__(self, config):
         self.config = config
@@ -150,6 +155,8 @@ class FakeMT5Connector:
         cls.force_order_check_reject = False
         cls.terminal_trade_allowed = True
         cls.terminal_tradeapi_disabled = False
+        cls.last_n_calls = []
+        cls.range_calls = []
         timestamp = int(datetime(2026, 3, 28, 9, 0, tzinfo=timezone.utc).timestamp())
         cls.order_history = [
             {
@@ -265,9 +272,7 @@ class FakeMT5Connector:
             raise ValueError(f"Unsupported timeframe {timeframe}")
         return mapping[normalized]
 
-    def fetch_last_n_bars(self, symbol: str, timeframe: str, n_bars: int, chunk_size: int = 5000) -> pd.DataFrame:
-        self._ensure_initialized()
-        self.ensure_symbol(symbol)
+    def _build_bar_frame(self, symbol: str, timeframe: str, count: int) -> pd.DataFrame:
         normalized_timeframe = timeframe.upper()
         freq = "h"
         minimum = 24 * 40
@@ -277,7 +282,7 @@ class FakeMT5Connector:
         elif normalized_timeframe == "D1":
             freq = "D"
             minimum = 90
-        count = max(int(n_bars), minimum)
+        count = max(int(count), minimum)
         times = pd.date_range("2026-01-01", periods=count, freq=freq, tz="UTC")
         x = np.arange(count)
         if symbol.upper() == "EURUSD":
@@ -300,6 +305,44 @@ class FakeMT5Connector:
                 "real_volume": np.full(count, 0.0),
             }
         )
+
+    def fetch_last_n_bars(self, symbol: str, timeframe: str, n_bars: int, chunk_size: int = 5000) -> pd.DataFrame:
+        self._ensure_initialized()
+        self.ensure_symbol(symbol)
+        type(self).last_n_calls.append(
+            {
+                "symbol": symbol.upper(),
+                "timeframe": timeframe.upper(),
+                "n_bars": int(n_bars),
+                "chunk_size": int(chunk_size),
+            }
+        )
+        return self._build_bar_frame(symbol, timeframe, n_bars)
+
+    def fetch_bars_range(self, symbol: str, timeframe: str, date_from: datetime, date_to: datetime) -> pd.DataFrame:
+        self._ensure_initialized()
+        self.ensure_symbol(symbol)
+        start_ts = pd.Timestamp(date_from)
+        end_ts = pd.Timestamp(date_to)
+        if start_ts.tzinfo is None:
+            start_ts = start_ts.tz_localize("UTC")
+        else:
+            start_ts = start_ts.tz_convert("UTC")
+        if end_ts.tzinfo is None:
+            end_ts = end_ts.tz_localize("UTC")
+        else:
+            end_ts = end_ts.tz_convert("UTC")
+        type(self).range_calls.append(
+            {
+                "symbol": symbol.upper(),
+                "timeframe": timeframe.upper(),
+                "date_from": start_ts.isoformat(),
+                "date_to": end_ts.isoformat(),
+            }
+        )
+        frame = self._build_bar_frame(symbol, timeframe, 24 * 120)
+        sliced = frame[(frame["time"] >= start_ts) & (frame["time"] <= end_ts)].copy()
+        return sliced.reset_index(drop=True)
 
     def fetch_ticks_range(
         self,
@@ -472,6 +515,126 @@ class FakeMT5Connector:
         return round(sum(abs(volume) for volume in cls.positions_lots.values()) * 1_000.0, 2)
 
 
+class FailingMT5Connector(FakeMT5Connector):
+    def terminal_info(self) -> dict[str, object]:
+        self._ensure_initialized()
+        raise MT5ConnectionError("Simulated MT5 outage.")
+
+
+class EmptyBookConnector(FakeMT5Connector):
+    @classmethod
+    def reset(cls) -> None:
+        super().reset()
+        cls.positions_lots = {"EURUSD": 0.0, "USDJPY": 0.0}
+        cls.order_history = []
+        cls.deal_history = []
+
+
+class FreshTickEmptyBookConnector(EmptyBookConnector):
+    def symbol_info_tick(self, symbol: str) -> dict[str, object]:
+        payload = dict(super().symbol_info_tick(symbol))
+        payload["time"] = int(datetime.now(timezone.utc).timestamp())
+        return payload
+
+
+def test_fx_weekend_market_close_window() -> None:
+    assert _is_fx_weekend_closed(datetime(2026, 4, 3, 20, 0, tzinfo=timezone.utc)) is False
+    assert _is_fx_weekend_closed(datetime(2026, 4, 3, 21, 30, tzinfo=timezone.utc)) is True
+    assert _is_fx_weekend_closed(datetime(2026, 4, 4, 10, 0, tzinfo=timezone.utc)) is True
+    assert _is_fx_weekend_closed(datetime(2026, 4, 5, 20, 30, tzinfo=timezone.utc)) is True
+    assert _is_fx_weekend_closed(datetime(2026, 4, 5, 21, 30, tzinfo=timezone.utc)) is False
+
+
+def _minimal_execution_result_payload(*, created_at: datetime, order_ticket: int, deal_ticket: int) -> dict[str, object]:
+    timestamp = created_at.astimezone(timezone.utc).isoformat()
+    risk_state = {
+        "var": 1.0,
+        "es": 1.0,
+        "headroom_var": 1.0,
+        "headroom_es": 1.0,
+        "gross_exposure": 1.0,
+        "symbol_exposure": 1.0,
+        "status": "OK",
+    }
+    return {
+        "created_at": timestamp,
+        "time_utc": timestamp,
+        "portfolio_slug": "fx_eur_20k",
+        "symbol": "EURUSD",
+        "status": "EXECUTED",
+        "requested_exposure_change": 1_000.0,
+        "approved_exposure_change": 1_000.0,
+        "executed_exposure_change": 1_000.0,
+        "fill_ratio": 1.0,
+        "broker_status": "filled",
+        "terminal_status": {
+            "connected": True,
+            "ready": True,
+            "execution_enabled": True,
+            "trade_allowed": True,
+            "tradeapi_disabled": False,
+            "message": "ok",
+            "timestamp_utc": timestamp,
+            "raw": {},
+        },
+        "account_before": {
+            "login": 123456,
+            "name": "Demo Trader",
+            "server": "MetaQuotes-Demo",
+            "currency": "EUR",
+            "leverage": 100,
+            "balance": 100_000.0,
+            "equity": 100_000.0,
+            "profit": 0.0,
+            "margin": 0.0,
+            "margin_free": 100_000.0,
+            "margin_level": 0.0,
+            "trade_allowed": True,
+            "timestamp_utc": timestamp,
+            "raw": {},
+        },
+        "guard": {
+            "decision": "APPROVE",
+            "risk_decision": "APPROVE",
+            "requested_exposure_change": 1_000.0,
+            "approved_exposure_change": 1_000.0,
+            "executable_exposure_change": 1_000.0,
+            "model_used": "hist",
+            "side": "BUY",
+            "volume_lots": 0.01,
+            "price": 1.0899,
+            "execution_enabled": True,
+            "submit_allowed": True,
+            "margin_ok": True,
+            "margin_required": 100.0,
+            "free_margin_after": 99_900.0,
+            "order_check_retcode": 0,
+            "order_check_comment": "ok",
+            "reasons": [],
+        },
+        "risk_decision": {
+            "symbol": "EURUSD",
+            "decision": "APPROVE",
+            "requested_exposure_change": 1_000.0,
+            "approved_exposure_change": 1_000.0,
+            "resulting_exposure": 1_000.0,
+            "model_used": "hist",
+            "reasons": [],
+            "pre_trade": dict(risk_state),
+            "post_trade": dict(risk_state),
+        },
+        "mt5_result": {
+            "order": order_ticket,
+            "deal": deal_ticket,
+        },
+        "order_request": {},
+        "order_check": {},
+        "positions_after": [],
+        "post_capital": {},
+        "fills": [],
+    }
+
+
 def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     root = tmp_path
     _write_settings(root)
@@ -507,7 +670,7 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     assert live_state_body["risk_summary"]["reference_model"] in {"hist", "param", "mc", "ewma", "garch", "fhs"}
     assert live_state_body["capital_usage"]["snapshot_source"] == "mt5_live_bridge"
     assert live_state_body["microstructure"]["items"]
-    assert live_state_body["tick_quality"]["status"] in {"healthy", "stale", "incomplete"}
+    assert live_state_body["tick_quality"]["status"] in {"healthy", "stale", "incomplete", "market_closed"}
     assert live_state_body["risk_nowcast"]["live_1d_99"]["nowcast_var"] is not None
     assert live_state_body["pnl_explain"]["unrealized"] is not None
     assert live_state_body["operator_alerts"]
@@ -520,9 +683,35 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     assert persisted_live_snapshot.json()["source"] == "mt5_live_bridge"
     assert persisted_live_snapshot.json()["payload"]["metadata"]["live_sequence"] == live_state_body["sequence"]
 
+    summary_live_state = client.get("/mt5/live/state", params={"detail_level": "summary"})
+    assert summary_live_state.status_code == 200
+    summary_body = summary_live_state.json()
+    assert summary_body["sequence"] == live_state_body["sequence"]
+    assert summary_body["holdings"] == live_state_body["holdings"]
+    assert summary_body["order_history"] == []
+    assert summary_body["deal_history"] == []
+    assert summary_body["reconciliation"]["mismatches"] == []
+    assert summary_body["reconciliation"]["incidents"] == []
+    assert summary_body["reconciliation"]["recent_execution_attempts"] == []
+    assert summary_body["reconciliation"]["recent_fills"] == []
+    assert summary_body["reconciliation"]["manual_event_count"] == live_state_body["reconciliation"]["manual_event_count"]
+
     live_events = client.get("/mt5/live/events", params={"after": 0, "limit": 5, "wait_seconds": 0.1})
     assert live_events.status_code == 200
     assert live_events.json()
+
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+    stream_iter = iter_mt5_live_stream(service, portfolio_slug="fx_eur_20k")
+    retry_frame = next(stream_iter)
+    data_frame = next(stream_iter)
+
+    assert retry_frame == "retry: 5000\n\n"
+    assert "event:" not in data_frame
+    data_line = next(
+        line for line in data_frame.splitlines() if line.startswith("data: ")
+    )
+    stream_payload = json.loads(data_line.removeprefix("data: "))
+    assert stream_payload["state"]["connected"] is True
 
     preview = client.post(
         "/execution/preview",
@@ -572,6 +761,235 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     latest_capital = client.get("/capital/latest")
     assert latest_capital.status_code == 200
     assert latest_capital.json()["portfolio_slug"] == "fx_eur_20k"
+
+
+def test_mt5_live_stream_recovers_from_backend_event_errors(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    FakeMT5Connector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+
+    def fail_live_events(*, portfolio_slug=None, after=0, limit=100, wait_seconds=15.0):
+        raise RuntimeError("simulated stream failure")
+
+    service.mt5_live_events = fail_live_events  # type: ignore[method-assign]
+    stream_iter = iter_mt5_live_stream(service, portfolio_slug="fx_eur_20k")
+
+    retry_frame = next(stream_iter)
+    error_frame = next(stream_iter)
+
+    assert retry_frame == "retry: 5000\n\n"
+    data_line = next(line for line in error_frame.splitlines() if line.startswith("data: "))
+    payload = json.loads(data_line.removeprefix("data: "))
+    assert payload["kind"] == "stream_error"
+    assert payload["state"]["status"] == "degraded"
+    assert payload["state"]["last_error"] == "simulated stream failure"
+
+
+def test_mt5_live_state_surfaces_bridge_alerts_without_false_drift_noise(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    FailingMT5Connector.reset()
+
+    client = TestClient(
+        create_app(repo_root=root, mt5_connector_factory=FailingMT5Connector, bootstrap_storage=True)
+    )
+
+    live_state = client.get("/mt5/live/state")
+    assert live_state.status_code == 200
+    payload = live_state.json()
+    codes = {item["code"] for item in payload["operator_alerts"]}
+
+    assert payload["connected"] is False
+    assert "MT5_LIVE_DISCONNECTED" in codes
+    assert "MT5_LIVE_ERROR" in codes
+    assert "DESK_BROKER_DRIFT" not in codes
+    assert "EXECUTION_UNMATCHED" not in codes
+    assert "PENDING_BROKER_ACTIVITY" not in codes
+
+
+def test_mt5_live_state_labels_empty_broker_book_without_hiding_diagnostics(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    EmptyBookConnector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=EmptyBookConnector, bootstrap_storage=True)
+    historical_budget = 987_654.0
+    service.runtime.storage.record_capital_snapshot(
+        {
+            "portfolio_slug": "fx_eur_20k",
+            "reference_model": "hist",
+            "snapshot_source": "historical",
+            "total_capital_budget_eur": historical_budget,
+            "total_capital_consumed_eur": 12_345.0,
+            "total_capital_reserved_eur": 2_000.0,
+            "total_capital_remaining_eur": historical_budget - 14_345.0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+        portfolio_id=service.runtime.portfolio_ids["fx_eur_20k"],
+        source="historical",
+    )
+    service.runtime.storage.record_execution_result(
+        _minimal_execution_result_payload(
+            created_at=datetime.now(timezone.utc) - timedelta(days=2),
+            order_ticket=56_048_496_970,
+            deal_ticket=55_757_886_011,
+        ),
+        portfolio_id=service.runtime.portfolio_ids["fx_eur_20k"],
+    )
+
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=EmptyBookConnector, bootstrap_storage=True))
+
+    live_state = client.get("/mt5/live/state")
+    assert live_state.status_code == 200
+    payload = live_state.json()
+    codes = {item["code"] for item in payload["operator_alerts"]}
+    reconciliation = payload["reconciliation"]
+    weekend_closed = _is_fx_weekend_closed()
+    expected_diagnostic = "MT5_MARKET_CLOSED" if weekend_closed else "MT5_RECONCILIATION_INCOMPLETE"
+    expected_history_window_minutes = 72 * 60 if weekend_closed else 180
+    expected_expired_count = 0 if weekend_closed else 1
+
+    assert payload["connected"] is True
+    assert payload["holdings"] == []
+    assert payload["effective_history_lookback_minutes"] == expected_history_window_minutes
+    assert payload["market_closed"] is weekend_closed
+    assert payload["risk_summary"] is not None
+    assert payload["capital_usage"] is not None
+    assert payload["capital_usage"]["snapshot_source"] == "mt5_live_bridge"
+    assert float(payload["capital_usage"]["total_capital_budget_eur"]) != historical_budget
+    assert payload["capital_usage"]["total_capital_consumed_eur"] == 0.0
+    assert reconciliation["live_base_ready"] is False
+    assert reconciliation["live_evidence_present"] is False
+    assert reconciliation["history_window_minutes"] == expected_history_window_minutes
+    assert reconciliation["effective_history_lookback_minutes"] == expected_history_window_minutes
+    assert reconciliation["market_closed"] is weekend_closed
+    assert reconciliation["history_window_expired_execution_count"] == expected_expired_count
+    assert reconciliation["diagnostic_code"] == expected_diagnostic
+    assert reconciliation["operational_truth"] == ("broker" if weekend_closed else "broker_delayed")
+    assert expected_diagnostic in codes
+    if weekend_closed:
+        assert payload["tick_quality"]["status"] == "market_closed"
+        assert payload["microstructure"]["regime"] == "closed"
+    assert "MT5_RECONCILIATION_WINDOW_EXPIRED" not in codes
+    assert "DESK_BROKER_DRIFT" not in codes
+    assert "EXECUTION_UNMATCHED" not in codes
+    assert "PENDING_BROKER_ACTIVITY" not in codes
+
+
+def test_mt5_live_state_uses_fresh_ticks_as_live_evidence(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    FreshTickEmptyBookConnector.reset()
+
+    client = TestClient(
+        create_app(repo_root=root, mt5_connector_factory=FreshTickEmptyBookConnector, bootstrap_storage=True)
+    )
+
+    live_state = client.get("/mt5/live/state")
+    assert live_state.status_code == 200
+    payload = live_state.json()
+    reconciliation = payload["reconciliation"]
+    codes = {item["code"] for item in payload["operator_alerts"]}
+
+    assert payload["connected"] is True
+    assert reconciliation["live_evidence_present"] is True
+    assert reconciliation["live_base_ready"] is True
+    assert int(reconciliation["live_evidence_counts"].get("fresh_ticks") or 0) > 0
+    assert "MT5_RECONCILIATION_INCOMPLETE" not in codes
+
+
+def test_mt5_startup_import_schedules_sync_only_once(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+    mt5 = service.mt5
+    mt5_type = type(mt5)
+    mt5_type._shared_startup_import_done.clear()
+    mt5_type._shared_startup_sync_inflight.clear()
+
+    calls: list[dict[str, object]] = []
+
+    def record_schedule(*, portfolio, portfolio_id, imported_symbols):
+        calls.append(
+            {
+                "portfolio_slug": portfolio["slug"],
+                "portfolio_id": portfolio_id,
+                "imported_symbols": list(imported_symbols),
+            }
+        )
+
+    mt5._schedule_startup_sync = record_schedule  # type: ignore[method-assign]
+    raw_state = {
+        "connected": True,
+        "symbols": ["EURUSD", "USDJPY", "GBPUSD"],
+        "holdings": [],
+        "pending_orders": [],
+        "order_history": [],
+        "deal_history": [],
+    }
+
+    mt5._check_startup_import(raw_state, portfolio_slug="fx_eur_20k")
+    mt5._check_startup_import(raw_state, portfolio_slug="fx_eur_20k")
+
+    assert calls == [
+        {
+            "portfolio_slug": "fx_eur_20k",
+            "portfolio_id": service.runtime.portfolio_ids["fx_eur_20k"],
+            "imported_symbols": ["GBPUSD"],
+        }
+    ]
+
+
+def test_mt5_live_analytics_cache_reuses_holdings_snapshot(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+    mt5 = service.mt5
+    mt5_type = type(mt5)
+    mt5_type._shared_live_analytics_cache.clear()
+
+    calls = {"count": 0}
+
+    def fake_build_live_analytics(raw_state, *, portfolio_slug=None):
+        calls["count"] += 1
+        return {
+            "bundle": {"portfolio_slug": portfolio_slug, "holdings": list(raw_state.get("holdings") or [])},
+            "risk_summary": {"reference_model": "hist"},
+            "risk_budget": {"snapshot_source": "mt5_live_bridge"},
+            "capital_usage": {"snapshot_source": "mt5_live_bridge"},
+            "alerts": [],
+        }
+
+    mt5._build_live_analytics = fake_build_live_analytics  # type: ignore[method-assign]
+    base_state = {
+        "holdings": [
+            {"symbol": "EURUSD", "side": "BUY", "volume_lots": 0.10, "ticket": 101},
+            {"symbol": "USDJPY", "side": "SELL", "volume_lots": 0.11, "ticket": 102},
+        ]
+    }
+
+    first = mt5._cached_build_live_analytics(
+        {
+            **base_state,
+            "sequence": 41,
+            "generated_at": "2026-04-04T10:00:00+00:00",
+        },
+        portfolio_slug="fx_eur_20k",
+    )
+    second = mt5._cached_build_live_analytics(
+        {
+            **base_state,
+            "sequence": 42,
+            "generated_at": "2026-04-04T10:00:05+00:00",
+        },
+        portfolio_slug="fx_eur_20k",
+    )
+
+    assert calls["count"] == 1
+    assert first == second
+    assert first is not second
 
 
 def test_mt5_execution_guard_blocks_on_margin_reject(tmp_path: Path):
@@ -637,6 +1055,34 @@ def test_preview_execution_uses_warm_market_cache_without_blocking_sync(tmp_path
     assert preview["guard"]["volume_lots"] > 0.0
     assert preview["microstructure"]["items"]
     assert preview["estimated_spread_cost"] is not None
+
+
+def test_sync_market_data_uses_incremental_bar_fetch_after_bootstrap(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    FakeMT5Connector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+    portfolio_slug = service.runtime.portfolio["slug"]
+
+    service.runtime.market_data.sync_market_data(
+        portfolio_slug=portfolio_slug,
+        days=service.runtime._default_days(),
+        timeframes=[service.runtime._default_timeframe()],
+    )
+    assert FakeMT5Connector.last_n_calls
+
+    FakeMT5Connector.last_n_calls = []
+    FakeMT5Connector.range_calls = []
+
+    service.runtime.market_data.sync_market_data(
+        portfolio_slug=portfolio_slug,
+        days=service.runtime._default_days(),
+        timeframes=[service.runtime._default_timeframe()],
+    )
+
+    assert FakeMT5Connector.range_calls
+    assert FakeMT5Connector.last_n_calls == []
 
 
 class FillingModeFallbackConnector(FakeMT5Connector):

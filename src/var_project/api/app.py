@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
-from var_project.api.routers import analytics, capital, desk, health, mt5, reports, trading
+from var_project.api.routers import analytics, capital, desk, health, mt5, operator, reports, trading
 from var_project.core.settings import find_repo_root
 
 
@@ -26,7 +26,16 @@ def create_app(repo_root: Path | None = None, mt5_connector_factory=None, *, boo
     app.state.mt5_connector_factory = mt5_connector_factory
     app.state.bootstrap_storage = bool(bootstrap_storage)
 
-    for module in (health, desk, analytics, capital, mt5, trading, reports):
+    @app.get("/", tags=["health"], summary="API entrypoint")
+    def root() -> dict[str, object]:
+        return {
+            "name": app.title,
+            "status": "ok",
+            "docs": "/docs",
+            "health": "/health",
+        }
+
+    for module in (health, desk, analytics, capital, mt5, trading, reports, operator):
         app.include_router(module.router)
 
     return app

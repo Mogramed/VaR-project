@@ -6,6 +6,7 @@ FX risk desk platform built around a FastAPI backend, a Next.js frontend, a work
 
 - `var-project api`: serve the FastAPI backend.
 - `var-project worker`: run snapshot, backtest, and report jobs.
+- `var-project operator-worker`: process queued operator actions (`sync/snapshot/backtest/report`) via Celery.
 - `var-project mt5-agent`: expose a local MT5 terminal to the backend when Docker is running on Linux containers.
 - `var-project db upgrade`: apply the versioned SQL schema with Alembic.
 - `var-project seed-demo`: bootstrap the local platform state from the tracked 60-day fixtures.
@@ -37,6 +38,12 @@ Worker:
 var-project worker --once
 ```
 
+Operator queue worker:
+
+```bash
+var-project operator-worker
+```
+
 Frontend:
 
 ```bash
@@ -56,9 +63,12 @@ The Docker path is the canonical frontend workflow. Host-side `npm` remains opti
 
 The Docker stack exposes:
 
-- API: `http://localhost:8000/health`
+- API debug root: `http://localhost:8000/`
+- API debug health: `http://localhost:8000/health`
+- API debug docs: `http://localhost:8000/docs`
 - Frontend: `http://localhost:3000`
 - Nginx front door: `http://localhost:8080`
+- Frontend through Nginx: `http://localhost:8080/`
 - API through Nginx: `http://localhost:8080/backend/health`
 
 Run:
@@ -70,9 +80,12 @@ docker compose up
 
 Notes:
 
-- `db-migrate` is a one-shot service that runs `var-project db upgrade` before `api` and `worker`.
+- `db-migrate` is a one-shot service that runs `var-project db upgrade` before `api`, `worker`, and `celery-worker`.
 - `api` and `worker` no longer create the schema silently at startup.
+- `redis` + `celery-worker` provide asynchronous execution for operator actions triggered from the frontend.
 - `seed-demo` is the supported way to generate a demo-ready database state beyond the tracked fixtures.
+- `localhost:8080` is the operator-facing front door. `localhost:8000` remains the direct FastAPI debug surface.
+- `GET /` on `localhost:8000` now returns a small discovery payload that points to `/health` and `/docs` instead of a raw `404`.
 
 Regenerate frontend API types after backend schema changes:
 
@@ -130,7 +143,7 @@ VAR_PROJECT_MT5_AGENT_API_KEY=change_me_local_only
 3. Restart the relevant services:
 
 ```bash
-docker compose up -d --build api worker frontend nginx
+docker compose up -d --build api worker celery-worker frontend nginx
 ```
 
 Notes:

@@ -4,9 +4,16 @@ import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import { CHART_PALETTE, makeBacktestOption, makeGroupedBarOption, makeLineOption } from "@/lib/chart-options";
 import { loadDeskReportViewModel } from "@/lib/report-view-model";
-import { formatCurrency, formatTimestamp } from "@/lib/utils";
+import { formatCurrency, formatSourceLabel, formatTimestamp } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
+
+const REPORT_DATE_FORMATTER = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "UTC",
+  day: "2-digit",
+  month: "long",
+  year: "numeric",
+});
 
 export default async function ReportExportPage({
   searchParams,
@@ -16,16 +23,10 @@ export default async function ReportExportPage({
   const query = await searchParams;
   const portfolioSlug =
     typeof query.portfolio === "string" ? query.portfolio : undefined;
-  const report = await loadDeskReportViewModel(portfolioSlug);
-  const snapshotSourceLabel =
-    report.meta.preferredSnapshotSource === "mt5_live_bridge"
-      ? "mt5 live snapshot"
-      : "historical snapshot";
-  const reportDate = new Date().toLocaleDateString("en-GB", {
-    day: "2-digit",
-    month: "long",
-    year: "numeric",
-  });
+  const report = await loadDeskReportViewModel(portfolioSlug, { liveState: null });
+  const snapshotSourceLabel = formatSourceLabel(report.meta.preferredSnapshotSource);
+  const isLiveSnapshot = String(report.meta.preferredSnapshotSource ?? "").startsWith("mt5_live");
+  const reportDate = REPORT_DATE_FORMATTER.format(new Date());
 
   return (
     <main
@@ -56,7 +57,7 @@ export default async function ReportExportPage({
                 <StatusBadge label={report.selectedModel.toUpperCase()} tone="accent" />
                 <StatusBadge
                   label={snapshotSourceLabel}
-                  tone={report.meta.preferredSnapshotSource === "mt5_live_bridge" ? "success" : "neutral"}
+                  tone={isLiveSnapshot ? "success" : "neutral"}
                 />
                 <StatusBadge label={report.capital?.status ?? "pending"} tone="success" />
                 <StatusBadge label={report.meta.reportTimestamp} />
@@ -82,7 +83,7 @@ export default async function ReportExportPage({
             </span>
             <span className="h-px flex-1 bg-white/6" />
             <span className="text-[10px] text-[var(--color-text-muted)]">
-              Internal use only — Do not distribute
+              Internal use only - Do not distribute
             </span>
           </div>
         </section>
@@ -211,6 +212,9 @@ export default async function ReportExportPage({
             content={report.normalizedReportContent}
             reportPath={report.report.report_markdown}
             showSource={false}
+            portfolioSlug={report.resolvedPortfolio}
+            reportId={report.report.report_id}
+            chartPaths={report.report.chart_paths ?? []}
           />
         ) : (
           <section className="surface rounded-[1.8rem] p-6 text-sm text-[var(--color-text-muted)]">

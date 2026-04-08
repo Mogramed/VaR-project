@@ -29,6 +29,33 @@ def _standardized_t_var_es(alpha: float, nu: float) -> tuple[float, float]:
     return q_std, tail_std
 
 
+def _fit_converged(result: object) -> bool:
+    convergence_flag = getattr(result, "convergence_flag", None)
+    if convergence_flag is not None:
+        try:
+            if int(convergence_flag) != 0:
+                return False
+        except (TypeError, ValueError):
+            return False
+
+    optimization_result = getattr(result, "optimization_result", None)
+    if optimization_result is None:
+        return True
+
+    success = getattr(optimization_result, "success", None)
+    if success is False:
+        return False
+
+    status = getattr(optimization_result, "status", None)
+    if status is not None:
+        try:
+            if int(status) != 0:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
 def garch_var_es(
     pnl,
     alpha: float,
@@ -68,7 +95,10 @@ def garch_var_es(
                 dist=arch_dist,
                 rescale=False,
             )
-            result = model.fit(disp="off", update_freq=0)
+            result = model.fit(disp="off", update_freq=0, show_warning=False)
+
+        if not _fit_converged(result):
+            raise ValueError("GARCH fit did not converge.")
 
         forecast = result.forecast(horizon=1, reindex=False)
         mu = float(np.asarray(forecast.mean.iloc[-1]).reshape(-1)[0])
@@ -77,6 +107,8 @@ def garch_var_es(
             raise ValueError("Non-finite GARCH forecast moments.")
 
         sigma = math.sqrt(max(variance, 1e-18))
+        if not np.isfinite(sigma):
+            raise ValueError("Non-finite GARCH volatility forecast.")
         if arch_dist == "t":
             nu = float(result.params.get("nu", float("nan")))
             if not np.isfinite(nu) or nu <= 2.05:
@@ -88,6 +120,8 @@ def garch_var_es(
 
         var = (-mu) + sigma * q_alpha
         es = (-mu) + sigma * tail_alpha
+        if not np.isfinite(var) or not np.isfinite(es):
+            raise ValueError("Non-finite GARCH risk metrics.")
         var = max(float(var), 0.0)
         es = max(float(es), var)
         return RiskTail(var=var, es=es)

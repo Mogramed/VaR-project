@@ -77,6 +77,7 @@ class AlertSummary(BaseModel):
     portfolio_id: int | None = None
     snapshot_id: int | None = None
     validation_run_id: int | None = None
+    is_active: bool | None = None
     source: str
     severity: str
     code: str
@@ -98,6 +99,13 @@ class HealthResponse(BaseModel):
     dependencies: dict[str, Any] = Field(default_factory=dict)
 
 
+class HealthDependenciesResponse(BaseModel):
+    status: str
+    generated_at: str
+    portfolio_slug: str
+    dependencies: dict[str, Any] = Field(default_factory=dict)
+
+
 class WorkerJobStatusResponse(BaseModel):
     enabled: bool
     interval_seconds: int
@@ -113,6 +121,7 @@ class WorkerStatusResponse(BaseModel):
     generated_at: str
     loop_sleep_seconds: int
     database_ready: bool
+    health: dict[str, Any] | None = None
     jobs: dict[str, WorkerJobStatusResponse]
 
 
@@ -145,6 +154,32 @@ class RunBacktestRequest(BaseModel):
 class RunReportRequest(BaseModel):
     compare_path: str | None = None
     portfolio_slug: str | None = None
+
+
+class OperatorRunResponse(BaseModel):
+    id: int
+    portfolio_id: int | None = None
+    portfolio_slug: str | None = None
+    action: str
+    request_id: str
+    status: str
+    stage: str
+    request_payload: dict[str, Any] = Field(default_factory=dict)
+    artifact_refs: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] = Field(default_factory=dict)
+    error_code: str | None = None
+    error_message: str | None = None
+    hint: str | None = None
+    queue_task_id: str | None = None
+    reused_run_id: int | None = None
+    reused: bool = False
+    elapsed_seconds: float | None = None
+    is_stale: bool = False
+    poll_after_ms: int | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class TradeProposalRequest(ApiModel):
@@ -198,6 +233,8 @@ class BacktestRunResponse(BaseModel):
     best_model: str | None = None
     alert_count: int
     exception_counts: dict[str, int]
+    source: str | None = None
+    flat_book: bool = False
 
 
 class ReportRunResponse(BaseModel):
@@ -212,6 +249,7 @@ class BacktestFrameResponse(BaseModel):
 
 
 class ReportContentResponse(BaseModel):
+    report_id: int | None = None
     report_markdown: str
     portfolio_slug: str | None = None
     content: str
@@ -774,6 +812,8 @@ class MarketDataSyncStatusResponse(BaseModel):
     symbols: list[str] = Field(default_factory=list)
     instrument_count: int = 0
     stored_history_days: int = 0
+    market_closed: bool = False
+    market_closed_reason: str | None = None
     retention_tiers: dict[str, int] = Field(default_factory=dict)
     latest_sync_at: str | None = None
     latest_bar_times: dict[str, str | None] = Field(default_factory=dict)
@@ -837,10 +877,35 @@ class ReconciliationSummaryResponse(BaseModel):
     portfolio_mode: str | None = None
     market_data_status: str
     latest_sync_at: str | None = None
+    operational_truth: str | None = None
+    target_exposure_by_symbol: dict[str, float] = Field(default_factory=dict)
+    broker_exposure_by_symbol: dict[str, float] = Field(default_factory=dict)
+    staleness_reason: str | None = None
     open_positions_count: int
     pending_orders_count: int
+    live_window_minutes: int | None = None
+    history_window_minutes: int | None = None
+    effective_history_lookback_minutes: int | None = None
+    heal_window_days: int | None = None
+    history_backfill_applied: bool = False
     manual_event_count: int
     unmatched_execution_count: int
+    history_window_expired_execution_count: int = 0
+    active_incident_count: int = 0
+    resolved_incident_count: int = 0
+    autoresolved_count: int = 0
+    bridge_connected: bool | None = None
+    live_base_ready: bool | None = None
+    bridge_status: str | None = None
+    market_closed: bool = False
+    market_closed_reason: str | None = None
+    market_reference_timestamp: str | None = None
+    market_reference_source: str | None = None
+    live_evidence_present: bool = False
+    live_evidence_counts: dict[str, int] = Field(default_factory=dict)
+    diagnostic_code: str | None = None
+    diagnostic_message: str | None = None
+    suppressed_status_counts: dict[str, int] = Field(default_factory=dict)
     status_counts: dict[str, int] = Field(default_factory=dict)
     incident_status_counts: dict[str, int] = Field(default_factory=dict)
     holdings: list[HoldingSnapshotResponse] = Field(default_factory=list)
@@ -881,6 +946,11 @@ class MT5LiveStateResponse(BaseModel):
     poll_interval_seconds: float
     history_poll_interval_seconds: float
     history_lookback_minutes: int
+    effective_history_lookback_minutes: int | None = None
+    market_closed: bool = False
+    market_closed_reason: str | None = None
+    market_reference_timestamp: str | None = None
+    market_reference_source: str | None = None
     portfolio_slug: str | None = None
     portfolio_mode: str | None = None
     symbols: list[str] = Field(default_factory=list)
@@ -895,6 +965,11 @@ class MT5LiveStateResponse(BaseModel):
     risk_summary: LiveRiskSummaryResponse | None = None
     risk_budget: RiskBudgetResponse | None = None
     capital_usage: CapitalUsageSnapshotResponse | None = None
+    operational_truth: str | None = None
+    truth_score: float | None = None
+    quality_checks: list[dict[str, Any]] = Field(default_factory=list)
+    analytics_generated_at: str | None = None
+    analytics_stale: bool | None = None
     reconciliation: ReconciliationSummaryResponse | None = None
     tick_quality: dict[str, Any] = Field(default_factory=dict)
     microstructure: dict[str, Any] = Field(default_factory=dict)
@@ -909,6 +984,27 @@ class MT5LiveEventResponse(BaseModel):
     timestamp_utc: str
     change_summary: MT5LiveEventChangeSummaryResponse = Field(default_factory=MT5LiveEventChangeSummaryResponse)
     state: MT5LiveStateResponse
+
+
+class MT5AnalyticsSeriesPointResponse(BaseModel):
+    timestamp: str
+    balance: float | None = None
+    equity: float | None = None
+    margin_free: float | None = None
+    margin_level: float | None = None
+    profit: float | None = None
+    avg_spread_bps: float | None = None
+    tick_age_seconds: float | None = None
+    tick_quality_status: str | None = None
+
+
+class MT5AnalyticsSeriesResponse(BaseModel):
+    generated_at: str
+    portfolio_slug: str
+    window_minutes: int
+    market_closed: bool = False
+    market_reference_timestamp: str | None = None
+    points: list[MT5AnalyticsSeriesPointResponse] = Field(default_factory=list)
 
 
 class ExecutionGuardDecisionResponse(ApiModel):

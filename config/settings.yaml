@@ -31,10 +31,10 @@ risk:
   alpha: 0.95
   alphas: [0.95, 0.975, 0.99]
   horizons: [1, 5, 10]
-  estimation_window_days: 500
-  minimum_valid_days: 250
-  validation_window_days: 500
-  window: 250
+  estimation_window_days: 40
+  minimum_valid_days: 20
+  validation_window_days: 40
+  window: 20
   ewma:
     lambda: 0.94
   fhs:

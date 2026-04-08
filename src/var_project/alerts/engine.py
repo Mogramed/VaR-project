@@ -354,11 +354,41 @@ def alerts_from_execution_result(result: Mapping[str, Any]) -> List[AlertEvent]:
 def alerts_from_live_operator_state(state: Mapping[str, Any]) -> List[AlertEvent]:
     payload = dict(state)
     reconciliation = dict(payload.get("reconciliation") or {})
+    live_base_ready = bool(reconciliation.get("live_base_ready", payload.get("connected")))
+    bridge_connected = bool(reconciliation.get("bridge_connected", payload.get("connected")))
+    market_closed = bool(reconciliation.get("market_closed", False))
+    history_window_expired_execution_count = int(reconciliation.get("history_window_expired_execution_count") or 0)
+    suppressed_status_counts = {
+        str(key): int(value)
+        for key, value in dict(reconciliation.get("suppressed_status_counts") or {}).items()
+        if int(value or 0) > 0
+    }
     status_counts = {
         str(key): int(value)
         for key, value in dict(reconciliation.get("status_counts") or {}).items()
         if int(value or 0) > 0
     }
+    non_actionable_statuses = {
+        "ok",
+        "match",
+        "matched",
+        "history_window_expired",
+        "live_base_incomplete",
+    }
+    active_status_signal_count = sum(
+        count for status, count in status_counts.items() if status not in non_actionable_statuses
+    )
+    suppressed_status_signal_count = sum(
+        count for status, count in suppressed_status_counts.items() if status not in non_actionable_statuses
+    )
+    manual_event_count = int(reconciliation.get("manual_event_count") or 0)
+    unmatched_execution_count = int(reconciliation.get("unmatched_execution_count") or 0)
+    actionable_reconciliation_signal_count = (
+        active_status_signal_count
+        + suppressed_status_signal_count
+        + manual_event_count
+        + unmatched_execution_count
+    )
     alerts: List[AlertEvent] = []
 
     if payload.get("connected") is False:
@@ -418,8 +448,59 @@ def alerts_from_live_operator_state(state: Mapping[str, Any]) -> List[AlertEvent
             )
         )
 
-    manual_event_count = int(reconciliation.get("manual_event_count") or 0)
-    if manual_event_count > 0:
+    if bridge_connected and not live_base_ready and (
+        bool(suppressed_status_counts) or history_window_expired_execution_count > 0
+    ):
+        alerts.append(
+            AlertEvent(
+                source="reconciliation",
+                severity="INFO" if market_closed else "WARN",
+                code=str(reconciliation.get("diagnostic_code") or "MT5_RECONCILIATION_INCOMPLETE"),
+                message=str(
+                    reconciliation.get("diagnostic_message")
+                    or (
+                        "The MT5 bridge is connected, but the broker live book/history is empty for the current "
+                        "reconciliation window. Derived reconciliation alerts are withheld until live broker evidence is available."
+                    )
+                ),
+                context={
+                    "portfolio_slug": reconciliation.get("portfolio_slug") or payload.get("portfolio_slug"),
+                    "evidence_state": "empty_live_book" if not reconciliation.get("live_evidence_present") else "insufficient_live_evidence",
+                    "history_window_minutes": reconciliation.get("history_window_minutes"),
+                    "history_window_expired_execution_count": history_window_expired_execution_count,
+                    "live_evidence_counts": dict(reconciliation.get("live_evidence_counts") or {}),
+                    "suppressed_status_counts": suppressed_status_counts,
+                },
+            )
+        )
+
+    window_expired_actionable = (
+        history_window_expired_execution_count > 0
+        and live_base_ready
+        and actionable_reconciliation_signal_count > 0
+    )
+    if bridge_connected and window_expired_actionable:
+        alerts.append(
+            AlertEvent(
+                source="reconciliation",
+                severity="INFO" if market_closed else "WARN",
+                code="MT5_RECONCILIATION_WINDOW_EXPIRED",
+                message=(
+                    "Some stored desk executions are older than the live MT5 history window and cannot be confirmed "
+                    "from the current broker feed alone."
+                    if not market_closed
+                    else "Market is closed: reconciliation uses the last valid broker reference while older desk executions remain outside the current broker history window."
+                ),
+                context={
+                    "portfolio_slug": reconciliation.get("portfolio_slug") or payload.get("portfolio_slug"),
+                    "history_window_minutes": reconciliation.get("history_window_minutes"),
+                    "history_window_expired_execution_count": history_window_expired_execution_count,
+                    "market_reference_timestamp": reconciliation.get("market_reference_timestamp"),
+                },
+            )
+        )
+
+    if live_base_ready and manual_event_count > 0:
         alerts.append(
             AlertEvent(
                 source="reconciliation",
@@ -433,8 +514,7 @@ def alerts_from_live_operator_state(state: Mapping[str, Any]) -> List[AlertEvent
             )
         )
 
-    unmatched_execution_count = int(reconciliation.get("unmatched_execution_count") or 0)
-    if unmatched_execution_count > 0:
+    if live_base_ready and unmatched_execution_count > 0:
         alerts.append(
             AlertEvent(
                 source="reconciliation",
@@ -458,22 +538,23 @@ def alerts_from_live_operator_state(state: Mapping[str, Any]) -> List[AlertEvent
         "desk_vs_broker_drift": ("BREACH", "DESK_BROKER_DRIFT", "Desk vs broker exposure drift is currently detected."),
         "overfill_or_volume_drift": ("BREACH", "OVERFILL_OR_VOLUME_DRIFT", "Broker fills exceed the approved desk volume."),
     }
-    for status, (severity, code, message) in status_alerts.items():
-        count = status_counts.get(status, 0)
-        if count <= 0:
-            continue
-        alerts.append(
-            AlertEvent(
-                source="reconciliation",
-                severity=severity,
-                code=code,
-                message=message,
-                context={
-                    "count": count,
-                    "status": status,
-                    "portfolio_slug": reconciliation.get("portfolio_slug") or payload.get("portfolio_slug"),
-                },
+    if live_base_ready:
+        for status, (severity, code, message) in status_alerts.items():
+            count = status_counts.get(status, 0)
+            if count <= 0:
+                continue
+            alerts.append(
+                AlertEvent(
+                    source="reconciliation",
+                    severity=severity,
+                    code=code,
+                    message=message,
+                    context={
+                        "count": count,
+                        "status": status,
+                        "portfolio_slug": reconciliation.get("portfolio_slug") or payload.get("portfolio_slug"),
+                    },
+                )
             )
-        )
 
     return alerts

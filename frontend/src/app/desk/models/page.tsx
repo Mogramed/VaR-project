@@ -12,8 +12,7 @@ export default async function DeskModelsPage({
   const health = await api.safeHealth();
   const resolvedPortfolio = portfolioSlug ?? health.portfolio_slug;
 
-  const [liveState, comparison, validation, frame] = await Promise.all([
-    api.mt5LiveState(resolvedPortfolio).catch(() => null),
+  const [comparison, validation, frame] = await Promise.all([
     api.latestModelComparison(resolvedPortfolio).catch(() => null),
     api.latestValidation(resolvedPortfolio).catch(() => null),
     api.latestBacktestFrame(resolvedPortfolio, 240).catch(() => null),
@@ -23,7 +22,6 @@ export default async function DeskModelsPage({
     <ModelsLiveSurface
       key={resolvedPortfolio}
       portfolioSlug={resolvedPortfolio}
-      initialLiveState={liveState}
       initialComparison={comparison}
       initialValidation={validation}
       initialFrame={frame}

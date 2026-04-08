@@ -12,16 +12,12 @@ export default async function DeskDecisionsPage({
   const health = await api.safeHealth();
   const resolvedPortfolio = portfolioSlug ?? health.portfolio_slug;
 
-  const [liveState, decisions] = await Promise.all([
-    api.mt5LiveState(resolvedPortfolio).catch(() => null),
-    api.recentDecisions(resolvedPortfolio, 12).catch(() => []),
-  ]);
+  const decisions = await api.recentDecisions(resolvedPortfolio, 12).catch(() => []);
 
   return (
     <DecisionsLiveSurface
       key={resolvedPortfolio}
       portfolioSlug={resolvedPortfolio}
-      initialLiveState={liveState}
       initialDecisions={decisions}
     />
   );

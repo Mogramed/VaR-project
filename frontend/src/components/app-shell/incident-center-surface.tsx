@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { PageHeader } from "@/components/app-shell/page-header";
 import {
@@ -17,7 +18,6 @@ import { ButtonLink, StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
 import type {
   AuditEventResponse,
-  MT5LiveStateResponse,
   ReconciliationAcknowledgementResponse,
   ReconciliationSummaryResponse,
 } from "@/lib/api/types";
@@ -28,7 +28,6 @@ import {
   incidentMatchesWindow,
   type IncidentWorkbenchRow,
 } from "@/lib/incidents";
-import { useMt5LiveState } from "@/lib/use-mt5-live-state";
 import { formatCurrency, formatTimestamp, humanizeIdentifier } from "@/lib/utils";
 
 type IncidentStatus = "acknowledged" | "investigating" | "resolved";
@@ -45,7 +44,13 @@ function mismatchTone(status: string | null | undefined) {
   ) {
     return "danger" as const;
   }
-  if (normalized.includes("partial") || normalized.includes("pending") || normalized.includes("manual") || normalized.includes("investigating")) {
+  if (
+    normalized.includes("partial")
+    || normalized.includes("pending")
+    || normalized.includes("manual")
+    || normalized.includes("investigating")
+    || normalized.includes("incomplete")
+  ) {
     return "warning" as const;
   }
   if (normalized.includes("match") || normalized.includes("resolved")) {
@@ -78,26 +83,41 @@ function matchesStatusFilter(row: IncidentWorkbenchRow, filter: IncidentFilter):
 function alertPriorityCode(code: string | null | undefined): number {
   const normalized = String(code || "").toUpperCase();
   if (normalized.includes("BROKER_REJECTION")) return 0;
-  if (normalized.includes("PARTIAL_FILL")) return 1;
-  if (normalized.includes("MANUAL_TRADE") || normalized.includes("MANUAL_EVENTS")) return 2;
-  if (normalized.includes("DRIFT") || normalized.includes("ORPHAN")) return 3;
-  return 4;
+  if (normalized.includes("RECONCILIATION_INCOMPLETE")) return 1;
+  if (normalized.includes("WINDOW_EXPIRED")) return 2;
+  if (normalized.includes("PARTIAL_FILL")) return 3;
+  if (normalized.includes("MANUAL_TRADE") || normalized.includes("MANUAL_EVENTS")) return 4;
+  if (normalized.includes("DRIFT") || normalized.includes("ORPHAN")) return 5;
+  return 6;
+}
+
+function parseIncidentTimestampMs(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  const date = new Date(parsed);
+  if (Number.isNaN(date.valueOf()) || date.getUTCFullYear() < 2000) {
+    return null;
+  }
+  return parsed;
 }
 
 export function IncidentCenterSurface({
   portfolioSlug,
-  initialLiveState,
   initialIncidents,
   initialAudit,
 }: {
   portfolioSlug: string;
-  initialLiveState: MT5LiveStateResponse | null;
   initialIncidents: ReconciliationAcknowledgementResponse[];
   initialAudit: AuditEventResponse[];
 }) {
-  const { liveState, transport } = useMt5LiveState(portfolioSlug, initialLiveState);
+  const { liveState, transport } = useDeskLive();
   const [reconciliationState, setReconciliationState] = useState<ReconciliationSummaryResponse | null>(
-    initialLiveState?.reconciliation ?? null,
+    null,
   );
   const [auditState, setAuditState] = useState<AuditEventResponse[]>(initialAudit);
   const [incidentFallback, setIncidentFallback] = useState<ReconciliationAcknowledgementResponse[]>(initialIncidents);
@@ -120,16 +140,25 @@ export function IncidentCenterSurface({
     () => buildIncidentWorkbenchRows(reconciliationState, incidentFallback),
     [incidentFallback, reconciliationState],
   );
+  const incidentReferenceTimeMs = useMemo(() => {
+    const timestamps = [
+      ...incidentRows.flatMap((row) => [row.updated_at, row.resolved_at, row.acknowledged_at]),
+      ...auditState.map((event) => event.created_at),
+    ]
+      .map((value) => parseIncidentTimestampMs(value))
+      .filter((value): value is number => value != null);
+    return timestamps.length > 0 ? Math.max(...timestamps) : 0;
+  }, [auditState, incidentRows]);
 
   const filteredRows = useMemo(
     () =>
       incidentRows.filter(
         (row) =>
           incidentMatchesQuery(row, query)
-          && incidentMatchesWindow(row, windowFilter)
+          && incidentMatchesWindow(row, windowFilter, incidentReferenceTimeMs)
           && matchesStatusFilter(row, statusFilter),
       ),
-    [incidentRows, query, statusFilter, windowFilter],
+    [incidentReferenceTimeMs, incidentRows, query, statusFilter, windowFilter],
   );
 
   useEffect(() => {

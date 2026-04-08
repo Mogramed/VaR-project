@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from var_project.api.dependencies import get_service
 from var_project.api.schemas import (
@@ -30,12 +33,44 @@ def run_report(payload: RunReportRequest, service: DeskApiService = Depends(get_
 @router.get("/reports/latest", response_model=ReportContentResponse)
 def latest_report(
     portfolio_slug: str | None = Query(default=None),
+    report_id: int | None = Query(default=None, ge=1),
     service: DeskApiService = Depends(get_service),
 ) -> ReportContentResponse:
-    report = service.latest_report_content(portfolio_slug=portfolio_slug)
+    report = service.latest_report_content(portfolio_slug=portfolio_slug, report_id=report_id)
     if report is None:
         raise HTTPException(status_code=404, detail="No report found.")
     return ReportContentResponse.model_validate(report)
+
+
+@router.get("/reports/charts/{chart_name}")
+def latest_report_chart(
+    chart_name: str,
+    portfolio_slug: str | None = Query(default=None),
+    report_id: int | None = Query(default=None, ge=1),
+    service: DeskApiService = Depends(get_service),
+) -> FileResponse:
+    report = service.latest_report_content(portfolio_slug=portfolio_slug, report_id=report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="No report found.")
+
+    normalized_name = Path(str(chart_name)).name
+    if normalized_name != chart_name or not normalized_name:
+        raise HTTPException(status_code=400, detail="Invalid chart name.")
+
+    report_path = Path(str(report.get("report_markdown") or "")).resolve()
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Report markdown is unavailable.")
+
+    allowed_names = {Path(str(path)).name for path in list(report.get("chart_paths") or [])}
+    candidate = (report_path.parent / normalized_name).resolve()
+    if candidate.parent != report_path.parent:
+        raise HTTPException(status_code=400, detail="Invalid chart path.")
+    if normalized_name not in allowed_names or not candidate.exists():
+        raise HTTPException(status_code=404, detail=f"Report chart '{normalized_name}' not found.")
+    if candidate.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".svg"}:
+        raise HTTPException(status_code=400, detail="Unsupported chart asset format.")
+
+    return FileResponse(candidate)
 
 
 @router.get("/reports/decision-history", response_model=list[RiskDecisionResponse])

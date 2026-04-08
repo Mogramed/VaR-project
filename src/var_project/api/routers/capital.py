@@ -16,10 +16,11 @@ router = APIRouter(tags=["capital"])
 @router.get("/capital/latest", response_model=CapitalUsageSnapshotResponse)
 def latest_capital(
     portfolio_slug: str | None = Query(default=None),
+    source: str | None = Query(default="auto"),
     service: DeskApiService = Depends(get_service),
 ) -> CapitalUsageSnapshotResponse:
     try:
-        capital = service.latest_capital(portfolio_slug=portfolio_slug)
+        capital = service.latest_capital(portfolio_slug=portfolio_slug, source=source)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return CapitalUsageSnapshotResponse.model_validate(capital)
@@ -53,9 +54,13 @@ def rebalance_capital(
 
 
 @router.get("/portfolios/{portfolio_slug}/capital", response_model=CapitalUsageSnapshotResponse)
-def portfolio_capital(portfolio_slug: str, service: DeskApiService = Depends(get_service)) -> CapitalUsageSnapshotResponse:
+def portfolio_capital(
+    portfolio_slug: str,
+    source: str | None = Query(default="auto"),
+    service: DeskApiService = Depends(get_service),
+) -> CapitalUsageSnapshotResponse:
     try:
-        result = service.portfolio_capital(portfolio_slug)
+        result = service.portfolio_capital(portfolio_slug, source=source)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return CapitalUsageSnapshotResponse.model_validate(result)

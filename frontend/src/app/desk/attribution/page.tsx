@@ -13,8 +13,7 @@ export default async function DeskAttributionPage({
   const health = await api.safeHealth();
   const resolvedPortfolio = portfolioSlug ?? health.portfolio_slug;
 
-  const [liveState, attribution, comparison] = await Promise.all([
-    api.mt5LiveState(resolvedPortfolio).catch(() => null),
+  const [attribution, comparison] = await Promise.all([
     api.latestAttribution(resolvedPortfolio).catch(() => null),
     api.latestModelComparison(resolvedPortfolio).catch(() => null),
   ]);
@@ -24,7 +23,6 @@ export default async function DeskAttributionPage({
       key={`${resolvedPortfolio}:${preferredModel ?? "auto"}`}
       portfolioSlug={resolvedPortfolio}
       preferredModel={preferredModel}
-      initialLiveState={liveState}
       initialAttribution={attribution}
       initialComparison={comparison}
     />

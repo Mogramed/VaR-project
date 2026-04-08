@@ -12,8 +12,7 @@ export default async function DeskCapitalPage({
   const health = await api.safeHealth();
   const resolvedPortfolio = portfolioSlug ?? health.portfolio_slug;
 
-  const [liveState, capital, history] = await Promise.all([
-    api.mt5LiveState(resolvedPortfolio).catch(() => null),
+  const [capital, history] = await Promise.all([
     api.latestCapital(resolvedPortfolio).catch(() => null),
     api.capitalHistory(resolvedPortfolio, 18).catch(() => []),
   ]);
@@ -22,7 +21,6 @@ export default async function DeskCapitalPage({
     <CapitalLiveSurface
       key={resolvedPortfolio}
       portfolioSlug={resolvedPortfolio}
-      initialLiveState={liveState}
       initialCapital={capital}
       initialHistory={history}
     />

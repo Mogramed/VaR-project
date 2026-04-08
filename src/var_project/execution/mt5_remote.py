@@ -199,6 +199,29 @@ class RemoteMT5Connector:
             frame["time"] = pd.to_datetime(frame["time"], utc=True, errors="coerce")
         return frame
 
+    def fetch_bars_range(
+        self,
+        symbol: str,
+        timeframe: str,
+        date_from: datetime,
+        date_to: datetime,
+    ) -> pd.DataFrame:
+        payload = self._request(
+            "GET",
+            f"/bars-range/{str(symbol).upper()}",
+            params={
+                "timeframe": str(timeframe).upper(),
+                "date_from": date_from.isoformat(),
+                "date_to": date_to.isoformat(),
+            },
+        )
+        frame = pd.DataFrame(list(payload or []))
+        if frame.empty:
+            return pd.DataFrame(columns=["time", "open", "high", "low", "close", "tick_volume", "spread", "real_volume"])
+        if "time" in frame.columns:
+            frame["time"] = pd.to_datetime(frame["time"], utc=True, errors="coerce")
+        return frame
+
     def fetch_ticks_range(
         self,
         symbol: str,
