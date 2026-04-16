@@ -226,6 +226,8 @@ frontend/.next/
 frontend/install.log
 frontend/tsconfig.tsbuildinfo
 frontend/out/
+!frontend/src/lib/
+!frontend/src/lib/**
 
 # Marimo
 marimo/_static/
