@@ -183,10 +183,24 @@ def build_capital_usage_snapshot(
     model_budgets_cfg = dict(capital_cfg.get("model_budgets_eur") or {})
     symbol_budget_cfg = dict(overrides.get("symbol_weights") or capital_cfg.get("symbol_weights") or {})
 
-    default_total_budget = max(float(ref_budget.total_var_budget), float(ref_budget.total_es_budget))
-    total_budget = float(overrides.get("total_budget_eur", capital_cfg.get("total_budget_eur", default_total_budget)))
-    total_reserved = float(total_budget * reserve_ratio)
     total_consumed = float(max(ref_budget.total_var, ref_budget.total_es))
+    default_total_budget = max(float(ref_budget.total_var_budget), float(ref_budget.total_es_budget))
+    if reserve_ratio >= 1.0:
+        auto_budget_floor = total_consumed
+    else:
+        auto_budget_floor = float(total_consumed / max(1.0 - reserve_ratio, 1e-9))
+    auto_total_budget = float(max(default_total_budget, auto_budget_floor))
+
+    explicit_total_budget = overrides.get("total_budget_eur")
+    configured_total_budget = capital_cfg.get("total_budget_eur")
+    if explicit_total_budget is not None:
+        total_budget = float(explicit_total_budget)
+    elif configured_total_budget is not None:
+        total_budget = float(configured_total_budget)
+    else:
+        total_budget = auto_total_budget
+
+    total_reserved = float(total_budget * reserve_ratio)
     total_remaining = float(total_budget - total_consumed - total_reserved)
     headroom_ratio = None if total_budget <= 0.0 else float(total_remaining / total_budget)
     overall_status = _status_from_utilization(None if total_budget <= 0.0 else total_consumed / total_budget, warn=warn, breach=breach)

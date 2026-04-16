@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from copy import deepcopy
+from datetime import datetime, timezone
 import os
 from pathlib import Path
+from threading import Lock, Thread
+import time
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -19,6 +24,10 @@ from var_project.storage.serialization import coerce_datetime, jsonable, utcnow
 
 
 class DeskApiService:
+    _shared_desk_overview_cache: dict[tuple[str, str], dict[str, Any]] = {}
+    _shared_desk_overview_refresh_inflight: set[tuple[str, str]] = set()
+    _shared_desk_overview_cache_lock = Lock()
+
     def __init__(
         self,
         root: Path,
@@ -52,11 +61,337 @@ class DeskApiService:
         self.portfolio_ids = self.runtime.portfolio_ids
         self.portfolio_id = self.runtime.portfolio_id
 
+    @staticmethod
+    def _bounded_timeout_ms(value: Any, *, default: int = 1200, min_value: int = 100, max_value: int = 15000) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = int(default)
+        if parsed < int(min_value):
+            return int(min_value)
+        if parsed > int(max_value):
+            return int(max_value)
+        return int(parsed)
+
+    def _live_read_timeout_ms(self) -> int:
+        return self._bounded_timeout_ms(
+            os.getenv("VAR_PROJECT_API_LIVE_READ_TIMEOUT_MS"),
+            default=1200,
+            min_value=100,
+            max_value=15000,
+        )
+
+    def _desk_overview_cache_ttl_seconds(self) -> float:
+        configured = max(float(self.mt5_config.live_poll_seconds), 0.5)
+        return min(max(configured * 5.0, 2.0), 10.0)
+
+    def _desk_overview_cache_key(self, *, desk_slug: str) -> tuple[str, str]:
+        return (str(self.root.resolve()), str(desk_slug))
+
+    def _cached_desk_overview(self, *, cache_key: tuple[str, str]) -> tuple[dict[str, Any] | None, bool]:
+        with self._shared_desk_overview_cache_lock:
+            cached = self._shared_desk_overview_cache.get(cache_key)
+            if cached is None:
+                return None, False
+            expired = float(cached.get("expires_at") or 0.0) <= time.monotonic()
+            payload = dict(cached.get("payload") or {})
+        if not payload:
+            return None, False
+        return deepcopy(payload), bool(expired)
+
+    def _store_desk_overview_cache(self, *, cache_key: tuple[str, str], payload: Mapping[str, Any]) -> None:
+        with self._shared_desk_overview_cache_lock:
+            self._shared_desk_overview_cache[cache_key] = {
+                "expires_at": time.monotonic() + self._desk_overview_cache_ttl_seconds(),
+                "payload": deepcopy(dict(payload)),
+            }
+
+    def _refresh_desk_overview_cache_async(self, *, cache_key: tuple[str, str], desk_slug: str) -> None:
+        with self._shared_desk_overview_cache_lock:
+            if cache_key in self._shared_desk_overview_refresh_inflight:
+                return
+            self._shared_desk_overview_refresh_inflight.add(cache_key)
+
+        def _worker() -> None:
+            try:
+                payload = self._compute_desk_overview_payload(desk_slug=desk_slug)
+                self._store_desk_overview_cache(cache_key=cache_key, payload=payload)
+            finally:
+                with self._shared_desk_overview_cache_lock:
+                    self._shared_desk_overview_refresh_inflight.discard(cache_key)
+
+        Thread(
+            target=_worker,
+            name=f"desk-overview-refresh-{desk_slug}",
+            daemon=True,
+        ).start()
+
+    def _latest_capital_snapshot_fast(self, *, portfolio_slug: str) -> dict[str, Any] | None:
+        if not self.runtime.storage_ready:
+            return None
+        for candidate_source in self.reads._preferred_snapshot_sources(  # noqa: SLF001 - bounded internal use for fast path
+            portfolio_slug=portfolio_slug,
+            source="auto",
+        ):
+            payload = self.storage.latest_capital_snapshot(
+                source=candidate_source,
+                portfolio_slug=portfolio_slug,
+            )
+            if payload is not None:
+                return dict(payload)
+        return None
+
+    def _compute_desk_overview_payload(self, *, desk_slug: str) -> dict[str, Any]:
+        portfolio_map = {portfolio["slug"]: portfolio for portfolio in self.portfolios}
+        snapshots: list[dict[str, Any]] = []
+        alert_counts: dict[str, int] = {}
+        for portfolio in self.portfolios:
+            live_alert_count = 0
+            live_state = self.mt5.cached_live_state(portfolio_slug=portfolio["slug"], detail_level="summary")
+            if live_state is not None:
+                live_alert_count = len(list(live_state.get("operator_alerts") or []))
+                if live_state.get("capital_usage") is not None:
+                    snapshots.append(dict(live_state["capital_usage"]))
+                    if live_alert_count:
+                        alert_counts[portfolio["slug"]] = int(live_alert_count)
+                    continue
+            fallback_capital = self._latest_capital_snapshot_fast(portfolio_slug=portfolio["slug"])
+            if fallback_capital is None:
+                fallback_capital = {
+                    "portfolio_slug": portfolio["slug"],
+                    "reference_model": "hist",
+                    "total_capital_budget_eur": 0.0,
+                    "total_capital_consumed_eur": 0.0,
+                    "total_capital_reserved_eur": 0.0,
+                    "total_capital_remaining_eur": 0.0,
+                    "status": "PENDING",
+                    "snapshot_timestamp": datetime.now(timezone.utc).isoformat(),
+                    "source": "none",
+                }
+            snapshots.append(dict(fallback_capital))
+            if live_alert_count:
+                alert_counts[portfolio["slug"]] = int(live_alert_count)
+        return build_desk_snapshot(
+            self.desk.to_dict(),
+            snapshots,
+            portfolio_map,
+            alerts_by_portfolio=alert_counts,
+        ).to_dict()
+
+    def _safe_live_state_summary(
+        self,
+        *,
+        portfolio_slug: str,
+        force_refresh: bool = False,
+        timeout_ms: int | None = None,
+    ) -> dict[str, Any] | None:
+        if not force_refresh:
+            cached = self.mt5.cached_live_state(portfolio_slug=portfolio_slug, detail_level="summary")
+            if cached is not None:
+                return cached
+        wait_ms = self._bounded_timeout_ms(
+            timeout_ms if timeout_ms is not None else self._live_read_timeout_ms(),
+            default=1200,
+            min_value=100,
+            max_value=15000,
+        )
+        executor: ThreadPoolExecutor | None = ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(
+                self.mt5.live_state,
+                portfolio_slug=portfolio_slug,
+                detail_level="summary",
+                force_refresh=bool(force_refresh),
+            )
+            return future.result(timeout=max(float(wait_ms) / 1000.0, 0.1))
+        except Exception:
+            return None
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=False, cancel_futures=True)
+
     def health(self) -> dict[str, Any]:
         return self.reads.health()
 
     def health_dependencies(self) -> dict[str, Any]:
         return self.reads.health_dependencies()
+
+    def health_readiness(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        refresh_live: bool = False,
+        max_wait_ms: int = 1200,
+    ) -> dict[str, Any]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        generated_at = datetime.now(timezone.utc).isoformat()
+        strict_live_required = bool(self.runtime.strict_live_required(portfolio))
+        storage_ready = bool(self.runtime.storage_ready)
+        mt5_configured = bool(
+            self.runtime._has_custom_mt5_factory
+            or self.runtime.mt5_config.agent_base_url
+            or self.runtime.mt5_config.path
+            or self.runtime.mt5_config.login
+            or self.runtime.mt5_config.server
+        )
+
+        live_state = self.mt5.cached_live_state(portfolio_slug=portfolio["slug"], detail_level="summary")
+        live_fetch_timed_out = False
+        live_fetch_error: str | None = None
+
+        should_fetch_live = bool(refresh_live or strict_live_required or live_state is None)
+        if should_fetch_live:
+            wait_ms = self._bounded_timeout_ms(max_wait_ms, default=1200, min_value=100, max_value=15000)
+            timeout_seconds = max(float(wait_ms) / 1000.0, 0.1)
+            executor: ThreadPoolExecutor | None = ThreadPoolExecutor(max_workers=1)
+            try:
+                future = executor.submit(
+                    self.mt5.live_state,
+                    portfolio_slug=portfolio["slug"],
+                    detail_level="summary",
+                    force_refresh=bool(refresh_live),
+                )
+                live_state = future.result(timeout=timeout_seconds)
+            except FuturesTimeoutError:
+                live_fetch_timed_out = True
+                live_fetch_error = f"Live state fetch timed out after {int(wait_ms)} ms."
+                live_state = None
+            except Exception as exc:
+                live_fetch_error = str(exc)
+                live_state = None
+            finally:
+                if executor is not None:
+                    executor.shutdown(wait=False, cancel_futures=True)
+
+        live_connected = bool((live_state or {}).get("connected", False))
+        live_degraded = bool((live_state or {}).get("degraded", False))
+        live_stale = bool((live_state or {}).get("stale", False))
+        fallback_snapshot_used = bool((live_state or {}).get("fallback_snapshot_used", False))
+        live_health = dict((live_state or {}).get("health") or {})
+        live_health_status = str(
+            live_health.get("status")
+            or (live_state or {}).get("status")
+            or "unknown"
+        ).strip().lower()
+
+        checks: dict[str, dict[str, Any]] = {
+            "database": {
+                "status": "ready" if storage_ready else "not_ready",
+                "required": True,
+                "detail": (
+                    "Database schema is ready."
+                    if storage_ready
+                    else "Database schema is not ready. Run `var-project db upgrade`."
+                ),
+                "value": {
+                    "schema_ready": storage_ready,
+                    "target": self.runtime.storage.settings.database_url,
+                },
+            },
+            "mt5_config": {
+                "status": "ready" if mt5_configured else ("not_ready" if strict_live_required else "degraded"),
+                "required": bool(strict_live_required),
+                "detail": (
+                    "MT5 connectivity is configured."
+                    if mt5_configured
+                    else "MT5 connectivity is not configured in this API process."
+                ),
+                "value": {
+                    "agent_base_url": self.runtime.mt5_config.agent_base_url,
+                    "terminal_path": self.runtime.mt5_config.path,
+                },
+            },
+        }
+
+        live_required = bool(strict_live_required)
+        if live_state is None:
+            live_status = "not_ready" if live_required else "unknown"
+            live_detail = (
+                live_fetch_error
+                or (
+                    "No cached live state is available yet."
+                    if not live_required
+                    else "Live state is unavailable."
+                )
+            )
+        else:
+            if live_connected and not live_stale and not live_degraded and not fallback_snapshot_used:
+                live_status = "ready"
+                live_detail = "Live bridge is connected with fresh broker evidence."
+            elif fallback_snapshot_used or live_connected or live_health_status in {"degraded", "stale", "market_closed"}:
+                live_status = "degraded"
+                live_detail = str(
+                    live_health.get("message")
+                    or "Live bridge is running in degraded mode but remains usable for demo continuity."
+                )
+            else:
+                live_status = "not_ready" if live_required else "degraded"
+                live_detail = str(
+                    live_health.get("message")
+                    or live_fetch_error
+                    or "Live MT5 evidence is unavailable."
+                )
+        if live_fetch_timed_out:
+            live_detail = (f"{live_detail} " if live_detail else "") + "Request timed out before MT5 returned."
+        checks["mt5_live"] = {
+            "status": live_status,
+            "required": live_required,
+            "detail": live_detail,
+            "value": {
+                "connected": live_connected,
+                "degraded": live_degraded,
+                "stale": live_stale,
+                "fallback_snapshot_used": fallback_snapshot_used,
+                "status": (live_state or {}).get("status"),
+                "health_status": live_health_status,
+                "sequence": (live_state or {}).get("sequence"),
+                "generated_at": (live_state or {}).get("generated_at"),
+                "last_success_at": (live_state or {}).get("last_success_at"),
+                "timed_out": live_fetch_timed_out,
+            },
+        }
+
+        required_not_ready = [
+            name for name, check in checks.items() if check["required"] and check["status"] == "not_ready"
+        ]
+        degraded_checks = [
+            name for name, check in checks.items() if check["status"] == "degraded"
+        ]
+
+        if required_not_ready:
+            status = "not_ready"
+            summary = "Platform not ready for live demo. Resolve required checks first."
+        elif degraded_checks:
+            status = "degraded"
+            summary = "Platform is usable for demo but currently running in degraded mode."
+        else:
+            status = "ready"
+            summary = "Platform ready for demo."
+
+        recommendations: list[str] = []
+        if not storage_ready:
+            recommendations.append("Run `var-project db upgrade` before starting the demo.")
+        if strict_live_required and not mt5_configured:
+            recommendations.append(
+                "Configure `VAR_PROJECT_MT5_AGENT_BASE_URL` (and API key if enabled) in the API process."
+            )
+        if live_fetch_timed_out:
+            recommendations.append("Increase `max_wait_ms` or verify MT5 agent responsiveness.")
+        if fallback_snapshot_used:
+            recommendations.append("MT5 is disconnected; demo currently uses the last known broker snapshot.")
+        if live_state is None and strict_live_required:
+            recommendations.append("Start the MT5 agent and verify `/health` and `/live/state` endpoints.")
+
+        return {
+            "status": status,
+            "generated_at": generated_at,
+            "portfolio_slug": portfolio["slug"],
+            "portfolio_mode": portfolio.get("mode"),
+            "strict_live_required": strict_live_required,
+            "summary": summary,
+            "checks": checks,
+            "recommendations": recommendations,
+        }
 
     def jobs_status(self) -> dict[str, Any]:
         return self.reads.jobs_status()
@@ -95,12 +430,7 @@ class DeskApiService:
         for portfolio in portfolios:
             slug = str(portfolio["slug"])
             portfolio_id = self.runtime.portfolio_ids.get(slug)
-            live_state = self.mt5.cached_live_state(portfolio_slug=slug, detail_level="summary")
-            if live_state is None:
-                try:
-                    live_state = self.mt5.live_state(portfolio_slug=slug, detail_level="summary")
-                except Exception:
-                    live_state = None
+            live_state = self._safe_live_state_summary(portfolio_slug=slug)
             if live_state is None:
                 continue
             generated_at = str(live_state.get("generated_at") or now_iso)
@@ -124,10 +454,47 @@ class DeskApiService:
                     }
                 )
                 synthetic_id -= 1
+        def _code_priority(code: str) -> int:
+            normalized = str(code or "").upper()
+            if (
+                "VALIDATION_GOVERNANCE_FAIL" in normalized
+                or "VALIDATION_SURFACE_COVERAGE_FAIL" in normalized
+                or "VALIDATION_SURFACE_CONDITIONAL_FAIL" in normalized
+                or "VALIDATION_HORIZON_FAIL" in normalized
+                or "VALIDATION_ES_SHORTFALL_BREACH" in normalized
+                or "VALIDATION_ES_BREACH_RATE_BREACH" in normalized
+                or "BROKER_REJECTION" in normalized
+                or "DESK_BROKER_DRIFT" in normalized
+                or "ORPHAN_LIVE_POSITION" in normalized
+                or "OVERFILL_OR_VOLUME_DRIFT" in normalized
+            ):
+                return 0
+            if "RECONCILIATION_INCOMPLETE" in normalized:
+                return 1
+            if (
+                "VALIDATION_GOVERNANCE_WARN" in normalized
+                or "VALIDATION_SURFACE_INDEPENDENCE_FAIL" in normalized
+                or "VALIDATION_HORIZON_WARN" in normalized
+                or "VALIDATION_ES_SHORTFALL_WARN" in normalized
+                or "VALIDATION_ES_BREACH_RATE_WARN" in normalized
+                or "WINDOW_EXPIRED" in normalized
+            ):
+                return 2
+            if "PARTIAL_FILL" in normalized:
+                return 3
+            if "PENDING_BROKER" in normalized:
+                return 4
+            if "MANUAL_TRADE" in normalized or "MANUAL_EVENTS" in normalized:
+                return 5
+            if "UNMATCHED" in normalized:
+                return 6
+            return 7
+
         severity_rank = {"breach": 0, "critical": 0, "warn": 1, "warning": 1, "info": 2, "ok": 3}
         payload.sort(
             key=lambda item: (
                 int(severity_rank.get(str(item.get("severity", "")).lower(), 4)),
+                int(_code_priority(str(item.get("code") or ""))),
                 str(item.get("code") or ""),
                 str(item.get("message") or ""),
             )
@@ -143,12 +510,10 @@ class DeskApiService:
         portfolio_slug: str | None = None,
         source: str | None = "auto",
     ) -> dict[str, Any]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         normalized_source = str(source or "auto").strip().lower()
         live_source_requested = normalized_source in {"", "auto", "mt5_live_bridge", "mt5_live"}
-        try:
-            live_state = self.mt5.live_state(portfolio_slug=portfolio_slug, detail_level="summary")
-        except Exception:
-            live_state = None
+        live_state = self._safe_live_state_summary(portfolio_slug=portfolio["slug"])
         if live_source_requested and live_state is not None and live_state.get("capital_usage") is not None:
             capital_usage = dict(live_state["capital_usage"])
             if normalized_source in {"", "auto"}:
@@ -196,25 +561,22 @@ class DeskApiService:
         return self.reads.latest_capital(portfolio_slug=portfolio_slug, source=source)
 
     def desk_overview(self, *, desk_slug: str | None = None) -> dict[str, Any]:
-        if desk_slug is not None and desk_slug != self.desk.slug:
+        resolved_desk_slug = str(desk_slug or self.desk.slug)
+        if resolved_desk_slug != self.desk.slug:
             raise ValueError(f"Unknown desk '{desk_slug}'.")
-        portfolio_map = {portfolio["slug"]: portfolio for portfolio in self.portfolios}
-        snapshots: list[dict[str, Any]] = []
-        alert_counts: dict[str, int] = {}
-        for portfolio in self.portfolios:
-            live_alert_count = 0
-            live_state = self.mt5.cached_live_state(portfolio_slug=portfolio["slug"], detail_level="summary")
-            if live_state is not None:
-                live_alert_count = len(list(live_state.get("operator_alerts") or []))
-                if live_state.get("capital_usage") is not None:
-                    snapshots.append(dict(live_state["capital_usage"]))
-                    if live_alert_count:
-                        alert_counts[portfolio["slug"]] = int(live_alert_count)
-                    continue
-            snapshots.append(self.reads.latest_capital(portfolio_slug=portfolio["slug"]))
-            if live_alert_count:
-                alert_counts[portfolio["slug"]] = int(live_alert_count)
-        return build_desk_snapshot(self.desk.to_dict(), snapshots, portfolio_map, alerts_by_portfolio=alert_counts).to_dict()
+        cache_key = self._desk_overview_cache_key(desk_slug=resolved_desk_slug)
+        cached, is_stale = self._cached_desk_overview(cache_key=cache_key)
+        if cached is not None and not is_stale:
+            return cached
+        if cached is not None and is_stale:
+            self._refresh_desk_overview_cache_async(
+                cache_key=cache_key,
+                desk_slug=resolved_desk_slug,
+            )
+            return cached
+        payload = self._compute_desk_overview_payload(desk_slug=resolved_desk_slug)
+        self._store_desk_overview_cache(cache_key=cache_key, payload=payload)
+        return payload
 
     def latest_artifact(self, artifact_type: str) -> dict[str, Any] | None:
         return self.reads.latest_artifact(artifact_type)
@@ -228,7 +590,10 @@ class DeskApiService:
         source: str = "auto",
         portfolio_slug: str | None = None,
     ) -> dict[str, Any] | None:
-        return self.reads.latest_risk_attribution(source=source, portfolio_slug=portfolio_slug)
+        payload = self.reads.latest_risk_attribution(source=source, portfolio_slug=portfolio_slug)
+        if payload is None:
+            return None
+        return self._enrich_risk_attribution_payload(payload)
 
     def latest_risk_budget(
         self,
@@ -261,10 +626,12 @@ class DeskApiService:
         *,
         portfolio_slug: str | None = None,
         detail_level: str = "full",
+        force_refresh: bool = False,
     ) -> dict[str, Any]:
         return self.mt5.live_state(
             portfolio_slug=portfolio_slug,
             detail_level=detail_level,
+            force_refresh=force_refresh,
         )
 
     def mt5_live_events(
@@ -325,17 +692,19 @@ class DeskApiService:
         return self.market.list_instruments(portfolio_slug=portfolio_slug)
 
     def live_holdings(self, *, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
-        live_state = self.mt5.live_state(portfolio_slug=portfolio_slug, detail_level="summary")
-        live_holdings = list(live_state.get("holdings") or [])
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        live_state = self._safe_live_state_summary(portfolio_slug=portfolio["slug"])
+        live_holdings = list((live_state or {}).get("holdings") or [])
         if live_holdings:
             return live_holdings
-        return self.market.live_holdings(portfolio_slug=portfolio_slug)
+        return self.market.live_holdings(portfolio_slug=portfolio["slug"])
 
     def live_exposure(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
-        live_state = self.mt5.live_state(portfolio_slug=portfolio_slug, detail_level="summary")
-        if live_state.get("exposure") is not None:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        live_state = self._safe_live_state_summary(portfolio_slug=portfolio["slug"])
+        if (live_state or {}).get("exposure") is not None:
             return dict(live_state["exposure"])
-        return self.market.live_exposure(portfolio_slug=portfolio_slug)
+        return self.market.live_exposure(portfolio_slug=portfolio["slug"])
 
     def _normalize_risk_data_quality(self, payload: Mapping[str, Any]) -> dict[str, Any] | None:
         raw = dict(payload.get("data_quality") or {})
@@ -372,14 +741,242 @@ class DeskApiService:
             "symbol_count": int(raw.get("symbol_count") or 0),
         }
 
+    @staticmethod
+    def _float_or_none(value: Any) -> float | None:
+        try:
+            if value in {None, "", "null"}:
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _build_risk_concentration(
+        cls,
+        *,
+        items: Mapping[str, Any],
+        metric_field: str,
+        key_field: str = "symbol",
+        basis: str,
+        top_limit: int = 5,
+    ) -> dict[str, Any] | None:
+        rows: list[dict[str, Any]] = []
+        for raw_key, raw_item in dict(items or {}).items():
+            item = dict(raw_item or {})
+            key = str(item.get(key_field) or raw_key or "").strip()
+            if not key:
+                continue
+            metric_value = cls._float_or_none(item.get(metric_field))
+            if metric_value is None:
+                continue
+            rows.append(
+                {
+                    "key": key,
+                    "label": str(item.get(key_field) or key),
+                    "abs_metric": abs(metric_value),
+                    "component_var": cls._float_or_none(item.get("component_var")),
+                    "component_es": cls._float_or_none(item.get("component_es")),
+                }
+            )
+        if not rows:
+            return None
+
+        total_abs = float(sum(float(row["abs_metric"]) for row in rows))
+        if total_abs <= 0.0:
+            return {
+                "basis": basis,
+                "count": len(rows),
+                "hhi": None,
+                "normalized_hhi": None,
+                "effective_count": None,
+                "top1_share": None,
+                "top3_share": None,
+                "top5_share": None,
+                "dominant_key": None,
+                "dominant_label": None,
+                "contributors": [],
+            }
+
+        ranked = sorted(rows, key=lambda item: float(item["abs_metric"]), reverse=True)
+        shares = [float(item["abs_metric"]) / total_abs for item in ranked]
+        hhi = float(sum(share * share for share in shares))
+        effective_count = None if hhi <= 0.0 else (1.0 / hhi)
+        normalized_hhi = None
+        if len(shares) > 1:
+            floor = 1.0 / float(len(shares))
+            denom = 1.0 - floor
+            if denom > 0.0:
+                normalized_hhi = max(0.0, min((hhi - floor) / denom, 1.0))
+        top1_share = shares[0] if shares else None
+        top3_share = float(sum(shares[:3])) if shares else None
+        top5_share = float(sum(shares[:5])) if shares else None
+        dominant = ranked[0] if ranked else None
+
+        contributors = []
+        for index, item in enumerate(ranked[: max(int(top_limit), 1)]):
+            contributors.append(
+                {
+                    "key": item["key"],
+                    "label": item["label"],
+                    "share": shares[index],
+                    "component_var": item["component_var"],
+                    "component_es": item["component_es"],
+                }
+            )
+
+        return {
+            "basis": basis,
+            "count": len(ranked),
+            "hhi": hhi,
+            "normalized_hhi": normalized_hhi,
+            "effective_count": effective_count,
+            "top1_share": top1_share,
+            "top3_share": top3_share,
+            "top5_share": top5_share,
+            "dominant_key": None if dominant is None else dominant["key"],
+            "dominant_label": None if dominant is None else dominant["label"],
+            "contributors": contributors,
+        }
+
+    @classmethod
+    def _diversification_ratio(
+        cls,
+        *,
+        positions: Mapping[str, Any],
+        total_field_value: Any,
+        standalone_field: str,
+    ) -> float | None:
+        total_risk = cls._float_or_none(total_field_value)
+        if total_risk is None or abs(total_risk) <= 1e-12:
+            return None
+        standalone_sum = 0.0
+        count = 0
+        for raw_item in dict(positions or {}).values():
+            item = dict(raw_item or {})
+            standalone = cls._float_or_none(item.get(standalone_field))
+            if standalone is None:
+                continue
+            standalone_sum += abs(standalone)
+            count += 1
+        if count <= 0:
+            return None
+        return float(standalone_sum / abs(total_risk))
+
+    @staticmethod
+    def _resolve_model_name(
+        models: Mapping[str, Any],
+        *candidates: Any,
+    ) -> str | None:
+        available = {str(key).lower(): str(key) for key in dict(models or {}).keys()}
+        for candidate in candidates:
+            normalized = str(candidate or "").strip().lower()
+            if not normalized:
+                continue
+            if normalized in available:
+                return available[normalized]
+        if not available:
+            return None
+        return next(iter(available.values()))
+
+    def _enrich_risk_attribution_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        enriched = dict(payload or {})
+        model_payloads = dict(enriched.get("models") or {})
+        enriched_models: dict[str, Any] = {}
+        for model_name, raw_model_payload in model_payloads.items():
+            model_payload = dict(raw_model_payload or {})
+            positions = dict(model_payload.get("positions") or {})
+            model_payload["diversification_ratio_var"] = self._diversification_ratio(
+                positions=positions,
+                total_field_value=model_payload.get("total_var"),
+                standalone_field="standalone_var",
+            )
+            model_payload["diversification_ratio_es"] = self._diversification_ratio(
+                positions=positions,
+                total_field_value=model_payload.get("total_es"),
+                standalone_field="standalone_es",
+            )
+            model_payload["concentration_var"] = self._build_risk_concentration(
+                items=positions,
+                metric_field="component_var",
+                key_field="symbol",
+                basis="abs_component_var_share",
+            )
+            model_payload["concentration_es"] = self._build_risk_concentration(
+                items=positions,
+                metric_field="component_es",
+                key_field="symbol",
+                basis="abs_component_es_share",
+            )
+            enriched_models[str(model_name)] = model_payload
+        enriched["models"] = enriched_models
+        return enriched
+
+    def _build_risk_summary_concentration(
+        self,
+        *,
+        reference_model: Any,
+        preferred_model: Any,
+        attribution: Mapping[str, Any] | None = None,
+        risk_budget: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        attribution_payload = dict(attribution or {})
+        if attribution_payload:
+            enriched = self._enrich_risk_attribution_payload(attribution_payload)
+            models = dict(enriched.get("models") or {})
+            selected_model = self._resolve_model_name(models, reference_model, preferred_model)
+            if selected_model is not None:
+                model_payload = dict(models.get(selected_model) or {})
+                return {
+                    "model": selected_model,
+                    "diversification_ratio_var": model_payload.get("diversification_ratio_var"),
+                    "diversification_ratio_es": model_payload.get("diversification_ratio_es"),
+                    "var": model_payload.get("concentration_var"),
+                    "es": model_payload.get("concentration_es"),
+                }
+
+        budget_models = dict(dict(risk_budget or {}).get("models") or {})
+        selected_model = self._resolve_model_name(budget_models, reference_model, preferred_model)
+        if selected_model is None:
+            return None
+        model_payload = dict(budget_models.get(selected_model) or {})
+        positions = dict(model_payload.get("positions") or {})
+        concentration_var = self._build_risk_concentration(
+            items=positions,
+            metric_field="component_var",
+            key_field="symbol",
+            basis="abs_component_var_share",
+        )
+        concentration_es = self._build_risk_concentration(
+            items=positions,
+            metric_field="component_es",
+            key_field="symbol",
+            basis="abs_component_es_share",
+        )
+        if concentration_var is None and concentration_es is None:
+            return None
+        return {
+            "model": selected_model,
+            "diversification_ratio_var": None,
+            "diversification_ratio_es": None,
+            "var": concentration_var,
+            "es": concentration_es,
+        }
+
     def risk_summary(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
-        try:
-            live_state = self.mt5.live_state(portfolio_slug=portfolio["slug"], detail_level="summary")
-        except Exception:
-            live_state = None
+        live_state = self._safe_live_state_summary(portfolio_slug=portfolio["slug"])
         if live_state is not None and live_state.get("risk_summary") is not None:
-            return dict(live_state["risk_summary"])
+            summary = dict(live_state["risk_summary"])
+            if summary.get("concentration") is None:
+                concentration = self._build_risk_summary_concentration(
+                    reference_model=summary.get("reference_model"),
+                    preferred_model=summary.get("preferred_model"),
+                    attribution=live_state.get("attribution"),
+                    risk_budget=live_state.get("risk_budget"),
+                )
+                if concentration is not None:
+                    summary["concentration"] = concentration
+            return summary
 
         snapshot = None
         for source in self.reads._preferred_snapshot_sources(
@@ -392,7 +989,7 @@ class DeskApiService:
         if snapshot is None:
             return None
         payload = dict(snapshot.get("payload") or {})
-        return {
+        summary = {
             "generated_at": payload.get("time_utc") or snapshot.get("created_at"),
             "portfolio_slug": portfolio["slug"],
             "portfolio_mode": portfolio.get("mode"),
@@ -417,18 +1014,30 @@ class DeskApiService:
             "tick_quality": dict(payload.get("tick_quality") or {}),
             "pnl_explain": dict(payload.get("pnl_explain") or {}),
         }
+        concentration = self._build_risk_summary_concentration(
+            reference_model=summary.get("reference_model"),
+            preferred_model=summary.get("preferred_model"),
+            attribution=payload.get("attribution"),
+            risk_budget=payload.get("risk_budget"),
+        )
+        if concentration is not None:
+            summary["concentration"] = concentration
+        return summary
 
     def risk_contributions(self, *, portfolio_slug: str | None = None, source: str | None = None) -> dict[str, Any] | None:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         if source:
-            return self.reads.latest_risk_attribution(source=source, portfolio_slug=portfolio["slug"])
+            payload = self.reads.latest_risk_attribution(source=source, portfolio_slug=portfolio["slug"])
+            if payload is None:
+                return None
+            return self._enrich_risk_attribution_payload(payload)
         for candidate in self.reads._preferred_snapshot_sources(
             portfolio_slug=portfolio["slug"],
             source="auto",
         ):
             payload = self.reads.latest_risk_attribution(source=candidate, portfolio_slug=portfolio["slug"])
             if payload is not None:
-                return payload
+                return self._enrich_risk_attribution_payload(payload)
         return None
 
     def market_data_status(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
@@ -1065,7 +1674,7 @@ class DeskApiService:
             return self._decorate_operator_run(updated)
 
     def reconciliation_summary(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
-        live_state = self.mt5.live_state(portfolio_slug=portfolio_slug)
+        live_state = self.mt5.live_state(portfolio_slug=portfolio_slug, force_refresh=True)
         if live_state.get("reconciliation") is not None:
             return self.market.reconciliation_summary_from_live_state(
                 live_state,

@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import math
 from typing import Any, Dict, List, Mapping
 
 from var_project.risk.decisioning import RiskDecisionResult
 from var_project.risk.budgeting import RiskBudgetSnapshot
 from var_project.validation.model_validation import ValidationSummary
+
+ES_ALERT_MIN_TAIL_OBSERVATIONS = 3
+ES_SHORTFALL_WARN_THRESHOLD = 1.10
+ES_SHORTFALL_BREACH_THRESHOLD = 1.25
+ES_BREACH_RATE_WARN_THRESHOLD = 0.35
+ES_BREACH_RATE_BREACH_THRESHOLD = 0.50
+ES_ACERBI_MIN_OBSERVATIONS = 60
+ES_ACERBI_WARN_PVALUE = 0.05
+ES_ACERBI_BREACH_PVALUE = 0.01
 
 
 @dataclass(frozen=True)
@@ -18,6 +28,228 @@ class AlertEvent:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _alerts_from_validation_surface(summary: ValidationSummary) -> List[AlertEvent]:
+    surface = dict(summary.surface or {})
+    governance = dict(surface.get("governance_summary") or {})
+    horizon_governance = dict(surface.get("horizon_governance") or {})
+    if not governance:
+        return []
+
+    total_points = _int_or_zero(governance.get("total_points"))
+    if total_points <= 0:
+        return []
+
+    status_counts = {
+        str(key).upper(): _int_or_zero(value)
+        for key, value in dict(governance.get("status_counts") or {}).items()
+    }
+    pass_count = _int_or_zero(status_counts.get("PASS"))
+    warn_count = _int_or_zero(status_counts.get("WARN"))
+    fail_count = _int_or_zero(status_counts.get("FAIL"))
+
+    coverage_fail_count = _int_or_zero(governance.get("coverage_fail_count"))
+    independence_fail_count = _int_or_zero(governance.get("independence_fail_count"))
+    conditional_fail_count = _int_or_zero(governance.get("conditional_fail_count"))
+    pvalue_threshold = _float_or_none(governance.get("pvalue_threshold"))
+    pass_rate = _float_or_none(governance.get("pass_rate"))
+    if pass_rate is None and total_points > 0:
+        pass_rate = float(pass_count / total_points)
+
+    alerts: List[AlertEvent] = []
+    if fail_count > 0:
+        alerts.append(
+            AlertEvent(
+                source="validation_surface",
+                severity="BREACH",
+                code="VALIDATION_GOVERNANCE_FAIL",
+                message=(
+                    f"Validation governance surface has {fail_count} failing points "
+                    f"out of {total_points}."
+                ),
+                context={
+                    "total_points": total_points,
+                    "pass_count": pass_count,
+                    "warn_count": warn_count,
+                    "fail_count": fail_count,
+                    "pass_rate": pass_rate,
+                    "pvalue_threshold": pvalue_threshold,
+                },
+            )
+        )
+    elif warn_count > 0:
+        alerts.append(
+            AlertEvent(
+                source="validation_surface",
+                severity="WARN",
+                code="VALIDATION_GOVERNANCE_WARN",
+                message=(
+                    f"Validation governance surface has {warn_count} warning points "
+                    f"out of {total_points}."
+                ),
+                context={
+                    "total_points": total_points,
+                    "pass_count": pass_count,
+                    "warn_count": warn_count,
+                    "fail_count": fail_count,
+                    "pass_rate": pass_rate,
+                    "pvalue_threshold": pvalue_threshold,
+                },
+            )
+        )
+
+    if coverage_fail_count > 0:
+        alerts.append(
+            AlertEvent(
+                source="validation_surface",
+                severity="BREACH",
+                code="VALIDATION_SURFACE_COVERAGE_FAIL",
+                message=(
+                    f"Unconditional coverage fails on {coverage_fail_count} validation-surface points."
+                ),
+                context={
+                    "coverage_fail_count": coverage_fail_count,
+                    "total_points": total_points,
+                    "pvalue_threshold": pvalue_threshold,
+                },
+            )
+        )
+
+    if conditional_fail_count > 0:
+        alerts.append(
+            AlertEvent(
+                source="validation_surface",
+                severity="BREACH",
+                code="VALIDATION_SURFACE_CONDITIONAL_FAIL",
+                message=(
+                    f"Conditional coverage fails on {conditional_fail_count} validation-surface points."
+                ),
+                context={
+                    "conditional_fail_count": conditional_fail_count,
+                    "total_points": total_points,
+                    "pvalue_threshold": pvalue_threshold,
+                },
+            )
+        )
+
+    if independence_fail_count > 0:
+        alerts.append(
+            AlertEvent(
+                source="validation_surface",
+                severity="WARN",
+                code="VALIDATION_SURFACE_INDEPENDENCE_FAIL",
+                message=(
+                    f"Independence test fails on {independence_fail_count} validation-surface points."
+                ),
+                context={
+                    "independence_fail_count": independence_fail_count,
+                    "total_points": total_points,
+                    "pvalue_threshold": pvalue_threshold,
+                },
+            )
+        )
+
+    horizon_payload = {
+        str(key): dict(value)
+        for key, value in dict(horizon_governance.get("horizons") or {}).items()
+        if isinstance(value, Mapping)
+    }
+    horizon_order_raw = horizon_governance.get("horizon_order") or []
+    horizon_order: list[int] = []
+    if isinstance(horizon_order_raw, list):
+        for item in horizon_order_raw:
+            try:
+                horizon_days = int(item)
+            except (TypeError, ValueError):
+                continue
+            if horizon_days > 0:
+                horizon_order.append(horizon_days)
+    if not horizon_order:
+        inferred_horizons: list[int] = []
+        for key in horizon_payload.keys():
+            if not key.startswith("h"):
+                continue
+            try:
+                inferred_horizons.append(int(key[1:]))
+            except (TypeError, ValueError):
+                continue
+        horizon_order = sorted({int(item) for item in inferred_horizons if int(item) > 0})
+
+    for horizon_days in horizon_order:
+        payload = dict(horizon_payload.get(f"h{int(horizon_days)}") or {})
+        status_counts = {
+            str(key).upper(): _int_or_zero(value)
+            for key, value in dict(payload.get("status_counts") or {}).items()
+        }
+        pass_count = _int_or_zero(status_counts.get("PASS"))
+        warn_count = _int_or_zero(status_counts.get("WARN"))
+        fail_count = _int_or_zero(status_counts.get("FAIL"))
+        horizon_total_points = _int_or_zero(payload.get("total_points"))
+        if horizon_total_points <= 0:
+            horizon_total_points = pass_count + warn_count + fail_count
+        horizon_pass_rate = _float_or_none(payload.get("pass_rate"))
+        if horizon_pass_rate is None and horizon_total_points > 0:
+            horizon_pass_rate = float(pass_count / horizon_total_points)
+
+        horizon_verdict = str(payload.get("verdict") or "").upper()
+        champion_model = str(payload.get("champion_model") or "").lower() or None
+        context = {
+            "horizon_days": int(horizon_days),
+            "total_points": horizon_total_points,
+            "pass_count": pass_count,
+            "warn_count": warn_count,
+            "fail_count": fail_count,
+            "pass_rate": horizon_pass_rate,
+            "verdict": horizon_verdict or None,
+            "champion_model": champion_model,
+            "pvalue_threshold": pvalue_threshold,
+        }
+        if horizon_verdict == "FAIL":
+            alerts.append(
+                AlertEvent(
+                    source="validation_surface",
+                    severity="BREACH",
+                    code="VALIDATION_HORIZON_FAIL",
+                    message=(
+                        f"Validation horizon {int(horizon_days)}d is FAIL with "
+                        f"{fail_count} failing points out of {horizon_total_points}."
+                    ),
+                    context=context,
+                )
+            )
+        elif horizon_verdict == "WARN":
+            alerts.append(
+                AlertEvent(
+                    source="validation_surface",
+                    severity="WARN",
+                    code="VALIDATION_HORIZON_WARN",
+                    message=(
+                        f"Validation horizon {int(horizon_days)}d is WARN "
+                        f"({warn_count} warning points out of {horizon_total_points})."
+                    ),
+                    context=context,
+                )
+            )
+
+    return alerts
 
 
 def alerts_from_validation_summary(summary: ValidationSummary) -> List[AlertEvent]:
@@ -63,6 +295,136 @@ def alerts_from_validation_summary(summary: ValidationSummary) -> List[AlertEven
                     context={"model": model_name, "exceptions_last_250": result.exceptions_last_250},
                 )
             )
+        es_tail_observations = _int_or_zero(result.es_tail_observations)
+        es_shortfall_ratio = _float_or_none(result.es_shortfall_ratio)
+        es_breach_rate = _float_or_none(result.es_breach_rate)
+        es_acerbi_observations = _int_or_zero(getattr(result, "es_acerbi_observations", 0))
+        es_acerbi_stat = _float_or_none(getattr(result, "es_acerbi_stat", None))
+        es_acerbi_p_value = _float_or_none(getattr(result, "es_acerbi_p_value", None))
+        if es_tail_observations >= ES_ALERT_MIN_TAIL_OBSERVATIONS:
+            if es_shortfall_ratio is not None and es_shortfall_ratio >= ES_SHORTFALL_BREACH_THRESHOLD:
+                alerts.append(
+                    AlertEvent(
+                        source="validation_es",
+                        severity="BREACH",
+                        code="VALIDATION_ES_SHORTFALL_BREACH",
+                        message=(
+                            f"{model_name} ES shortfall ratio is elevated "
+                            f"({es_shortfall_ratio:.3f}) with {es_tail_observations} tail observations."
+                        ),
+                        context={
+                            "model": model_name,
+                            "es_tail_observations": es_tail_observations,
+                            "es_shortfall_ratio": es_shortfall_ratio,
+                            "warn_threshold": ES_SHORTFALL_WARN_THRESHOLD,
+                            "breach_threshold": ES_SHORTFALL_BREACH_THRESHOLD,
+                        },
+                    )
+                )
+            elif es_shortfall_ratio is not None and es_shortfall_ratio >= ES_SHORTFALL_WARN_THRESHOLD:
+                alerts.append(
+                    AlertEvent(
+                        source="validation_es",
+                        severity="WARN",
+                        code="VALIDATION_ES_SHORTFALL_WARN",
+                        message=(
+                            f"{model_name} ES shortfall ratio is above warning "
+                            f"threshold ({es_shortfall_ratio:.3f})."
+                        ),
+                        context={
+                            "model": model_name,
+                            "es_tail_observations": es_tail_observations,
+                            "es_shortfall_ratio": es_shortfall_ratio,
+                            "warn_threshold": ES_SHORTFALL_WARN_THRESHOLD,
+                            "breach_threshold": ES_SHORTFALL_BREACH_THRESHOLD,
+                        },
+                    )
+                )
+
+            if es_breach_rate is not None and es_breach_rate >= ES_BREACH_RATE_BREACH_THRESHOLD:
+                alerts.append(
+                    AlertEvent(
+                        source="validation_es",
+                        severity="BREACH",
+                        code="VALIDATION_ES_BREACH_RATE_BREACH",
+                        message=(
+                            f"{model_name} ES breach rate is elevated "
+                            f"({es_breach_rate:.2%}) on tail observations."
+                        ),
+                        context={
+                            "model": model_name,
+                            "es_tail_observations": es_tail_observations,
+                            "es_breach_rate": es_breach_rate,
+                            "warn_threshold": ES_BREACH_RATE_WARN_THRESHOLD,
+                            "breach_threshold": ES_BREACH_RATE_BREACH_THRESHOLD,
+                        },
+                    )
+                )
+            elif es_breach_rate is not None and es_breach_rate >= ES_BREACH_RATE_WARN_THRESHOLD:
+                alerts.append(
+                    AlertEvent(
+                        source="validation_es",
+                        severity="WARN",
+                        code="VALIDATION_ES_BREACH_RATE_WARN",
+                        message=(
+                            f"{model_name} ES breach rate is above warning "
+                            f"threshold ({es_breach_rate:.2%})."
+                        ),
+                        context={
+                            "model": model_name,
+                            "es_tail_observations": es_tail_observations,
+                            "es_breach_rate": es_breach_rate,
+                            "warn_threshold": ES_BREACH_RATE_WARN_THRESHOLD,
+                            "breach_threshold": ES_BREACH_RATE_BREACH_THRESHOLD,
+                        },
+                    )
+                )
+        if (
+            es_acerbi_observations >= ES_ACERBI_MIN_OBSERVATIONS
+            and es_acerbi_p_value is not None
+        ):
+            if es_acerbi_p_value <= ES_ACERBI_BREACH_PVALUE:
+                stat_label = "n/a" if es_acerbi_stat is None else f"{es_acerbi_stat:.3f}"
+                alerts.append(
+                    AlertEvent(
+                        source="validation_es",
+                        severity="BREACH",
+                        code="VALIDATION_ES_ACERBI_BREACH",
+                        message=(
+                            f"{model_name} ES Acerbi backtest rejects calibration "
+                            f"(p={es_acerbi_p_value:.4f}, z={stat_label})."
+                        ),
+                        context={
+                            "model": model_name,
+                            "es_acerbi_observations": es_acerbi_observations,
+                            "es_acerbi_stat": es_acerbi_stat,
+                            "es_acerbi_p_value": es_acerbi_p_value,
+                            "warn_threshold": ES_ACERBI_WARN_PVALUE,
+                            "breach_threshold": ES_ACERBI_BREACH_PVALUE,
+                        },
+                    )
+                )
+            elif es_acerbi_p_value <= ES_ACERBI_WARN_PVALUE:
+                alerts.append(
+                    AlertEvent(
+                        source="validation_es",
+                        severity="WARN",
+                        code="VALIDATION_ES_ACERBI_WARN",
+                        message=(
+                            f"{model_name} ES Acerbi backtest is close to rejection "
+                            f"(p={es_acerbi_p_value:.4f})."
+                        ),
+                        context={
+                            "model": model_name,
+                            "es_acerbi_observations": es_acerbi_observations,
+                            "es_acerbi_stat": es_acerbi_stat,
+                            "es_acerbi_p_value": es_acerbi_p_value,
+                            "warn_threshold": ES_ACERBI_WARN_PVALUE,
+                            "breach_threshold": ES_ACERBI_BREACH_PVALUE,
+                        },
+                    )
+                )
+    alerts.extend(_alerts_from_validation_surface(summary))
     return alerts
 
 

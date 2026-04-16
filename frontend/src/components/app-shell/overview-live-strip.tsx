@@ -2,6 +2,8 @@
 
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
+import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
+import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
 import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import type { CapitalUsageSnapshotResponse, MT5LiveStateResponse } from "@/lib/api/types";
@@ -38,10 +40,11 @@ export function OverviewLiveStrip({
   fallbackSnapshotCreatedAt: string | null;
   fallbackSnapshotSource: string | null;
 }) {
-  const { liveState, transport } = useDeskLive();
+  const { liveState, heartbeatAt, transport } = useDeskLive();
   return (
     <OverviewLiveStripPanel
       liveState={liveState}
+      heartbeatAt={heartbeatAt}
       transport={transport}
       initialCapital={initialCapital}
       fallbackSelectedModel={fallbackSelectedModel}
@@ -55,6 +58,7 @@ export function OverviewLiveStrip({
 
 export function OverviewLiveStripPanel({
   liveState,
+  heartbeatAt,
   transport,
   initialCapital,
   fallbackSelectedModel,
@@ -64,6 +68,7 @@ export function OverviewLiveStripPanel({
   fallbackSnapshotSource,
 }: {
   liveState: MT5LiveStateResponse | null;
+  heartbeatAt: string | null;
   transport: "stream" | "polling" | "connecting";
   initialCapital: CapitalUsageSnapshotResponse | null;
   fallbackSelectedModel: string;
@@ -94,6 +99,11 @@ export function OverviewLiveStripPanel({
     "governance_10d_975",
     "governance_10d_99",
   ]);
+  const stressUpliftVsLive99 = (
+    stressed != null && live99 != null && typeof live99.var === "number" && live99.var > 0
+  )
+    ? Number(stressed.var) / Number(live99.var)
+    : null;
   const dataQuality = riskSummary?.data_quality ?? null;
   const microstructure = liveState?.microstructure ?? riskSummary?.microstructure ?? null;
   const tickQuality = liveState?.tick_quality ?? riskSummary?.tick_quality ?? null;
@@ -133,10 +143,15 @@ export function OverviewLiveStripPanel({
   const liveEquity = account?.equity ?? null;
   const liveBalance = account?.balance ?? null;
   const liveMarginLevel = account?.margin_level ?? null;
-  const liveFreshness = useRelativeTime(liveState?.generated_at);
+  const liveFreshness = useRelativeTime(heartbeatAt ?? liveState?.generated_at);
+  const concentration = computeBudgetConcentration(
+    liveState?.risk_budget?.models ?? null,
+    selectedModel,
+  );
 
   return (
     <div className="space-y-4">
+      <LivePostureBanner liveState={liveState} transport={transport} />
       {/* Live Account Ticker */}
       {account ? (
         <section className="grid gap-2 sm:grid-cols-5">
@@ -217,6 +232,7 @@ export function OverviewLiveStripPanel({
           value={formatCurrency(stressed?.es ?? esValue)}
           hint={
             joinLabelParts(
+              stressUpliftVsLive99 == null ? null : `x${stressUpliftVsLive99.toFixed(2)} vs live 99%`,
               stressed?.scenario_name ?? marketRegime ?? qualityStatus,
               reconciliation?.market_closed ? marketReference : riskFreshness,
             ) || undefined
@@ -257,19 +273,43 @@ export function OverviewLiveStripPanel({
         <LiveOperatorAlerts alerts={liveState?.operator_alerts ?? []} title="Watchlist" />
 
         <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5">
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3 flex items-center justify-between gap-2">
             <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
               Live posture
             </span>
-            <StatusBadge
-              label={transport}
-              tone={transport === "stream" ? "success" : transport === "polling" ? "warning" : "neutral"}
-            />
+            <span className="flex items-center gap-1.5">
+              <LiveRuntimeBadgeGroup
+                liveState={liveState}
+                heartbeatAt={heartbeatAt}
+                transport={transport}
+                showFreshness
+              />
+            </span>
           </div>
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs">
               <span className="text-[var(--color-text-muted)]">Reference model</span>
               <span className="mono font-semibold text-[var(--color-text)]">{selectedModel.toUpperCase()}</span>
+            </div>
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-[var(--color-text-muted)]">Top-3 concentration</span>
+              <span className="mono text-[var(--color-text)]">
+                {concentration?.top3Share == null ? "n/a" : formatPercent(concentration.top3Share, 0)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-[var(--color-text-muted)]">Effective positions</span>
+              <span className="mono text-[var(--color-text)]">
+                {concentration?.effectiveCount == null ? "n/a" : concentration.effectiveCount.toFixed(1)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span className="text-[var(--color-text-muted)]">Dominant risk</span>
+              <span className="mono text-right text-[var(--color-text)]">
+                {concentration?.dominantLabel
+                  ? `${concentration.dominantLabel} (${formatPercent(concentration.dominantShare ?? 0, 0)})`
+                  : "n/a"}
+              </span>
             </div>
             <div className="flex items-center justify-between gap-3 text-xs">
               <span className="text-[var(--color-text-muted)]">Truth source</span>
@@ -406,4 +446,77 @@ function LiveTickerCell({
       </div>
     </div>
   );
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return null;
+}
+
+function computeBudgetConcentration(
+  models: unknown,
+  selectedModel: string,
+): {
+  top3Share: number | null;
+  effectiveCount: number | null;
+  dominantLabel: string | null;
+  dominantShare: number | null;
+} | null {
+  const modelMap = asRecord(models);
+  if (modelMap == null) {
+    return null;
+  }
+  const selectedPayload = asRecord(modelMap[selectedModel]);
+  const fallbackKey = Object.keys(modelMap)[0];
+  const modelPayload = selectedPayload ?? (fallbackKey ? asRecord(modelMap[fallbackKey]) : null);
+  if (modelPayload == null) {
+    return null;
+  }
+  const positions = asRecord(modelPayload.positions);
+  if (positions == null) {
+    return null;
+  }
+  const contributors: Array<{ label: string; absComponent: number }> = [];
+  for (const [symbol, rawPosition] of Object.entries(positions)) {
+    const position = asRecord(rawPosition);
+    if (position == null) {
+      continue;
+    }
+    const label = typeof position.symbol === "string" && position.symbol ? position.symbol : symbol;
+    const componentVar = asNumber(position.component_var);
+    if (componentVar == null) {
+      continue;
+    }
+    contributors.push({ label, absComponent: Math.abs(componentVar) });
+  }
+  if (contributors.length === 0) {
+    return null;
+  }
+  contributors.sort((left, right) => right.absComponent - left.absComponent);
+  const total = contributors.reduce((acc, item) => acc + item.absComponent, 0);
+  if (total <= 1e-12) {
+    return {
+      top3Share: null,
+      effectiveCount: null,
+      dominantLabel: null,
+      dominantShare: null,
+    };
+  }
+  const shares = contributors.map((item) => item.absComponent / total);
+  const hhi = shares.reduce((acc, item) => acc + item * item, 0);
+  return {
+    top3Share: shares.slice(0, 3).reduce((acc, item) => acc + item, 0),
+    effectiveCount: hhi > 1e-12 ? 1 / hhi : null,
+    dominantLabel: contributors[0]?.label ?? null,
+    dominantShare: shares[0] ?? null,
+  };
 }

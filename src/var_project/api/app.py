@@ -33,6 +33,7 @@ def create_app(repo_root: Path | None = None, mt5_connector_factory=None, *, boo
             "status": "ok",
             "docs": "/docs",
             "health": "/health",
+            "readiness": "/health/readiness",
         }
 
     for module in (health, desk, analytics, capital, mt5, trading, reports, operator):

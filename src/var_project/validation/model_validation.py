@@ -6,9 +6,18 @@ import re
 
 import numpy as np
 import pandas as pd
-from scipy.stats import chi2
+from scipy.stats import chi2, norm
 
+from var_project.core.alpha_codec import alpha_lookup_tokens, decode_alpha_token, encode_alpha_token
 from var_project.core.model_registry import infer_model_names_from_columns
+
+P_VALUE_SIGNIFICANCE_LEVEL = 0.05
+VALIDATION_STATUS_PASS = "PASS"
+VALIDATION_STATUS_WARN = "WARN"
+VALIDATION_STATUS_FAIL = "FAIL"
+ES_ACERBI_MIN_OBSERVATIONS = 60
+ES_ACERBI_WARN_PVALUE = 0.05
+ES_ACERBI_BREACH_PVALUE = 0.01
 
 
 @dataclass(frozen=True)
@@ -27,6 +36,12 @@ class BacktestModelValidation:
     exceptions_last_250: int
     traffic_light: Optional[str]
     score: float
+    es_tail_observations: int = 0
+    es_shortfall_ratio: float | None = None
+    es_breach_rate: float | None = None
+    es_acerbi_stat: float | None = None
+    es_acerbi_p_value: float | None = None
+    es_acerbi_observations: int = 0
 
     @classmethod
     def from_dict(cls, payload: Dict[str, Any]) -> "BacktestModelValidation":
@@ -45,6 +60,30 @@ class BacktestModelValidation:
             exceptions_last_250=int(payload["exceptions_last_250"]),
             traffic_light=payload.get("traffic_light"),
             score=float(payload["score"]),
+            es_tail_observations=int(payload.get("es_tail_observations") or 0),
+            es_shortfall_ratio=(
+                None
+                if payload.get("es_shortfall_ratio") is None
+                else float(payload.get("es_shortfall_ratio"))
+            ),
+            es_breach_rate=(
+                None
+                if payload.get("es_breach_rate") is None
+                else float(payload.get("es_breach_rate"))
+            ),
+            es_acerbi_stat=(
+                None
+                if payload.get("es_acerbi_stat") is None and payload.get("es_acerbi_z") is None
+                else float(payload.get("es_acerbi_stat", payload.get("es_acerbi_z")))
+            ),
+            es_acerbi_p_value=(
+                None
+                if payload.get("es_acerbi_p_value") is None and payload.get("es_acerbi_p") is None
+                else float(payload.get("es_acerbi_p_value", payload.get("es_acerbi_p")))
+            ),
+            es_acerbi_observations=int(
+                payload.get("es_acerbi_observations", payload.get("es_acerbi_n") or 0) or 0
+            ),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -102,6 +141,10 @@ class ValidationSurfacePoint:
     p_cc: float
     traffic_light: Optional[str]
     score: float
+    coverage_pass: bool
+    independence_pass: bool | None = None
+    conditional_pass: bool | None = None
+    statistical_status: str = VALIDATION_STATUS_WARN
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -121,6 +164,9 @@ class RankedModelComparison:
     traffic_light: Optional[str]
     current_var: float | None = None
     current_es: float | None = None
+    es_acerbi_status: str = "N/A"
+    es_acerbi_p_value: float | None = None
+    es_acerbi_observations: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -184,8 +230,131 @@ def _score_model(
     return round(100.0 * score, 2)
 
 
-def _rank_key(item: BacktestModelValidation) -> tuple[float, float, int]:
-    return (-item.score, abs(item.actual_rate - item.expected_rate), item.exceptions)
+def _rank_key(item: BacktestModelValidation) -> tuple[int, float, float, int, float]:
+    acerbi_bucket, acerbi_p_value = _es_acerbi_rank_bucket(item)
+    return (
+        acerbi_bucket,
+        -item.score,
+        abs(item.actual_rate - item.expected_rate),
+        item.exceptions,
+        -acerbi_p_value,
+    )
+
+
+def _es_acerbi_rank_bucket(item: BacktestModelValidation) -> tuple[int, float]:
+    observations = int(item.es_acerbi_observations or 0)
+    p_value = pd.to_numeric(item.es_acerbi_p_value, errors="coerce")
+    if observations < ES_ACERBI_MIN_OBSERVATIONS or pd.isna(p_value):
+        return 1, 0.0
+    clipped = _clip_probability(float(p_value))
+    if clipped <= ES_ACERBI_BREACH_PVALUE:
+        return 3, clipped
+    if clipped <= ES_ACERBI_WARN_PVALUE:
+        return 2, clipped
+    return 0, clipped
+
+
+def _es_acerbi_status(item: BacktestModelValidation) -> str:
+    bucket, _ = _es_acerbi_rank_bucket(item)
+    if bucket == 0:
+        return VALIDATION_STATUS_PASS
+    if bucket == 2:
+        return VALIDATION_STATUS_WARN
+    if bucket == 3:
+        return VALIDATION_STATUS_FAIL
+    return "N/A"
+
+
+def _finite_float(value: Any) -> float | None:
+    numeric = pd.to_numeric(value, errors="coerce")
+    if pd.isna(numeric):
+        return None
+    return float(numeric)
+
+
+def _es_backtest_diagnostics(
+    *,
+    losses: pd.Series,
+    var_series: pd.Series,
+    es_series: pd.Series,
+) -> tuple[int, float | None, float | None]:
+    valid = losses.notna() & var_series.notna() & es_series.notna()
+    if not bool(valid.any()):
+        return 0, None, None
+    tail_mask = valid & (losses > var_series)
+    tail_count = int(tail_mask.sum())
+    if tail_count <= 0:
+        return 0, None, None
+    tail_losses = losses[tail_mask].astype(float)
+    tail_es = es_series[tail_mask].astype(float)
+    es_mean = float(tail_es.mean())
+    ratio = None if es_mean <= 1e-12 else float(tail_losses.mean() / es_mean)
+    breach_rate = float((tail_losses > tail_es).mean()) if tail_count > 0 else None
+    return tail_count, ratio, breach_rate
+
+
+def _es_acerbi_backtest(
+    *,
+    losses: pd.Series,
+    var_series: pd.Series,
+    es_series: pd.Series,
+    alpha: float,
+) -> tuple[int, float | None, float | None]:
+    """
+    Acerbi-Szekely style ES diagnostic (approximate z-test).
+
+    We evaluate the centered series:
+        Z_t = 1_{L_t > VaR_t} * (L_t / ES_t) - (1 - alpha)
+    Under a correctly calibrated VaR/ES pair, E[Z_t] ~= 0.
+    """
+    valid = losses.notna() & var_series.notna() & es_series.notna()
+    if not bool(valid.any()):
+        return 0, None, None
+
+    losses_values = losses[valid].astype(float).to_numpy()
+    var_values = var_series[valid].astype(float).to_numpy()
+    es_values = es_series[valid].astype(float).to_numpy()
+
+    finite = (
+        np.isfinite(losses_values)
+        & np.isfinite(var_values)
+        & np.isfinite(es_values)
+        & (es_values > 1e-12)
+    )
+    if not bool(np.any(finite)):
+        return 0, None, None
+
+    losses_values = losses_values[finite]
+    var_values = var_values[finite]
+    es_values = es_values[finite]
+    observation_count = int(len(losses_values))
+    if observation_count < 3:
+        return observation_count, None, None
+
+    exceedance = (losses_values > var_values).astype(float)
+    centered = exceedance * (losses_values / es_values) - (1.0 - float(alpha))
+
+    mean_centered = float(np.mean(centered))
+    std_centered = float(np.std(centered, ddof=1))
+    if not np.isfinite(std_centered) or std_centered <= 1e-12:
+        return observation_count, None, None
+
+    standard_error = std_centered / float(np.sqrt(observation_count))
+    if standard_error <= 1e-12:
+        return observation_count, None, None
+
+    stat = float(mean_centered / standard_error)
+    p_value = float(2.0 * norm.sf(abs(stat)))
+    if not np.isfinite(stat) or not np.isfinite(p_value):
+        return observation_count, None, None
+
+    return observation_count, stat, p_value
+
+
+def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
+    if column not in df.columns:
+        return pd.Series(index=df.index, dtype=float)
+    return pd.to_numeric(df[column], errors="coerce")
 
 
 def kupiec_uc(exc: pd.Series, alpha: float) -> dict:
@@ -269,7 +438,9 @@ def _traffic_light(last_250_exceptions: int, alpha: float) -> Optional[str]:
     return "RED"
 
 
-_SURFACE_COLUMN_RE = re.compile(r"^(?P<prefix>var|es|exc)_(?P<model>[a-z0-9]+)_a(?P<alpha>\d+)_h(?P<horizon>\d+)$")
+_SURFACE_COLUMN_RE = re.compile(
+    r"^(?P<prefix>var|es|exc)_(?P<model>[a-z0-9]+)_a(?P<alpha>\d+(?:p\d+)?)_h(?P<horizon>\d+)$"
+)
 
 
 def _surface_dimensions(df: pd.DataFrame) -> tuple[list[str], list[float], list[int]]:
@@ -281,7 +452,10 @@ def _surface_dimensions(df: pd.DataFrame) -> tuple[list[str], list[float], list[
         if not match:
             continue
         models.add(str(match.group("model")))
-        alphas.add(int(match.group("alpha")) / 100.0)
+        try:
+            alphas.add(decode_alpha_token(match.group("alpha")))
+        except ValueError:
+            continue
         horizons.add(int(match.group("horizon")))
     return (
         infer_model_names_from_columns([f"var_{model}" for model in models]),
@@ -291,10 +465,10 @@ def _surface_dimensions(df: pd.DataFrame) -> tuple[list[str], list[float], list[
 
 
 def _surface_exc_series(df: pd.DataFrame, *, model: str, alpha: float, horizon_days: int) -> pd.Series | None:
-    alpha_suffix = int(round(float(alpha) * 100))
-    surface_col = f"exc_{model}_a{alpha_suffix}_h{int(horizon_days)}"
-    if surface_col in df.columns:
-        return pd.to_numeric(df[surface_col], errors="coerce")
+    for alpha_token in alpha_lookup_tokens(alpha):
+        surface_col = f"exc_{model}_a{alpha_token}_h{int(horizon_days)}"
+        if surface_col in df.columns:
+            return pd.to_numeric(df[surface_col], errors="coerce")
     if int(horizon_days) == 1 and f"exc_{model}" in df.columns:
         return pd.to_numeric(df[f"exc_{model}"], errors="coerce")
     return None
@@ -307,13 +481,13 @@ def _surface_metric_map(
     alpha: float,
     horizon_days: int,
 ) -> dict[str, float]:
-    alpha_suffix = int(round(float(alpha) * 100))
+    alpha_tokens = set(alpha_lookup_tokens(alpha))
     metrics: dict[str, float] = {}
     for column in df.columns:
         match = _SURFACE_COLUMN_RE.match(str(column))
         if not match or match.group("prefix") != prefix:
             continue
-        if int(match.group("alpha")) != alpha_suffix or int(match.group("horizon")) != int(horizon_days):
+        if str(match.group("alpha")) not in alpha_tokens or int(match.group("horizon")) != int(horizon_days):
             continue
         metrics[str(match.group("model"))] = float(pd.to_numeric(df[column], errors="coerce").iloc[-1])
     if int(horizon_days) == 1 and not metrics:
@@ -350,6 +524,220 @@ def _pick_surface_champion(
     return ordered[0].model
 
 
+def _pvalue_pass(value: float) -> bool | None:
+    numeric = pd.to_numeric(value, errors="coerce")
+    if pd.isna(numeric):
+        return None
+    return bool(float(numeric) >= P_VALUE_SIGNIFICANCE_LEVEL)
+
+
+def _surface_statistical_status(
+    *,
+    coverage_pass: bool,
+    independence_pass: bool | None,
+    conditional_pass: bool | None,
+) -> str:
+    if not coverage_pass or conditional_pass is False:
+        return VALIDATION_STATUS_FAIL
+    if independence_pass is False:
+        return VALIDATION_STATUS_WARN
+    if coverage_pass and (conditional_pass in {None, True}) and (independence_pass in {None, True}):
+        return VALIDATION_STATUS_PASS
+    return VALIDATION_STATUS_WARN
+
+
+def _surface_slice_validation_summary(points: list[ValidationSurfacePoint]) -> dict[str, Any] | None:
+    if not points:
+        return None
+    ordered = sorted(
+        points,
+        key=lambda item: (
+            -float(item.score),
+            abs(float(item.actual_rate) - float(item.expected_rate)),
+            int(item.exceptions),
+            item.model,
+        ),
+    )
+    status_counts = {
+        VALIDATION_STATUS_PASS: 0,
+        VALIDATION_STATUS_WARN: 0,
+        VALIDATION_STATUS_FAIL: 0,
+    }
+    for point in points:
+        status_counts[point.statistical_status] = status_counts.get(point.statistical_status, 0) + 1
+
+    coverage_fail_count = int(sum(1 for point in points if point.coverage_pass is False))
+    independence_fail_count = int(sum(1 for point in points if point.independence_pass is False))
+    conditional_fail_count = int(sum(1 for point in points if point.conditional_pass is False))
+
+    leader = ordered[0]
+    total_points = int(len(points))
+    pass_count = int(status_counts.get(VALIDATION_STATUS_PASS, 0))
+    warn_count = int(status_counts.get(VALIDATION_STATUS_WARN, 0))
+    fail_count = int(status_counts.get(VALIDATION_STATUS_FAIL, 0))
+    non_fail_count = pass_count + warn_count
+    if fail_count > 0:
+        verdict = VALIDATION_STATUS_FAIL
+    elif warn_count > 0:
+        verdict = VALIDATION_STATUS_WARN
+    else:
+        verdict = VALIDATION_STATUS_PASS
+    return {
+        "model_count": total_points,
+        "champion_model": str(leader.model),
+        "champion_score": float(leader.score),
+        "status_counts": {key: int(value) for key, value in status_counts.items()},
+        "total_points": total_points,
+        "pass_rate": (None if total_points <= 0 else float(pass_count / total_points)),
+        "non_fail_rate": (None if total_points <= 0 else float(non_fail_count / total_points)),
+        "verdict": verdict,
+        "pvalue_threshold": float(P_VALUE_SIGNIFICANCE_LEVEL),
+        "coverage_fail_count": coverage_fail_count,
+        "independence_fail_count": independence_fail_count,
+        "conditional_fail_count": conditional_fail_count,
+    }
+
+
+def _surface_governance_summary(points: list[ValidationSurfacePoint]) -> dict[str, Any]:
+    status_counts = {
+        VALIDATION_STATUS_PASS: 0,
+        VALIDATION_STATUS_WARN: 0,
+        VALIDATION_STATUS_FAIL: 0,
+    }
+    traffic_lights = {"GREEN": 0, "YELLOW": 0, "RED": 0, "UNAVAILABLE": 0}
+
+    for point in points:
+        status_counts[point.statistical_status] = status_counts.get(point.statistical_status, 0) + 1
+        traffic = str(point.traffic_light or "UNAVAILABLE").upper()
+        if traffic not in traffic_lights:
+            traffic = "UNAVAILABLE"
+        traffic_lights[traffic] = traffic_lights.get(traffic, 0) + 1
+
+    total_points = int(len(points))
+    coverage_fail_count = int(sum(1 for point in points if point.coverage_pass is False))
+    independence_fail_count = int(sum(1 for point in points if point.independence_pass is False))
+    conditional_fail_count = int(sum(1 for point in points if point.conditional_pass is False))
+
+    pass_count = int(status_counts.get(VALIDATION_STATUS_PASS, 0))
+    warn_count = int(status_counts.get(VALIDATION_STATUS_WARN, 0))
+    fail_count = int(status_counts.get(VALIDATION_STATUS_FAIL, 0))
+    non_fail_count = pass_count + int(status_counts.get(VALIDATION_STATUS_WARN, 0))
+    if fail_count > 0:
+        verdict = VALIDATION_STATUS_FAIL
+    elif warn_count > 0:
+        verdict = VALIDATION_STATUS_WARN
+    elif pass_count > 0:
+        verdict = VALIDATION_STATUS_PASS
+    else:
+        verdict = "N/A"
+    return {
+        "pvalue_threshold": float(P_VALUE_SIGNIFICANCE_LEVEL),
+        "total_points": total_points,
+        "status_counts": {key: int(value) for key, value in status_counts.items()},
+        "coverage_fail_count": coverage_fail_count,
+        "independence_fail_count": independence_fail_count,
+        "conditional_fail_count": conditional_fail_count,
+        "traffic_lights": traffic_lights,
+        "verdict": verdict,
+        "pass_rate": (None if total_points <= 0 else float(pass_count / total_points)),
+        "non_fail_rate": (None if total_points <= 0 else float(non_fail_count / total_points)),
+    }
+
+
+def _surface_horizon_governance_summary(
+    points: list[ValidationSurfacePoint],
+    *,
+    horizons: list[int],
+    alphas: list[float],
+) -> dict[str, Any]:
+    horizon_payload: dict[str, Any] = {}
+    ordered_horizons = [int(item) for item in horizons]
+    ordered_alphas = sorted({float(item) for item in alphas}, reverse=True)
+
+    for horizon_days in ordered_horizons:
+        horizon_points = [point for point in points if int(point.horizon_days) == int(horizon_days)]
+        status_counts = {
+            VALIDATION_STATUS_PASS: 0,
+            VALIDATION_STATUS_WARN: 0,
+            VALIDATION_STATUS_FAIL: 0,
+        }
+        traffic_lights = {"GREEN": 0, "YELLOW": 0, "RED": 0, "UNAVAILABLE": 0}
+        for point in horizon_points:
+            status_counts[point.statistical_status] = status_counts.get(point.statistical_status, 0) + 1
+            traffic = str(point.traffic_light or "UNAVAILABLE").upper()
+            if traffic not in traffic_lights:
+                traffic = "UNAVAILABLE"
+            traffic_lights[traffic] = traffic_lights.get(traffic, 0) + 1
+
+        total_points = int(len(horizon_points))
+        pass_count = int(status_counts.get(VALIDATION_STATUS_PASS, 0))
+        warn_count = int(status_counts.get(VALIDATION_STATUS_WARN, 0))
+        fail_count = int(status_counts.get(VALIDATION_STATUS_FAIL, 0))
+        if fail_count > 0:
+            verdict = VALIDATION_STATUS_FAIL
+        elif warn_count > 0:
+            verdict = VALIDATION_STATUS_WARN
+        elif pass_count > 0:
+            verdict = VALIDATION_STATUS_PASS
+        else:
+            verdict = "N/A"
+
+        champion_model = None
+        for alpha in ordered_alphas:
+            champion_model = _pick_surface_champion(points, alpha=float(alpha), horizon_days=int(horizon_days))
+            if champion_model:
+                break
+        if champion_model is None and horizon_points:
+            fallback = sorted(
+                horizon_points,
+                key=lambda item: (
+                    -float(item.score),
+                    abs(float(item.actual_rate) - float(item.expected_rate)),
+                    int(item.exceptions),
+                    str(item.model),
+                ),
+            )
+            champion_model = fallback[0].model if fallback else None
+
+        horizon_payload[f"h{int(horizon_days)}"] = {
+            "horizon_days": int(horizon_days),
+            "total_points": total_points,
+            "status_counts": {key: int(value) for key, value in status_counts.items()},
+            "coverage_fail_count": int(sum(1 for point in horizon_points if point.coverage_pass is False)),
+            "independence_fail_count": int(sum(1 for point in horizon_points if point.independence_pass is False)),
+            "conditional_fail_count": int(sum(1 for point in horizon_points if point.conditional_pass is False)),
+            "traffic_lights": traffic_lights,
+            "pass_rate": (None if total_points <= 0 else float(pass_count / total_points)),
+            "non_fail_rate": (
+                None
+                if total_points <= 0
+                else float((pass_count + warn_count) / total_points)
+            ),
+            "verdict": verdict,
+            "champion_model": champion_model,
+            "alpha_priority": [float(item) for item in ordered_alphas],
+            "pvalue_threshold": float(P_VALUE_SIGNIFICANCE_LEVEL),
+        }
+
+    overall_verdict = VALIDATION_STATUS_PASS
+    for payload in horizon_payload.values():
+        verdict = str(payload.get("verdict") or "").upper()
+        if verdict == VALIDATION_STATUS_FAIL:
+            overall_verdict = VALIDATION_STATUS_FAIL
+            break
+        if verdict == VALIDATION_STATUS_WARN and overall_verdict != VALIDATION_STATUS_FAIL:
+            overall_verdict = VALIDATION_STATUS_WARN
+    if not horizon_payload:
+        overall_verdict = "N/A"
+
+    return {
+        "horizon_order": ordered_horizons,
+        "horizons": horizon_payload,
+        "overall_verdict": overall_verdict,
+        "pvalue_threshold": float(P_VALUE_SIGNIFICANCE_LEVEL),
+    }
+
+
 def validate_compare_surface(
     df: pd.DataFrame,
     *,
@@ -384,6 +772,14 @@ def validate_compare_surface(
                     p_ind=ind["p_ind"],
                     p_cc=cc["p_cc"],
                 )
+                coverage_pass = bool(_pvalue_pass(uc["p_uc"]))
+                independence_pass = _pvalue_pass(ind["p_ind"])
+                conditional_pass = _pvalue_pass(cc["p_cc"])
+                statistical_status = _surface_statistical_status(
+                    coverage_pass=coverage_pass,
+                    independence_pass=independence_pass,
+                    conditional_pass=conditional_pass,
+                )
                 points.append(
                     ValidationSurfacePoint(
                         model=model,
@@ -398,11 +794,21 @@ def validate_compare_surface(
                         p_cc=float(cc["p_cc"]) if not np.isnan(cc["p_cc"]) else float("nan"),
                         traffic_light=traffic_light,
                         score=float(score),
+                        coverage_pass=coverage_pass,
+                        independence_pass=independence_pass,
+                        conditional_pass=conditional_pass,
+                        statistical_status=statistical_status,
                     )
                 )
-            summary_by_key[f"a{int(round(alpha * 100))}_h{int(horizon_days)}"] = {
+            slice_points = [
+                point
+                for point in points
+                if abs(float(point.alpha) - float(alpha)) <= 1e-9 and int(point.horizon_days) == int(horizon_days)
+            ]
+            summary_by_key[f"a{encode_alpha_token(alpha)}_h{int(horizon_days)}"] = {
                 "var": _surface_metric_map(df, prefix="var", alpha=alpha, horizon_days=horizon_days),
                 "es": _surface_metric_map(df, prefix="es", alpha=alpha, horizon_days=horizon_days),
+                "validation": _surface_slice_validation_summary(slice_points),
             }
 
     champion_live = _pick_surface_champion(points, alpha=0.95, horizon_days=1)
@@ -418,6 +824,12 @@ def validate_compare_surface(
         "current_metrics": summary_by_key,
         "champion_model_live": champion_live,
         "champion_model_reporting": champion_reporting,
+        "governance_summary": _surface_governance_summary(points),
+        "horizon_governance": _surface_horizon_governance_summary(
+            points,
+            horizons=[int(item) for item in selected_horizons],
+            alphas=[float(item) for item in selected_alphas],
+        ),
     }
 
 
@@ -444,6 +856,20 @@ def validate_compare_frame(df: pd.DataFrame, alpha: float) -> ValidationSummary:
             p_ind=ind["p_ind"],
             p_cc=cc["p_cc"],
         )
+        losses = -_numeric_series(df, "pnl")
+        var_series = _numeric_series(df, f"var_{model}")
+        es_series = _numeric_series(df, f"es_{model}")
+        es_tail_observations, es_shortfall_ratio, es_breach_rate = _es_backtest_diagnostics(
+            losses=losses,
+            var_series=var_series,
+            es_series=es_series,
+        )
+        es_acerbi_observations, es_acerbi_stat, es_acerbi_p_value = _es_acerbi_backtest(
+            losses=losses,
+            var_series=var_series,
+            es_series=es_series,
+            alpha=alpha,
+        )
 
         results[model] = BacktestModelValidation(
             model=model,
@@ -460,6 +886,12 @@ def validate_compare_frame(df: pd.DataFrame, alpha: float) -> ValidationSummary:
             exceptions_last_250=exceptions_last_250,
             traffic_light=traffic_light,
             score=score,
+            es_tail_observations=es_tail_observations,
+            es_shortfall_ratio=es_shortfall_ratio,
+            es_breach_rate=es_breach_rate,
+            es_acerbi_stat=es_acerbi_stat,
+            es_acerbi_p_value=es_acerbi_p_value,
+            es_acerbi_observations=es_acerbi_observations,
         )
 
     ranked = sorted(results.values(), key=_rank_key)
@@ -501,6 +933,9 @@ def rank_validation_models(
             traffic_light=item.traffic_light,
             current_var=None if vars_map.get(item.model) is None else float(vars_map[item.model]),
             current_es=None if es_map.get(item.model) is None else float(es_map[item.model]),
+            es_acerbi_status=_es_acerbi_status(item),
+            es_acerbi_p_value=_finite_float(item.es_acerbi_p_value),
+            es_acerbi_observations=int(item.es_acerbi_observations or 0),
         )
         for idx, item in enumerate(ranked)
     ]
@@ -515,10 +950,11 @@ def build_champion_challenger_summary(
     ranking = rank_validation_models(summary, current_var=current_var, current_es=current_es)
     champion = ranking[0] if ranking else None
     challenger = ranking[1] if len(ranking) > 1 else None
+    champion_model = None if champion is None else champion.model
 
     return ChampionChallengerSummary(
         alpha=float(summary.alpha),
-        champion_model=summary.champion_model_live or (None if champion is None else champion.model),
+        champion_model=champion_model or summary.champion_model_live,
         champion_model_reporting=summary.champion_model_reporting,
         challenger_model=None if challenger is None else challenger.model,
         score_gap=None if champion is None or challenger is None else round(float(champion.score - challenger.score), 2),

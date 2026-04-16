@@ -64,6 +64,12 @@ mt5:
   magic: 420001
   deviation_points: 20
   comment_prefix: "var_risk_desk"
+  live_enabled: true
+  live_poll_seconds: 1.0
+  live_history_poll_seconds: 10.0
+  live_history_lookback_minutes: 180
+  live_event_buffer_size: 500
+  live_stale_after_seconds: 4.0
 
 storage:
   database_path: "data/app/var_risk_desk.db"
@@ -72,13 +78,16 @@ storage:
   snapshots_dir: "data/snapshots"
 
 jobs:
-  loop_sleep_seconds: 30
+  loop_sleep_seconds: 1
   snapshot:
     enabled: true
-    interval_seconds: 900
+    interval_seconds: 10
   backtest:
     enabled: true
-    interval_seconds: 3600
+    interval_seconds: 30
+  live_refresh:
+    enabled: true
+    interval_seconds: 10
   report:
     enabled: true
     interval_seconds: 3600

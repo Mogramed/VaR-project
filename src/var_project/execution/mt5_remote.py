@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import time
 from typing import Any
 
 import httpx
@@ -19,6 +20,9 @@ class _RemoteMT5Module:
 
 
 class RemoteMT5Connector:
+    _RETRYABLE_HTTP_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
+    _NON_RETRYABLE_HTTP_STATUS_CODES = {400, 401, 403, 404, 409, 410, 422}
+
     def __init__(
         self,
         config: MT5Config,
@@ -90,9 +94,10 @@ class RemoteMT5Connector:
         ticket: int | None = None,
         position: int | None = None,
     ) -> list[dict[str, Any]]:
+        start, end = self._normalized_datetime_range(date_from, date_to)
         params = {
-            "date_from": date_from.isoformat(),
-            "date_to": date_to.isoformat(),
+            "date_from": start.isoformat(),
+            "date_to": end.isoformat(),
         }
         if symbol is not None:
             params["symbol"] = str(symbol).upper()
@@ -112,9 +117,10 @@ class RemoteMT5Connector:
         ticket: int | None = None,
         position: int | None = None,
     ) -> list[dict[str, Any]]:
+        start, end = self._normalized_datetime_range(date_from, date_to)
         params = {
-            "date_from": date_from.isoformat(),
-            "date_to": date_to.isoformat(),
+            "date_from": start.isoformat(),
+            "date_to": end.isoformat(),
         }
         if symbol is not None:
             params["symbol"] = str(symbol).upper()
@@ -129,7 +135,16 @@ class RemoteMT5Connector:
         return dict(self._request("POST", "/order-check", json={"request": dict(request)}))
 
     def order_send(self, request: dict[str, Any]) -> dict[str, Any]:
-        return dict(self._request("POST", "/order-send", json={"request": dict(request)}))
+        # Never retry order_send automatically: a network timeout may happen after the broker accepted
+        # the order, and retrying could duplicate live execution.
+        return dict(
+            self._request(
+                "POST",
+                "/order-send",
+                json={"request": dict(request)},
+                allow_retry=False,
+            )
+        )
 
     def live_state(self) -> dict[str, Any]:
         return dict(self._request("GET", "/live/state"))
@@ -206,13 +221,14 @@ class RemoteMT5Connector:
         date_from: datetime,
         date_to: datetime,
     ) -> pd.DataFrame:
+        start, end = self._normalized_datetime_range(date_from, date_to)
         payload = self._request(
             "GET",
             f"/bars-range/{str(symbol).upper()}",
             params={
                 "timeframe": str(timeframe).upper(),
-                "date_from": date_from.isoformat(),
-                "date_to": date_to.isoformat(),
+                "date_from": start.isoformat(),
+                "date_to": end.isoformat(),
             },
         )
         frame = pd.DataFrame(list(payload or []))
@@ -230,9 +246,10 @@ class RemoteMT5Connector:
         *,
         flags: int | None = None,
     ) -> pd.DataFrame:
+        start, end = self._normalized_datetime_range(date_from, date_to)
         params = {
-            "date_from": date_from.isoformat(),
-            "date_to": date_to.isoformat(),
+            "date_from": start.isoformat(),
+            "date_to": end.isoformat(),
         }
         if flags is not None:
             params["flags"] = int(flags)
@@ -244,6 +261,26 @@ class RemoteMT5Connector:
             frame["time_utc"] = pd.to_datetime(frame["time_utc"], utc=True, errors="coerce")
         return frame
 
+    @staticmethod
+    def _normalized_datetime_range(
+        date_from: datetime,
+        date_to: datetime,
+        *,
+        minimum_seconds: float = 1.0,
+    ) -> tuple[datetime, datetime]:
+        def _to_utc(value: datetime) -> datetime:
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value.astimezone(timezone.utc)
+
+        start = _to_utc(date_from)
+        end = _to_utc(date_to)
+        if end > start:
+            return start, end
+        if start == end:
+            return start, start + timedelta(seconds=max(float(minimum_seconds), 0.001))
+        return end, start
+
     def _request(
         self,
         method: str,
@@ -252,27 +289,86 @@ class RemoteMT5Connector:
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         timeout: float | None = None,
+        allow_retry: bool = True,
     ) -> Any:
         if not self._initialized or self._client is None:
             raise MT5ConnectionError("Remote MT5 connector not initialized.")
-        try:
-            response = self._client.request(method, path, params=params, json=json, timeout=timeout)
-        except httpx.HTTPError as exc:
-            raise MT5ConnectionError(f"MT5 agent request failed: {exc}") from exc
-
-        if response.status_code >= 400:
-            detail: str
+        configured_attempts = max(int(getattr(self.config, "reconnect_attempts", 2) or 2), 1)
+        max_attempts = configured_attempts if allow_retry else 1
+        backoff_seconds = max(float(getattr(self.config, "reconnect_backoff_seconds", 0.25) or 0.0), 0.0)
+        for attempt in range(max_attempts):
             try:
-                payload = response.json()
-            except ValueError:
-                payload = {}
-            if isinstance(payload, dict) and payload.get("detail"):
-                detail = str(payload["detail"])
-            else:
-                detail = response.text.strip() or f"HTTP {response.status_code}"
-            raise MT5ConnectionError(detail)
+                response = self._client.request(method, path, params=params, json=json, timeout=timeout)
+            except httpx.HTTPError as exc:
+                can_retry = bool(allow_retry) and self._is_retryable_http_error(exc)
+                if can_retry and attempt < (max_attempts - 1):
+                    sleep_for = backoff_seconds * (2**attempt)
+                    if sleep_for > 0:
+                        time.sleep(sleep_for)
+                    continue
+                raise MT5ConnectionError(f"MT5 agent request failed: {exc}") from exc
 
+            if response.status_code >= 400:
+                detail = self._error_detail_from_response(response)
+                can_retry = bool(allow_retry) and self._is_retryable_http_status(response.status_code, detail)
+                if can_retry and attempt < (max_attempts - 1):
+                    sleep_for = backoff_seconds * (2**attempt)
+                    if sleep_for > 0:
+                        time.sleep(sleep_for)
+                    continue
+                raise MT5ConnectionError(detail)
+
+            try:
+                return response.json()
+            except ValueError as exc:
+                raise MT5ConnectionError("MT5 agent returned a non-JSON response.") from exc
+
+        raise MT5ConnectionError("MT5 agent request failed after retry budget exhausted.")
+
+    @staticmethod
+    def _is_retryable_http_error(exc: Exception) -> bool:
+        if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)):
+            return True
+        message = str(exc).lower()
+        retryable_markers = (
+            "timeout",
+            "temporar",
+            "connection",
+            "network",
+            "broken pipe",
+            "econnreset",
+            "econnrefused",
+            "unavailable",
+            "busy",
+        )
+        return any(marker in message for marker in retryable_markers)
+
+    @classmethod
+    def _is_retryable_http_status(cls, status_code: int, detail: str) -> bool:
+        if int(status_code) in cls._NON_RETRYABLE_HTTP_STATUS_CODES:
+            return False
+        if int(status_code) in cls._RETRYABLE_HTTP_STATUS_CODES:
+            return True
+        if int(status_code) >= 500:
+            return True
+        message = str(detail).lower()
+        return any(
+            marker in message
+            for marker in (
+                "timeout",
+                "temporar",
+                "unavailable",
+                "busy",
+                "rate limit",
+            )
+        )
+
+    @staticmethod
+    def _error_detail_from_response(response: httpx.Response) -> str:
         try:
-            return response.json()
-        except ValueError as exc:
-            raise MT5ConnectionError("MT5 agent returned a non-JSON response.") from exc
+            payload = response.json()
+        except ValueError:
+            payload = {}
+        if isinstance(payload, dict) and payload.get("detail"):
+            return str(payload["detail"])
+        return response.text.strip() or f"HTTP {response.status_code}"

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import time
 
 import numpy as np
 import pandas as pd
@@ -11,9 +13,14 @@ from fastapi.testclient import TestClient
 
 from var_project.api import create_app
 from var_project.api.service import DeskApiService
-from var_project.api.routers.mt5 import iter_mt5_live_stream
+from var_project.api.routers.mt5 import _resolve_stream_after_sequence, iter_mt5_live_stream
 from var_project.core.exceptions import MT5ConnectionError
-from var_project.execution.mt5_bridge import _is_fx_weekend_closed
+from var_project.core.settings import get_mt5_config, load_settings
+from var_project.execution.mt5_bridge import (
+    MT5EventBridge,
+    _is_fx_weekend_closed,
+    collect_live_state_from_connector,
+)
 
 
 def _write_settings(
@@ -537,12 +544,83 @@ class FreshTickEmptyBookConnector(EmptyBookConnector):
         return payload
 
 
+class CountingConnector(FakeMT5Connector):
+    init_calls: int = 0
+
+    @classmethod
+    def reset(cls) -> None:
+        super().reset()
+        cls.init_calls = 0
+
+    def init(self) -> None:
+        type(self).init_calls += 1
+        super().init()
+
+
+class RecoverableOutageConnector(FakeMT5Connector):
+    fail_mode: bool = False
+
+    @classmethod
+    def reset(cls) -> None:
+        super().reset()
+        cls.fail_mode = False
+
+    def terminal_info(self) -> dict[str, object]:
+        if type(self).fail_mode:
+            self._ensure_initialized()
+            raise MT5ConnectionError("Simulated MT5 outage.")
+        return super().terminal_info()
+
+
+class SlowLiveConnector(FakeMT5Connector):
+    delay_seconds: float = 0.35
+
+    def terminal_info(self) -> dict[str, object]:
+        self._ensure_initialized()
+        time.sleep(float(type(self).delay_seconds))
+        return super().terminal_info()
+
+
+class InvalidTickPayloadConnector(FakeMT5Connector):
+    def symbol_info_tick(self, symbol: str) -> dict[str, object]:
+        self._ensure_initialized()
+        self.ensure_symbol(symbol)
+        payload = dict(super().symbol_info_tick(symbol))
+        if symbol.upper() == "EURUSD":
+            payload["last"] = "not-a-number"
+        return payload
+
+
 def test_fx_weekend_market_close_window() -> None:
     assert _is_fx_weekend_closed(datetime(2026, 4, 3, 20, 0, tzinfo=timezone.utc)) is False
     assert _is_fx_weekend_closed(datetime(2026, 4, 3, 21, 30, tzinfo=timezone.utc)) is True
     assert _is_fx_weekend_closed(datetime(2026, 4, 4, 10, 0, tzinfo=timezone.utc)) is True
     assert _is_fx_weekend_closed(datetime(2026, 4, 5, 20, 30, tzinfo=timezone.utc)) is True
     assert _is_fx_weekend_closed(datetime(2026, 4, 5, 21, 30, tzinfo=timezone.utc)) is False
+
+
+def test_collect_live_state_tolerates_invalid_tick_payload(tmp_path: Path) -> None:
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    config = get_mt5_config(load_settings(root))
+    InvalidTickPayloadConnector.reset()
+    connector = InvalidTickPayloadConnector(config)
+    connector.init()
+    try:
+        payload = collect_live_state_from_connector(
+            connector,
+            config=config,
+            base_currency="EUR",
+            seed_symbols=["EURUSD", "USDJPY"],
+            history_lookback_minutes=180,
+        )
+    finally:
+        connector.shutdown()
+
+    assert "EURUSD" in payload["symbols"]
+    assert "USDJPY" in payload["ticks"]
+    assert "EURUSD" in payload["ticks"]
+    assert payload["ticks"]["EURUSD"]["last"] is None
 
 
 def _minimal_execution_result_payload(*, created_at: datetime, order_ticket: int, deal_ticket: int) -> dict[str, object]:
@@ -664,6 +742,12 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     live_state = client.get("/mt5/live/state")
     assert live_state.status_code == 200
     live_state_body = live_state.json()
+    live_state_etag = live_state.headers.get("etag")
+    assert live_state_etag
+    assert live_state.headers.get("x-live-sequence") == str(live_state_body["sequence"])
+    assert live_state.headers.get("x-live-detail-level") == "full"
+    assert live_state.headers.get("x-live-health-status")
+    assert live_state.headers.get("x-live-next-poll-seconds")
     assert live_state_body["connected"] is True
     assert live_state_body["holdings"]
     assert live_state_body["reconciliation"]["mismatches"]
@@ -674,6 +758,21 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     assert live_state_body["risk_nowcast"]["live_1d_99"]["nowcast_var"] is not None
     assert live_state_body["pnl_explain"]["unrealized"] is not None
     assert live_state_body["operator_alerts"]
+    assert live_state_body["health"]["status"] in {
+        "healthy",
+        "degraded",
+        "stale",
+        "offline",
+        "market_closed",
+    }
+    assert live_state_body["health"]["connected"] is True
+    assert live_state_body["health"]["last_error"] is None
+    assert live_state_body["health"]["error_retryable"] is None
+    assert live_state_body["bridge_consecutive_failures"] >= 0
+    assert live_state_body["bridge_event_buffer_capacity"] >= 1
+    assert 0 <= live_state_body["bridge_event_buffer_usage"] <= live_state_body["bridge_event_buffer_capacity"]
+    assert live_state_body["health"]["bridge_consecutive_failures"] >= 0
+    assert live_state_body["health"]["bridge_event_buffer_fill_ratio"] is not None
     assert {item["code"] for item in live_state_body["operator_alerts"]} & {
         "MT5_MANUAL_EVENTS",
         "DESK_BROKER_DRIFT",
@@ -685,6 +784,8 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
 
     summary_live_state = client.get("/mt5/live/state", params={"detail_level": "summary"})
     assert summary_live_state.status_code == 200
+    summary_etag = summary_live_state.headers.get("etag")
+    assert summary_etag
     summary_body = summary_live_state.json()
     assert summary_body["sequence"] == live_state_body["sequence"]
     assert summary_body["holdings"] == live_state_body["holdings"]
@@ -695,6 +796,18 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     assert summary_body["reconciliation"]["recent_execution_attempts"] == []
     assert summary_body["reconciliation"]["recent_fills"] == []
     assert summary_body["reconciliation"]["manual_event_count"] == live_state_body["reconciliation"]["manual_event_count"]
+    summary_not_modified = client.get(
+        "/mt5/live/state",
+        params={"detail_level": "summary"},
+        headers={"If-None-Match": str(summary_etag)},
+    )
+    assert summary_not_modified.status_code == 304
+    assert summary_not_modified.text == ""
+    full_with_summary_etag = client.get(
+        "/mt5/live/state",
+        headers={"If-None-Match": str(summary_etag)},
+    )
+    assert full_with_summary_etag.status_code == 200
 
     live_events = client.get("/mt5/live/events", params={"after": 0, "limit": 5, "wait_seconds": 0.1})
     assert live_events.status_code == 200
@@ -763,6 +876,55 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     assert latest_capital.json()["portfolio_slug"] == "fx_eur_20k"
 
 
+def test_health_readiness_reports_live_fallback_mode(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    RecoverableOutageConnector.reset()
+
+    client = TestClient(
+        create_app(repo_root=root, mt5_connector_factory=RecoverableOutageConnector, bootstrap_storage=True)
+    )
+    warmup = client.get("/health/readiness", params={"refresh_live": True, "max_wait_ms": 12000})
+    assert warmup.status_code == 200
+    warmup_body = warmup.json()
+    assert warmup_body["checks"]["database"]["status"] == "ready"
+
+    RecoverableOutageConnector.fail_mode = True
+    degraded = client.get("/health/readiness", params={"refresh_live": True, "max_wait_ms": 12000})
+    assert degraded.status_code == 200
+    degraded_body = degraded.json()
+    assert degraded_body["status"] in {"degraded", "not_ready"}
+    assert degraded_body["checks"]["mt5_live"]["status"] in {"degraded", "not_ready"}
+    if degraded_body["checks"]["mt5_live"]["value"]["fallback_snapshot_used"]:
+        assert degraded_body["status"] == "degraded"
+        assert any(
+            "last known broker snapshot" in str(item).lower()
+            for item in degraded_body["recommendations"]
+        )
+    else:
+        assert (
+            degraded_body["checks"]["mt5_live"]["value"]["timed_out"] is True
+            or degraded_body["checks"]["mt5_live"]["status"] == "not_ready"
+        )
+
+
+def test_health_readiness_times_out_without_blocking_response(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=SlowLiveConnector, bootstrap_storage=True))
+    started = time.monotonic()
+    response = client.get("/health/readiness", params={"refresh_live": True, "max_wait_ms": 100})
+    elapsed = time.monotonic() - started
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "not_ready"
+    assert body["checks"]["mt5_live"]["value"]["timed_out"] is True
+    assert any("max_wait_ms" in str(item) for item in body["recommendations"])
+    assert elapsed < 3.5
+
+
 def test_mt5_live_stream_recovers_from_backend_event_errors(tmp_path: Path):
     root = tmp_path
     _write_settings(root, portfolio_mode="live_mt5")
@@ -787,6 +949,131 @@ def test_mt5_live_stream_recovers_from_backend_event_errors(tmp_path: Path):
     assert payload["state"]["last_error"] == "simulated stream failure"
 
 
+def test_mt5_live_stream_resolve_after_sequence() -> None:
+    assert _resolve_stream_after_sequence(after=7, last_event_id="3") == 7
+    assert _resolve_stream_after_sequence(after=None, last_event_id="42") == 42
+    assert _resolve_stream_after_sequence(after=None, last_event_id="-5") == 0
+    assert _resolve_stream_after_sequence(after=None, last_event_id="invalid") == 0
+    assert _resolve_stream_after_sequence(after=None, last_event_id=None) == 0
+
+
+def test_mt5_live_stream_bootstrap_snapshot_respects_resume_sequence(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    FakeMT5Connector.reset()
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+    base_state = service.mt5_live_state(portfolio_slug="fx_eur_20k", detail_level="summary")
+
+    def fake_live_state(*, portfolio_slug=None, detail_level="summary"):
+        state = dict(base_state)
+        state["sequence"] = 2
+        return state
+
+    def fake_live_events(*, portfolio_slug=None, after=0, limit=100, wait_seconds=15.0, detail_level="summary"):
+        return []
+
+    service.mt5_live_state = fake_live_state  # type: ignore[method-assign]
+    service.mt5_live_events = fake_live_events  # type: ignore[method-assign]
+    stream_iter = iter_mt5_live_stream(
+        service,
+        portfolio_slug="fx_eur_20k",
+        detail_level="summary",
+        after=40,
+        emit_bootstrap=True,
+    )
+
+    retry_frame = next(stream_iter)
+    bootstrap_frame = next(stream_iter)
+
+    assert retry_frame == "retry: 5000\n\n"
+    assert bootstrap_frame.startswith("id: 41\n")
+    data_line = next(line for line in bootstrap_frame.splitlines() if line.startswith("data: "))
+    payload = json.loads(data_line.removeprefix("data: "))
+    assert payload["kind"] == "snapshot"
+    assert payload["sequence"] == 41
+    assert payload["state"]["sequence"] == 41
+
+
+def test_mt5_live_state_uses_last_good_snapshot_on_transient_outage(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    RecoverableOutageConnector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=RecoverableOutageConnector, bootstrap_storage=True)
+    type(service.mt5)._shared_last_good_live_state.clear()
+
+    first = service.mt5_live_state(
+        portfolio_slug="fx_eur_20k",
+        detail_level="full",
+        force_refresh=True,
+    )
+    assert first["connected"] is True
+    assert first["holdings"]
+    assert first["fallback_snapshot_used"] is False
+
+    RecoverableOutageConnector.fail_mode = True
+    second = service.mt5_live_state(
+        portfolio_slug="fx_eur_20k",
+        detail_level="full",
+        force_refresh=True,
+    )
+
+    assert second["status"] == "degraded"
+    assert second["connected"] is False
+    assert second["degraded"] is True
+    assert second["stale"] is True
+    assert second["fallback_snapshot_used"] is True
+    assert second["holdings"] == first["holdings"]
+    assert "Simulated MT5 outage" in str(second["last_error"])
+    assert second["health"]["fallback_snapshot_used"] is True
+    assert "last known broker snapshot" in str(second["health"]["message"]).lower()
+
+
+def test_mt5_live_events_uses_last_good_snapshot_on_transient_outage(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    RecoverableOutageConnector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=RecoverableOutageConnector, bootstrap_storage=True)
+    type(service.mt5)._shared_last_good_live_state.clear()
+
+    warm_state = service.mt5_live_state(
+        portfolio_slug="fx_eur_20k",
+        detail_level="full",
+        force_refresh=True,
+    )
+    assert warm_state["connected"] is True
+    assert warm_state["fallback_snapshot_used"] is False
+    assert warm_state["holdings"]
+
+    RecoverableOutageConnector.fail_mode = True
+    events = service.mt5_live_events(
+        portfolio_slug="fx_eur_20k",
+        after=7,
+        limit=5,
+        wait_seconds=0.0,
+        detail_level="full",
+    )
+
+    assert events
+    first = events[0]
+    state = first["state"]
+
+    assert first["kind"] == "connection_error"
+    assert first["sequence"] == 8
+    assert state["status"] == "degraded"
+    assert state["connected"] is False
+    assert state["degraded"] is True
+    assert state["stale"] is True
+    assert state["fallback_snapshot_used"] is True
+    assert state["health"]["fallback_snapshot_used"] is True
+    assert state["bridge_last_event_kind"] == "connection_error_fallback"
+    assert "Simulated MT5 outage" in str(state["last_error"])
+    assert {str(item.get("symbol") or "").upper() for item in state["holdings"]} == {
+        str(item.get("symbol") or "").upper() for item in warm_state["holdings"]
+    }
+
+
 def test_mt5_live_state_surfaces_bridge_alerts_without_false_drift_noise(tmp_path: Path):
     root = tmp_path
     _write_settings(root, portfolio_mode="live_mt5")
@@ -802,6 +1089,11 @@ def test_mt5_live_state_surfaces_bridge_alerts_without_false_drift_noise(tmp_pat
     codes = {item["code"] for item in payload["operator_alerts"]}
 
     assert payload["connected"] is False
+    assert payload["fallback_snapshot_used"] is False
+    assert payload["health"]["status"] == "offline"
+    assert payload["health"]["connected"] is False
+    assert payload["health"]["fallback_snapshot_used"] is False
+    assert payload["health"]["last_error"] is not None
     assert "MT5_LIVE_DISCONNECTED" in codes
     assert "MT5_LIVE_ERROR" in codes
     assert "DESK_BROKER_DRIFT" not in codes
@@ -855,6 +1147,7 @@ def test_mt5_live_state_labels_empty_broker_book_without_hiding_diagnostics(tmp_
     assert payload["holdings"] == []
     assert payload["effective_history_lookback_minutes"] == expected_history_window_minutes
     assert payload["market_closed"] is weekend_closed
+    assert payload["health"]["market_closed"] is weekend_closed
     assert payload["risk_summary"] is not None
     assert payload["capital_usage"] is not None
     assert payload["capital_usage"]["snapshot_source"] == "mt5_live_bridge"
@@ -990,6 +1283,85 @@ def test_mt5_live_analytics_cache_reuses_holdings_snapshot(tmp_path: Path):
     assert calls["count"] == 1
     assert first == second
     assert first is not second
+
+
+def test_mt5_live_state_full_detail_uses_short_ttl_cache(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    CountingConnector.reset()
+    service = DeskApiService(root, mt5_connector_factory=CountingConnector, bootstrap_storage=True)
+    type(service.mt5)._shared_live_state_response_cache.clear()
+
+    before = CountingConnector.init_calls
+    first = service.mt5_live_state(portfolio_slug="fx_eur_20k", detail_level="full")
+    after_first = CountingConnector.init_calls
+    second = service.mt5_live_state(portfolio_slug="fx_eur_20k", detail_level="full")
+    after_second = CountingConnector.init_calls
+
+    assert after_first > before
+    assert after_second == after_first
+    assert int(second["sequence"]) == int(first["sequence"])
+
+
+def test_mt5_bridge_poll_backoff_scales_and_caps(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    config = replace(
+        get_mt5_config(load_settings(root)),
+        live_poll_seconds=1.0,
+        live_error_backoff_max_seconds=5.0,
+    )
+    bridge = MT5EventBridge(
+        runtime=object(),
+        config=config,
+        base_currency="EUR",
+        seed_symbols=["EURUSD"],
+    )
+
+    assert bridge._next_poll_delay_seconds() == 1.0  # noqa: SLF001
+
+    bridge._consecutive_failures = 1  # noqa: SLF001
+    assert bridge._next_poll_delay_seconds() == 1.0  # noqa: SLF001
+
+    bridge._consecutive_failures = 2  # noqa: SLF001
+    assert bridge._next_poll_delay_seconds() == 2.0  # noqa: SLF001
+
+    bridge._consecutive_failures = 3  # noqa: SLF001
+    assert bridge._next_poll_delay_seconds() == 4.0  # noqa: SLF001
+
+    bridge._consecutive_failures = 4  # noqa: SLF001
+    assert bridge._next_poll_delay_seconds() == 5.0  # noqa: SLF001
+
+
+def test_mt5_bridge_state_exposes_observability_metrics(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    config = replace(
+        get_mt5_config(load_settings(root)),
+        live_poll_seconds=1.0,
+        live_event_buffer_size=25,
+    )
+
+    class AlwaysFailRuntime:
+        def execute(self, operation):
+            raise MT5ConnectionError("No IPC connection")
+
+    bridge = MT5EventBridge(
+        runtime=AlwaysFailRuntime(),
+        config=config,
+        base_currency="EUR",
+        seed_symbols=["EURUSD"],
+    )
+    state = bridge.current_state()
+
+    assert state["status"] == "degraded"
+    assert state["bridge_consecutive_failures"] >= 1
+    assert state["bridge_next_poll_delay_seconds"] >= 1.0
+    assert state["bridge_last_error_at"] is not None
+    assert state["bridge_capture_duration_ms"] is not None
+    assert state["bridge_event_buffer_capacity"] == 25
+    assert 0 <= state["bridge_event_buffer_usage"] <= state["bridge_event_buffer_capacity"]
+    assert state["bridge_last_event_kind"] == "connection_error"
 
 
 def test_mt5_execution_guard_blocks_on_margin_reject(tmp_path: Path):

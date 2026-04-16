@@ -4,7 +4,9 @@ from collections import deque
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
+import math
 from threading import Condition, Event, Thread
+import time
 from typing import Any, Iterable, Mapping
 
 from var_project.core.exceptions import MT5ConnectionError
@@ -90,6 +92,8 @@ def build_empty_live_state(
     last_error: str | None = None,
     last_success_at: str | None = None,
 ) -> dict[str, Any]:
+    event_buffer_capacity = max(int(config.live_event_buffer_size), 10)
+    poll_delay = max(float(config.live_poll_seconds), 0.5)
     return {
         "sequence": 0,
         "source": "mt5_agent_bridge",
@@ -108,6 +112,13 @@ def build_empty_live_state(
         "market_closed_reason": None,
         "market_reference_timestamp": None,
         "market_reference_source": None,
+        "bridge_consecutive_failures": 0,
+        "bridge_next_poll_delay_seconds": poll_delay,
+        "bridge_last_error_at": None,
+        "bridge_capture_duration_ms": None,
+        "bridge_event_buffer_usage": 0,
+        "bridge_event_buffer_capacity": event_buffer_capacity,
+        "bridge_last_event_kind": None,
         "symbols": _normalize_symbol_list(seed_symbols),
         "terminal_status": None,
         "account": None,
@@ -122,12 +133,24 @@ def build_empty_live_state(
 def _normalize_tick_payload(symbol: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "symbol": str(symbol).upper(),
-        "bid": None if payload.get("bid") is None else float(payload.get("bid")),
-        "ask": None if payload.get("ask") is None else float(payload.get("ask")),
-        "last": None if payload.get("last") is None else float(payload.get("last")),
+        "bid": _coerce_optional_float(payload.get("bid")),
+        "ask": _coerce_optional_float(payload.get("ask")),
+        "last": _coerce_optional_float(payload.get("last")),
         "time_utc": _normalize_tick_time_utc(payload),
         "raw": dict(payload),
     }
+
+
+def _coerce_optional_float(value: Any) -> float | None:
+    if value in {None, ""}:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
 
 
 def collect_live_state_from_connector(
@@ -183,12 +206,15 @@ def collect_live_state_from_connector(
     latest_tick_symbol: str | None = None
     for symbol in sorted(tracked_symbols):
         try:
-            ticks[symbol] = _normalize_tick_payload(symbol, dict(connector.symbol_info_tick(symbol)))
+            raw_tick = connector.symbol_info_tick(symbol)
+            if not isinstance(raw_tick, Mapping):
+                continue
+            ticks[symbol] = _normalize_tick_payload(symbol, raw_tick)
             tick_time = _coerce_iso_datetime(ticks[symbol].get("time_utc"))
             if tick_time is not None and (latest_tick_at is None or tick_time > latest_tick_at):
                 latest_tick_at = tick_time
                 latest_tick_symbol = symbol
-        except MT5ConnectionError:
+        except Exception:
             continue
 
     market_closed = _is_fx_weekend_closed(now)
@@ -267,6 +293,9 @@ class MT5EventBridge:
         self._cached_deal_history: list[dict[str, Any]] = []
         self._last_history_refresh_at: datetime | None = None
         self._last_success_at: datetime | None = None
+        self._last_error_at: datetime | None = None
+        self._last_capture_duration_ms: float | None = None
+        self._consecutive_failures = 0
 
     def start(self) -> None:
         if not self.config.live_enabled:
@@ -318,11 +347,12 @@ class MT5EventBridge:
     def _run(self) -> None:
         while not self._stop_event.is_set():
             self._capture(force_event=False)
-            if self._stop_event.wait(timeout=max(float(self.config.live_poll_seconds), 0.5)):
+            if self._stop_event.wait(timeout=self._next_poll_delay_seconds()):
                 break
 
     def _capture(self, *, force_event: bool) -> None:
         now = _utcnow()
+        capture_started = time.monotonic()
         refresh_history = self._should_refresh_history(now)
         previous_state: dict[str, Any] | None = None
         with self._condition:
@@ -353,14 +383,21 @@ class MT5EventBridge:
                     "stale": False,
                     "last_success_at": payload.get("generated_at"),
                     "last_error": None,
-                    "poll_interval_seconds": float(self.config.live_poll_seconds),
+                    "poll_interval_seconds": self._base_poll_delay_seconds(),
                     "history_poll_interval_seconds": float(self.config.live_history_poll_seconds),
                     "history_lookback_minutes": int(self.config.live_history_lookback_minutes),
                 }
             )
+            self._last_capture_duration_ms = round(max((time.monotonic() - capture_started) * 1000.0, 0.0), 3)
             self._last_success_at = now
+            self._last_error_at = None
+            self._consecutive_failures = 0
+            self._decorate_state_with_bridge_metrics(payload, event_kind="snapshot")
             self._store_state(payload, previous=previous_state, force_event=force_event, kind="snapshot")
         except Exception as exc:
+            self._consecutive_failures += 1
+            self._last_error_at = _utcnow()
+            self._last_capture_duration_ms = round(max((time.monotonic() - capture_started) * 1000.0, 0.0), 3)
             stale = True
             connected = False
             if self._last_success_at is not None:
@@ -378,6 +415,7 @@ class MT5EventBridge:
                 last_error=str(exc),
                 last_success_at=None if self._last_success_at is None else self._last_success_at.isoformat(),
             )
+            degraded_state["poll_interval_seconds"] = self._next_poll_delay_seconds()
             with self._condition:
                 degraded_state["sequence"] = self._sequence
                 degraded_state["holdings"] = deepcopy(self._state.get("holdings") or [])
@@ -387,7 +425,23 @@ class MT5EventBridge:
                 degraded_state["ticks"] = deepcopy(self._state.get("ticks") or {})
                 degraded_state["terminal_status"] = deepcopy(self._state.get("terminal_status"))
                 degraded_state["account"] = deepcopy(self._state.get("account"))
+            self._decorate_state_with_bridge_metrics(degraded_state, event_kind="connection_error")
             self._store_state(degraded_state, previous=previous_state, force_event=True, kind="connection_error")
+
+    def _base_poll_delay_seconds(self) -> float:
+        return max(float(self.config.live_poll_seconds), 0.5)
+
+    def _next_poll_delay_seconds(self) -> float:
+        base_delay = self._base_poll_delay_seconds()
+        if self._consecutive_failures <= 0:
+            return base_delay
+        max_delay = max(
+            float(getattr(self.config, "live_error_backoff_max_seconds", 30.0) or 30.0),
+            base_delay,
+        )
+        exponent = min(self._consecutive_failures - 1, 6)
+        candidate = base_delay * (2**exponent)
+        return float(min(candidate, max_delay))
 
     def _store_state(
         self,
@@ -401,20 +455,36 @@ class MT5EventBridge:
         should_emit = force_event or fingerprint != self._fingerprint
         with self._condition:
             state["sequence"] = self._sequence
-            self._state = deepcopy(state)
+            state["bridge_event_buffer_capacity"] = int(self._events.maxlen or max(int(self.config.live_event_buffer_size), 10))
+            state["bridge_event_buffer_usage"] = len(self._events)
             if should_emit:
                 self._sequence += 1
-                self._state["sequence"] = self._sequence
+                state["sequence"] = self._sequence
+                state["bridge_last_event_kind"] = str(kind)
                 event = {
                     "sequence": self._sequence,
                     "kind": kind,
                     "timestamp_utc": _utcnow_iso(),
-                    "change_summary": _change_summary(previous, self._state),
-                    "state": deepcopy(self._state),
+                    "change_summary": _change_summary(previous, state),
+                    "state": deepcopy(state),
                 }
                 self._events.append(event)
+                state["bridge_event_buffer_usage"] = len(self._events)
                 self._fingerprint = fingerprint
                 self._condition.notify_all()
+            self._state = deepcopy(state)
+
+    def _decorate_state_with_bridge_metrics(self, state: dict[str, Any], *, event_kind: str | None = None) -> None:
+        state["bridge_consecutive_failures"] = int(max(self._consecutive_failures, 0))
+        state["bridge_next_poll_delay_seconds"] = float(self._next_poll_delay_seconds())
+        state["bridge_last_error_at"] = None if self._last_error_at is None else self._last_error_at.isoformat()
+        state["bridge_capture_duration_ms"] = (
+            None if self._last_capture_duration_ms is None else float(max(self._last_capture_duration_ms, 0.0))
+        )
+        state["bridge_event_buffer_capacity"] = int(self._events.maxlen or max(int(self.config.live_event_buffer_size), 10))
+        state["bridge_event_buffer_usage"] = len(self._events)
+        if event_kind is not None:
+            state["bridge_last_event_kind"] = str(event_kind)
 
     def _should_refresh_history(self, now: datetime) -> bool:
         if self._last_history_refresh_at is None:

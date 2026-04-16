@@ -10,6 +10,7 @@ FX risk desk platform built around a FastAPI backend, a Next.js frontend, a work
 - `var-project mt5-agent`: expose a local MT5 terminal to the backend when Docker is running on Linux containers.
 - `var-project db upgrade`: apply the versioned SQL schema with Alembic.
 - `var-project seed-demo`: bootstrap the local platform state from the tracked 60-day fixtures.
+- `var-project demo-smoke`: run a fast API/demo readiness smoke check against a running backend.
 - `frontend/`: Next.js operator UI and report export surface.
 
 Unsupported legacy analytics scripts and the old Streamlit UI have been removed from the supported runtime path.
@@ -55,6 +56,12 @@ Bootstrap a fresh demo state:
 
 ```bash
 var-project seed-demo
+```
+
+Run a pre-demo smoke check (expects API already running):
+
+```bash
+var-project demo-smoke --base-url http://127.0.0.1:8000
 ```
 
 The Docker path is the canonical frontend workflow. Host-side `npm` remains optional for local debugging only.
@@ -158,3 +165,11 @@ Notes:
 The internal MT5 acceptance recipe and soak checklist live in:
 
 - [`docs/mt5_v1_acceptance_runbook.md`](docs/mt5_v1_acceptance_runbook.md)
+
+## Demo Docs
+
+For presentation and soutenance support:
+
+- [`docs/demo_runbook.md`](docs/demo_runbook.md)
+- [`docs/demo_checklist.md`](docs/demo_checklist.md)
+- [`docs/demo_pitch.md`](docs/demo_pitch.md)

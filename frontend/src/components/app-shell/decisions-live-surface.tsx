@@ -1,8 +1,10 @@
 "use client";
 
-import { startTransition, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
+import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
+import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { ChartSurface } from "@/components/charts/chart-surface";
 import { DecisionHistoryTable } from "@/components/data/risk-tables";
@@ -12,24 +14,26 @@ import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
 import type { RiskDecisionResponse } from "@/lib/api/types";
 import { CHART_PALETTE, makeBarOption, makeGroupedBarOption } from "@/lib/chart-options";
+import {
+  deskArtifactQueryKey,
+  deskArtifactQueryOptions,
+} from "@/components/app-shell/desk-artifact-query";
 import { averageDecisionFillRatio, buildDecisionDeltaComparison, buildDecisionImpactSeries, buildDecisionVerdictCounts } from "@/lib/view-models";
 import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
 
 export function DecisionsLiveSurface({
   portfolioSlug, initialDecisions,
 }: { portfolioSlug: string; initialDecisions: RiskDecisionResponse[] }) {
-  const { liveState, transport, artifactVersion } = useDeskLive();
-  const [decisions, setDecisions] = useState(initialDecisions);
-
-  useEffect(() => {
-    startTransition(() => setDecisions(initialDecisions));
-  }, [initialDecisions]);
-
-  useEffect(() => {
-    let c = false;
-    api.recentDecisions(portfolioSlug, 12).then((n) => { if (!c) startTransition(() => setDecisions(n)); }).catch(() => {});
-    return () => { c = true; };
-  }, [artifactVersion, portfolioSlug]);
+  const { liveState, transport } = useDeskLive();
+  const queryClient = useQueryClient();
+  const decisionsQueryKey = deskArtifactQueryKey("decisions", portfolioSlug, 12);
+  const decisionsQuery = useQuery({
+    queryKey: decisionsQueryKey,
+    queryFn: () => api.recentDecisions(portfolioSlug, 12),
+    initialData: initialDecisions,
+    ...deskArtifactQueryOptions,
+  });
+  const decisions = decisionsQuery.data ?? initialDecisions;
 
   const verdicts = buildDecisionVerdictCounts(decisions);
   const fillRatio = averageDecisionFillRatio(decisions);
@@ -43,9 +47,10 @@ export function DecisionsLiveSurface({
       <PageHeader eyebrow="Decisions" title="Accept, reduce or reject before execution"
         aside={<>
           <StatusBadge label={portfolioSlug} tone="accent" />
-          <StatusBadge label={transport} tone={transport === "stream" ? "success" : "warning"} />
+          <LiveRuntimeBadgeGroup liveState={liveState} transport={transport} showBridge={false} />
         </>}
       />
+      <LivePostureBanner liveState={liveState} transport={transport} />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <MetricBlock label="Accepted" value={String(verdicts.ACCEPT ?? 0)} tone="success" />
@@ -56,7 +61,15 @@ export function DecisionsLiveSurface({
       </section>
 
       <LiveOperatorAlerts alerts={liveState?.operator_alerts ?? []} />
-      <TradeDecisionPanel portfolioSlug={portfolioSlug} onEvaluated={(r) => startTransition(() => setDecisions((c) => [r, ...c].slice(0, 12)))} />
+      <TradeDecisionPanel
+        portfolioSlug={portfolioSlug}
+        onEvaluated={(result) => {
+          queryClient.setQueryData<RiskDecisionResponse[]>(
+            decisionsQueryKey,
+            (current) => [result, ...(current ?? [])].slice(0, 12),
+          );
+        }}
+      />
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_280px]">
         <ChartSurface

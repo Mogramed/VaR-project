@@ -106,6 +106,24 @@ class HealthDependenciesResponse(BaseModel):
     dependencies: dict[str, Any] = Field(default_factory=dict)
 
 
+class HealthReadinessCheckResponse(BaseModel):
+    status: str
+    required: bool
+    detail: str | None = None
+    value: dict[str, Any] = Field(default_factory=dict)
+
+
+class HealthReadinessResponse(BaseModel):
+    status: str
+    generated_at: str
+    portfolio_slug: str
+    portfolio_mode: str | None = None
+    strict_live_required: bool
+    summary: str
+    checks: dict[str, HealthReadinessCheckResponse] = Field(default_factory=dict)
+    recommendations: list[str] = Field(default_factory=list)
+
+
 class WorkerJobStatusResponse(BaseModel):
     enabled: bool
     interval_seconds: int
@@ -269,6 +287,9 @@ class ModelComparisonRow(BaseModel):
     traffic_light: str | None = None
     current_var: float | None = None
     current_es: float | None = None
+    es_acerbi_status: str | None = None
+    es_acerbi_p_value: float | None = None
+    es_acerbi_observations: int | None = None
 
 
 class ModelComparisonResponse(BaseModel):
@@ -285,6 +306,28 @@ class ModelComparisonResponse(BaseModel):
     snapshot_timestamp: str | None = None
     ranking: list[ModelComparisonRow]
     validation_surface: dict[str, Any] | None = None
+
+
+class RiskConcentrationContributorResponse(BaseModel):
+    key: str
+    label: str
+    share: float
+    component_var: float | None = None
+    component_es: float | None = None
+
+
+class RiskConcentrationResponse(BaseModel):
+    basis: str
+    count: int = 0
+    hhi: float | None = None
+    normalized_hhi: float | None = None
+    effective_count: float | None = None
+    top1_share: float | None = None
+    top3_share: float | None = None
+    top5_share: float | None = None
+    dominant_key: str | None = None
+    dominant_label: str | None = None
+    contributors: list[RiskConcentrationContributorResponse] = Field(default_factory=list)
 
 
 class RiskAttributionPositionResponse(ApiModel):
@@ -328,6 +371,10 @@ class RiskAttributionModelResponse(BaseModel):
     model: str
     total_var: float
     total_es: float
+    diversification_ratio_var: float | None = None
+    diversification_ratio_es: float | None = None
+    concentration_var: RiskConcentrationResponse | None = None
+    concentration_es: RiskConcentrationResponse | None = None
     positions: dict[str, RiskAttributionPositionResponse]
     asset_classes: dict[str, RiskAttributionAssetClassResponse] = Field(default_factory=dict)
 
@@ -776,6 +823,14 @@ class RiskDataQualityResponse(BaseModel):
     symbol_count: int = 0
 
 
+class RiskSummaryConcentrationResponse(BaseModel):
+    model: str | None = None
+    diversification_ratio_var: float | None = None
+    diversification_ratio_es: float | None = None
+    var: RiskConcentrationResponse | None = None
+    es: RiskConcentrationResponse | None = None
+
+
 class LiveRiskSummaryResponse(BaseModel):
     generated_at: str
     portfolio_slug: str
@@ -796,6 +851,7 @@ class LiveRiskSummaryResponse(BaseModel):
     stress_surface: dict[str, Any] = Field(default_factory=dict)
     data_quality: RiskDataQualityResponse | None = None
     model_diagnostics: dict[str, Any] = Field(default_factory=dict)
+    concentration: RiskSummaryConcentrationResponse | None = None
     risk_nowcast: dict[str, Any] = Field(default_factory=dict)
     microstructure: dict[str, Any] = Field(default_factory=dict)
     tick_quality: dict[str, Any] = Field(default_factory=dict)
@@ -933,6 +989,29 @@ class MT5LiveEventChangeSummaryResponse(BaseModel):
     deal_history: int = 0
 
 
+class MT5LiveHealthResponse(BaseModel):
+    status: str
+    message: str | None = None
+    connected: bool
+    degraded: bool
+    stale: bool
+    fallback_snapshot_used: bool = False
+    market_closed: bool = False
+    analytics_stale: bool | None = None
+    generated_age_seconds: float | None = None
+    last_success_age_seconds: float | None = None
+    tick_quality_status: str | None = None
+    nowcast_status: str | None = None
+    operational_truth: str | None = None
+    truth_score: float | None = None
+    error_retryable: bool | None = None
+    last_error: str | None = None
+    bridge_consecutive_failures: int | None = None
+    bridge_next_poll_delay_seconds: float | None = None
+    bridge_capture_duration_ms: float | None = None
+    bridge_event_buffer_fill_ratio: float | None = None
+
+
 class MT5LiveStateResponse(BaseModel):
     sequence: int
     source: str | None = None
@@ -940,6 +1019,7 @@ class MT5LiveStateResponse(BaseModel):
     connected: bool
     degraded: bool
     stale: bool
+    fallback_snapshot_used: bool = False
     generated_at: str
     last_success_at: str | None = None
     last_error: str | None = None
@@ -951,6 +1031,13 @@ class MT5LiveStateResponse(BaseModel):
     market_closed_reason: str | None = None
     market_reference_timestamp: str | None = None
     market_reference_source: str | None = None
+    bridge_consecutive_failures: int = 0
+    bridge_next_poll_delay_seconds: float | None = None
+    bridge_last_error_at: str | None = None
+    bridge_capture_duration_ms: float | None = None
+    bridge_event_buffer_usage: int | None = None
+    bridge_event_buffer_capacity: int | None = None
+    bridge_last_event_kind: str | None = None
     portfolio_slug: str | None = None
     portfolio_mode: str | None = None
     symbols: list[str] = Field(default_factory=list)
@@ -976,6 +1063,7 @@ class MT5LiveStateResponse(BaseModel):
     risk_nowcast: dict[str, Any] = Field(default_factory=dict)
     pnl_explain: dict[str, Any] = Field(default_factory=dict)
     operator_alerts: list[OperatorAlertResponse] = Field(default_factory=list)
+    health: MT5LiveHealthResponse | None = None
 
 
 class MT5LiveEventResponse(BaseModel):

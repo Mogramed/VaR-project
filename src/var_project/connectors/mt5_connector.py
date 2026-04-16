@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
@@ -423,13 +423,14 @@ class MT5Connector:
         self.ensure_symbol(symbol)
 
         # MT5 aime souvent les datetime "naïfs" (sans tzinfo)
-        if date_from.tzinfo is not None:
-            date_from = date_from.replace(tzinfo=None)
-        if date_to.tzinfo is not None:
-            date_to = date_to.replace(tzinfo=None)
+        start, end = self._ordered_history_range(date_from, date_to)
+        if start.tzinfo is not None:
+            start = start.replace(tzinfo=None)
+        if end.tzinfo is not None:
+            end = end.replace(tzinfo=None)
 
         tf = self.get_timeframe(timeframe)
-        rates = self._mt5.copy_rates_range(symbol, tf, date_from, date_to)
+        rates = self._mt5.copy_rates_range(symbol, tf, start, end)
 
         if rates is None:
             raise MT5ConnectionError(
@@ -451,6 +452,21 @@ class MT5Connector:
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
+
+    def _ordered_history_range(
+        self,
+        date_from: datetime,
+        date_to: datetime,
+        *,
+        minimum_seconds: float = 1.0,
+    ) -> tuple[datetime, datetime]:
+        start = self._history_datetime(date_from)
+        end = self._history_datetime(date_to)
+        if end > start:
+            return start, end
+        if start == end:
+            return start, start + timedelta(seconds=max(float(minimum_seconds), 0.001))
+        return end, start
 
     def fetch_tick(self, symbol: str) -> dict:
         """
@@ -491,8 +507,7 @@ class MT5Connector:
         self._require_ready()
         self.ensure_symbol(symbol)
 
-        start = self._history_datetime(date_from)
-        end = self._history_datetime(date_to)
+        start, end = self._ordered_history_range(date_from, date_to)
         if flags is None:
             flags = getattr(self._mt5, "COPY_TICKS_ALL", 0)
 

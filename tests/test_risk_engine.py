@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import numpy as np
 import pandas as pd
+import pytest
 
+import var_project.engine.risk_engine as risk_engine_module
 from var_project.engine.risk_engine import RiskEngine, RiskModelConfig
 from var_project.risk.stress import StressScenario
 
@@ -123,11 +126,60 @@ def test_backtest_adds_surface_columns_for_alpha_and_horizon():
         _sample_returns(220),
         window=80,
         config=RiskModelConfig(alpha=0.95),
-        alphas=[0.95, 0.99],
+        alphas=[0.95, 0.975, 0.99],
         horizons=[1, 5],
     )
 
     assert "pnl_h5" in backtest.columns
     assert "var_hist_a99_h5" in backtest.columns
+    assert "var_hist_a97p5_h5" in backtest.columns
     assert "es_hist_a95_h5" in backtest.columns
     assert "exc_hist_a99_h5" in backtest.columns
+
+
+def test_evaluate_models_partial_failure_keeps_other_models(monkeypatch):
+    engine = RiskEngine({"EURUSD": 10_000.0, "USDJPY": 8_000.0})
+
+    def _boom(*args, **kwargs):  # noqa: ARG001
+        raise RuntimeError("forced param failure")
+
+    monkeypatch.setattr(risk_engine_module, "normal_parametric_var_es", _boom)
+
+    snapshot = engine.snapshot_from_returns(_sample_returns(), RiskModelConfig(alpha=0.95))
+
+    assert "hist" in snapshot.models
+    assert "param" not in snapshot.models
+
+
+def test_evaluate_models_raises_with_diagnostics_when_all_models_fail(monkeypatch):
+    engine = RiskEngine({"EURUSD": 10_000.0, "USDJPY": 8_000.0})
+
+    def _boom(*args, **kwargs):  # noqa: ARG001
+        raise RuntimeError("forced failure")
+
+    monkeypatch.setattr(risk_engine_module, "historical_var_es", _boom)
+    monkeypatch.setattr(risk_engine_module, "normal_parametric_var_es", _boom)
+    monkeypatch.setattr(risk_engine_module, "mc_var_es", _boom)
+    monkeypatch.setattr(risk_engine_module, "ewma_var_es", _boom)
+    monkeypatch.setattr(risk_engine_module, "garch_var_es", _boom)
+    monkeypatch.setattr(risk_engine_module, "fhs_var_es", _boom)
+
+    with pytest.raises(RuntimeError, match="No risk model could be evaluated"):
+        engine.snapshot_from_returns(_sample_returns(), RiskModelConfig(alpha=0.95))
+
+
+def test_evaluate_models_skips_fhs_when_history_is_too_short(caplog):
+    engine = RiskEngine({"EURUSD": 10_000.0, "USDJPY": 8_000.0})
+    frame = engine.build_portfolio_frame(_sample_returns(rows=15))
+
+    with caplog.at_level(logging.WARNING):
+        snapshot = engine.evaluate_models(
+            frame["pnl"],
+            frame[engine.portfolio_symbols(frame)],
+            RiskModelConfig(alpha=0.95),
+            enabled_models=["hist", "fhs"],
+        )
+
+    assert "hist" in snapshot.models
+    assert "fhs" not in snapshot.models
+    assert not any("fenetre trop courte pour FHS" in record.message for record in caplog.records)

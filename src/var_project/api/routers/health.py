@@ -1,9 +1,15 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from var_project.api.dependencies import get_service
-from var_project.api.schemas import HealthDependenciesResponse, HealthResponse, PortfolioSummary, WorkerStatusResponse
+from var_project.api.schemas import (
+    HealthDependenciesResponse,
+    HealthReadinessResponse,
+    HealthResponse,
+    PortfolioSummary,
+    WorkerStatusResponse,
+)
 from var_project.api.service import DeskApiService
 
 
@@ -18,6 +24,24 @@ def health(service: DeskApiService = Depends(get_service)) -> HealthResponse:
 @router.get("/health/dependencies", response_model=HealthDependenciesResponse)
 def health_dependencies(service: DeskApiService = Depends(get_service)) -> HealthDependenciesResponse:
     return HealthDependenciesResponse.model_validate(service.health_dependencies())
+
+
+@router.get("/health/readiness", response_model=HealthReadinessResponse)
+def health_readiness(
+    portfolio_slug: str | None = Query(default=None),
+    refresh_live: bool = Query(default=False),
+    max_wait_ms: int = Query(default=1200, ge=100, le=15000),
+    service: DeskApiService = Depends(get_service),
+) -> HealthReadinessResponse:
+    try:
+        payload = service.health_readiness(
+            portfolio_slug=portfolio_slug,
+            refresh_live=refresh_live,
+            max_wait_ms=max_wait_ms,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return HealthReadinessResponse.model_validate(payload)
 
 
 @router.get("/jobs/status", response_model=WorkerStatusResponse)

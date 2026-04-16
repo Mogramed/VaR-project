@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
+import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
+import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
 import { PageHeader } from "@/components/app-shell/page-header";
 import {
   FieldInput,
@@ -21,6 +23,7 @@ import type {
   ReconciliationAcknowledgementResponse,
   ReconciliationSummaryResponse,
 } from "@/lib/api/types";
+import { alertPriorityCode, isValidationGovernanceAlertCode } from "@/lib/alerts";
 import {
   buildIncidentTimeline,
   buildIncidentWorkbenchRows,
@@ -78,17 +81,6 @@ function matchesStatusFilter(row: IncidentWorkbenchRow, filter: IncidentFilter):
     );
   }
   return row.incident_status === filter;
-}
-
-function alertPriorityCode(code: string | null | undefined): number {
-  const normalized = String(code || "").toUpperCase();
-  if (normalized.includes("BROKER_REJECTION")) return 0;
-  if (normalized.includes("RECONCILIATION_INCOMPLETE")) return 1;
-  if (normalized.includes("WINDOW_EXPIRED")) return 2;
-  if (normalized.includes("PARTIAL_FILL")) return 3;
-  if (normalized.includes("MANUAL_TRADE") || normalized.includes("MANUAL_EVENTS")) return 4;
-  if (normalized.includes("DRIFT") || normalized.includes("ORPHAN")) return 5;
-  return 6;
 }
 
 function parseIncidentTimestampMs(value: string | null | undefined): number | null {
@@ -239,6 +231,10 @@ export function IncidentCenterSurface({
   const alertHighlights = [...(liveState?.operator_alerts ?? [])].sort(
     (left, right) => alertPriorityCode(left.code) - alertPriorityCode(right.code),
   );
+  const governanceAlertCount = alertHighlights.filter((item) => isValidationGovernanceAlertCode(item.code)).length;
+  const governanceBreachCount = alertHighlights.filter(
+    (item) => isValidationGovernanceAlertCode(item.code) && /BREACH/i.test(item.severity),
+  ).length;
 
   return (
     <div className="desk-page space-y-4">
@@ -247,25 +243,30 @@ export function IncidentCenterSurface({
         title="Broker incidents, drift follow-up and operator history"
         aside={(
           <>
-            <StatusBadge label={liveState?.status ?? "unknown"} tone={liveState?.status === "ok" ? "success" : "warning"} />
-            <StatusBadge label={transport} tone={transport === "stream" ? "success" : "warning"} />
+            <LiveRuntimeBadgeGroup liveState={liveState} transport={transport} />
             <ButtonLink href={`/desk/blotter?portfolio=${portfolioSlug}`} variant="secondary">
               Open blotter
             </ButtonLink>
           </>
         )}
       />
+      <LivePostureBanner liveState={liveState} transport={transport} />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         <MetricBlock label="Open incidents" value={String(openCount)} tone={openCount > 0 ? "warning" : "success"} />
         <MetricBlock label="Investigating" value={String(investigatingCount)} tone={investigatingCount > 0 ? "accent" : "neutral"} />
         <MetricBlock label="Critical drift" value={String(criticalCount)} tone={criticalCount > 0 ? "danger" : "success"} />
         <MetricBlock label="Resolved" value={String(resolvedCount)} />
-        <MetricBlock label="Manual alerts" value={String(alertHighlights.filter((item) => /MANUAL/i.test(item.code)).length)} tone={alertHighlights.some((item) => /MANUAL/i.test(item.code)) ? "warning" : "neutral"} />
+        <MetricBlock
+          label="Model governance"
+          value={String(governanceAlertCount)}
+          hint={`${governanceBreachCount} breach`}
+          tone={governanceBreachCount > 0 ? "danger" : governanceAlertCount > 0 ? "warning" : "neutral"}
+        />
         <MetricBlock label="Broker rejects" value={String(alertHighlights.filter((item) => /BROKER_REJECTION/i.test(item.code)).length)} tone={alertHighlights.some((item) => /BROKER_REJECTION/i.test(item.code)) ? "danger" : "success"} />
       </section>
 
-      <LiveOperatorAlerts alerts={alertHighlights.slice(0, 6)} title="Priority operator alerts" />
+      <LiveOperatorAlerts alerts={alertHighlights.slice(0, 8)} title="Priority operator alerts" />
 
       <div className="grid gap-4 xl:grid-cols-[0.92fr,1.2fr]">
         <div className="space-y-3">

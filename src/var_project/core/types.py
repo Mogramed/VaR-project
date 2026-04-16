@@ -25,6 +25,9 @@ class MT5Config:
     live_history_lookback_minutes: int = 180
     live_event_buffer_size: int = 500
     live_stale_after_seconds: float = 6.0
+    reconnect_attempts: int = 2
+    reconnect_backoff_seconds: float = 0.25
+    live_error_backoff_max_seconds: float = 30.0
 
 
 @dataclass(frozen=True)

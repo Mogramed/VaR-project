@@ -1,8 +1,10 @@
 "use client";
 
-import { startTransition, useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
+import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
+import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { ChartSurface } from "@/components/charts/chart-surface";
 import { AttributionTable } from "@/components/data/risk-tables";
@@ -11,6 +13,10 @@ import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
 import type { ModelComparisonResponse, RiskAttributionResponse } from "@/lib/api/types";
 import { CHART_PALETTE, makeBarOption } from "@/lib/chart-options";
+import {
+  deskArtifactQueryKey,
+  deskArtifactQueryOptions,
+} from "@/components/app-shell/desk-artifact-query";
 import { formatCurrency, formatTimestamp } from "@/lib/utils";
 import { flattenAttribution } from "@/lib/view-models";
 
@@ -25,34 +31,22 @@ export function AttributionLiveSurface({
   initialAttribution: RiskAttributionResponse | null;
   initialComparison: ModelComparisonResponse | null;
 }) {
-  const { liveState, transport, artifactVersion } = useDeskLive();
-  const [attribution, setAttribution] = useState(initialAttribution);
-  const [comparison, setComparison] = useState(initialComparison);
+  const { liveState, transport } = useDeskLive();
   const attributionSource = preferredSource(liveState);
-
-  useEffect(() => {
-    startTransition(() => {
-      setAttribution(initialAttribution);
-      setComparison(initialComparison);
-    });
-  }, [initialAttribution, initialComparison]);
-
-  useEffect(() => {
-    let c = false;
-    (async () => {
-      try {
-        const next = await api.latestAttribution(portfolioSlug, attributionSource);
-        if (!c) startTransition(() => setAttribution(next));
-      } catch { /* keep current */ }
-    })();
-    return () => { c = true; };
-  }, [artifactVersion, attributionSource, portfolioSlug]);
-
-  useEffect(() => {
-    let c = false;
-    api.latestModelComparison(portfolioSlug).then((n) => { if (!c) startTransition(() => setComparison(n)); }).catch(() => {});
-    return () => { c = true; };
-  }, [artifactVersion, portfolioSlug]);
+  const attributionQuery = useQuery({
+    queryKey: deskArtifactQueryKey("attribution", portfolioSlug, attributionSource),
+    queryFn: () => api.latestAttribution(portfolioSlug, attributionSource),
+    initialData: initialAttribution,
+    ...deskArtifactQueryOptions,
+  });
+  const comparisonQuery = useQuery({
+    queryKey: deskArtifactQueryKey("models", "comparison", portfolioSlug),
+    queryFn: () => api.latestModelComparison(portfolioSlug),
+    initialData: initialComparison,
+    ...deskArtifactQueryOptions,
+  });
+  const attribution = attributionQuery.data ?? initialAttribution;
+  const comparison = comparisonQuery.data ?? initialComparison;
 
   const selectedModel = preferredModel ?? liveState?.risk_budget?.preferred_model ?? liveState?.risk_summary?.reference_model ?? comparison?.champion_model ?? (attribution ? Object.keys(attribution.models)[0] : undefined) ?? "hist";
   const rows = attribution ? flattenAttribution(attribution, selectedModel) : [];
@@ -65,9 +59,10 @@ export function AttributionLiveSurface({
         aside={<>
           <StatusBadge label={selectedModel.toUpperCase()} tone="accent" />
           <StatusBadge label={(attribution?.snapshot_source ?? "auto").replaceAll("_", " ")} tone={attribution?.snapshot_source === "mt5_live_bridge" ? "success" : "neutral"} />
-          <StatusBadge label={transport} tone={transport === "stream" ? "success" : "warning"} />
+          <LiveRuntimeBadgeGroup liveState={liveState} transport={transport} showBridge={false} />
         </>}
       />
+      <LivePostureBanner liveState={liveState} transport={transport} />
 
       {/* Model selector */}
       {attribution ? (

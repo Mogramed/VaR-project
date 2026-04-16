@@ -5,11 +5,13 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from var_project.core.exceptions import MT5ConnectionError
 from var_project.core.settings import get_mt5_config, load_settings
-from var_project.execution.mt5_agent import create_mt5_agent_app
+from var_project.core.types import MT5Config
+from var_project.execution.mt5_agent import MT5AgentRuntime, create_mt5_agent_app
 from var_project.execution.mt5_remote import RemoteMT5Connector
 
 from test_mt5_execution_api import FakeMT5Connector, _write_settings
@@ -60,6 +62,12 @@ def test_mt5_agent_endpoints_with_api_key(tmp_path: Path, monkeypatch) -> None:
     )
     assert history_orders.status_code == 200
     assert history_orders.json()
+    history_orders_zulu = client.get(
+        "/history/orders",
+        headers=headers,
+        params={"date_from": "2026-03-28T00:00:00Z", "date_to": "2026-03-29T00:00:00Z"},
+    )
+    assert history_orders_zulu.status_code == 200
 
     history_orders_by_ticket = client.get(
         "/history/orders",
@@ -101,6 +109,14 @@ def test_mt5_agent_endpoints_with_api_key(tmp_path: Path, monkeypatch) -> None:
     assert ticks.status_code == 200
     assert ticks.json()
 
+    ticks_reversed = client.get(
+        "/ticks/EURUSD",
+        headers=headers,
+        params={"date_from": "2026-03-29T09:00:00+00:00", "date_to": "2026-03-29T08:00:00+00:00"},
+    )
+    assert ticks_reversed.status_code == 200
+    assert ticks_reversed.json()
+
     order_check = client.post(
         "/order-check",
         headers=headers,
@@ -115,6 +131,13 @@ def test_mt5_agent_endpoints_with_api_key(tmp_path: Path, monkeypatch) -> None:
     )
     assert order_check.status_code == 200
     assert order_check.json()["retcode"] == 0
+
+    invalid_range = client.get(
+        "/history/orders",
+        headers=headers,
+        params={"date_from": "2026-03-30T00:00:00+00:00", "date_to": "2026-03-29T00:00:00+00:00"},
+    )
+    assert invalid_range.status_code == 400
 
 
 def test_remote_mt5_connector_uses_agent_contract(tmp_path: Path, monkeypatch) -> None:
@@ -369,6 +392,112 @@ def test_remote_mt5_connector_uses_agent_contract(tmp_path: Path, monkeypatch) -
         connector.shutdown()
 
 
+def test_remote_connector_normalizes_reversed_tick_range(tmp_path: Path) -> None:
+    root = tmp_path
+    _write_settings(root)
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/ticks/EURUSD":
+            captured["date_from"] = str(request.url.params.get("date_from"))
+            captured["date_to"] = str(request.url.params.get("date_to"))
+            return httpx.Response(200, json=[])
+        return httpx.Response(404, json={"detail": "Unhandled"})
+
+    transport = httpx.MockTransport(handler)
+    config = replace(
+        get_mt5_config(load_settings(root)),
+        agent_base_url="http://mt5-agent.local",
+        reconnect_attempts=1,
+        reconnect_backoff_seconds=0.0,
+    )
+    connector = RemoteMT5Connector(config, transport=transport)
+    connector.init()
+    try:
+        connector.fetch_ticks_range(
+            "EURUSD",
+            datetime.fromisoformat("2026-03-29T09:00:00+00:00"),
+            datetime.fromisoformat("2026-03-29T08:00:00+00:00"),
+        )
+    finally:
+        connector.shutdown()
+
+    assert "date_from" in captured and "date_to" in captured
+    assert datetime.fromisoformat(captured["date_from"]) <= datetime.fromisoformat(captured["date_to"])
+
+
+def test_remote_connector_normalizes_reversed_history_orders_range(tmp_path: Path) -> None:
+    root = tmp_path
+    _write_settings(root)
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/history/orders":
+            captured["date_from"] = str(request.url.params.get("date_from"))
+            captured["date_to"] = str(request.url.params.get("date_to"))
+            return httpx.Response(200, json=[])
+        return httpx.Response(404, json={"detail": "Unhandled"})
+
+    transport = httpx.MockTransport(handler)
+    config = replace(
+        get_mt5_config(load_settings(root)),
+        agent_base_url="http://mt5-agent.local",
+        reconnect_attempts=1,
+        reconnect_backoff_seconds=0.0,
+    )
+    connector = RemoteMT5Connector(config, transport=transport)
+    connector.init()
+    try:
+        connector.history_orders_get(
+            datetime.fromisoformat("2026-03-30T00:00:00+00:00"),
+            datetime.fromisoformat("2026-03-29T00:00:00+00:00"),
+        )
+    finally:
+        connector.shutdown()
+
+    assert "date_from" in captured and "date_to" in captured
+    assert datetime.fromisoformat(captured["date_from"]) <= datetime.fromisoformat(captured["date_to"])
+
+
+def test_remote_connector_normalizes_reversed_history_deals_range(tmp_path: Path) -> None:
+    root = tmp_path
+    _write_settings(root)
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/history/deals":
+            captured["date_from"] = str(request.url.params.get("date_from"))
+            captured["date_to"] = str(request.url.params.get("date_to"))
+            return httpx.Response(200, json=[])
+        return httpx.Response(404, json={"detail": "Unhandled"})
+
+    transport = httpx.MockTransport(handler)
+    config = replace(
+        get_mt5_config(load_settings(root)),
+        agent_base_url="http://mt5-agent.local",
+        reconnect_attempts=1,
+        reconnect_backoff_seconds=0.0,
+    )
+    connector = RemoteMT5Connector(config, transport=transport)
+    connector.init()
+    try:
+        connector.history_deals_get(
+            datetime.fromisoformat("2026-03-30T00:00:00+00:00"),
+            datetime.fromisoformat("2026-03-29T00:00:00+00:00"),
+        )
+    finally:
+        connector.shutdown()
+
+    assert "date_from" in captured and "date_to" in captured
+    assert datetime.fromisoformat(captured["date_from"]) <= datetime.fromisoformat(captured["date_to"])
+
+
 class FlakyTerminalConnector(FakeMT5Connector):
     init_calls: int = 0
     shutdown_calls: int = 0
@@ -396,6 +525,38 @@ class FlakyTerminalConnector(FakeMT5Connector):
         return super().terminal_info()
 
 
+class RuntimeProbeConnector:
+    init_calls: int = 0
+    shutdown_calls: int = 0
+    ping_calls: int = 0
+    failures_left: int = 0
+    failure_message: str = "No IPC connection"
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.init_calls = 0
+        cls.shutdown_calls = 0
+        cls.ping_calls = 0
+        cls.failures_left = 0
+        cls.failure_message = "No IPC connection"
+
+    def __init__(self, config: MT5Config) -> None:
+        self.config = config
+
+    def init(self) -> None:
+        type(self).init_calls += 1
+
+    def shutdown(self) -> None:
+        type(self).shutdown_calls += 1
+
+    def ping(self) -> dict[str, bool]:
+        type(self).ping_calls += 1
+        if type(self).failures_left > 0:
+            type(self).failures_left -= 1
+            raise MT5ConnectionError(type(self).failure_message)
+        return {"ok": True}
+
+
 def test_mt5_agent_reuses_session_and_recovers_from_ipc_error(tmp_path: Path) -> None:
     root = tmp_path
     _write_settings(root)
@@ -415,3 +576,171 @@ def test_mt5_agent_reuses_session_and_recovers_from_ipc_error(tmp_path: Path) ->
 
     assert FlakyTerminalConnector.init_calls == 2
     assert FlakyTerminalConnector.shutdown_calls == 2
+
+
+def test_mt5_agent_runtime_retries_retryable_connection_errors() -> None:
+    RuntimeProbeConnector.reset()
+    RuntimeProbeConnector.failures_left = 1
+    RuntimeProbeConnector.failure_message = "terminal_info() a echoue: (-10004, 'No IPC connection')"
+
+    runtime = MT5AgentRuntime(
+        config=MT5Config(reconnect_attempts=3, reconnect_backoff_seconds=0.0),
+        connector_factory=RuntimeProbeConnector,
+    )
+    try:
+        payload = runtime.execute(lambda connector: connector.ping())
+        assert payload["ok"] is True
+    finally:
+        runtime.close()
+
+    assert RuntimeProbeConnector.ping_calls == 2
+    assert RuntimeProbeConnector.init_calls == 2
+    assert RuntimeProbeConnector.shutdown_calls == 2
+
+
+def test_mt5_agent_runtime_does_not_retry_non_retryable_errors() -> None:
+    RuntimeProbeConnector.reset()
+    RuntimeProbeConnector.failures_left = 1
+    RuntimeProbeConnector.failure_message = "Unknown symbol EURUSD."
+
+    runtime = MT5AgentRuntime(
+        config=MT5Config(reconnect_attempts=3, reconnect_backoff_seconds=0.0),
+        connector_factory=RuntimeProbeConnector,
+    )
+    try:
+        with pytest.raises(MT5ConnectionError, match="Unknown symbol"):
+            runtime.execute(lambda connector: connector.ping())
+    finally:
+        runtime.close()
+
+    assert RuntimeProbeConnector.ping_calls == 1
+    assert RuntimeProbeConnector.init_calls == 1
+    assert RuntimeProbeConnector.shutdown_calls == 1
+
+
+def test_remote_connector_retries_retryable_http_status(tmp_path: Path) -> None:
+    root = tmp_path
+    _write_settings(root)
+    terminal_calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/terminal-info":
+            terminal_calls["count"] += 1
+            if terminal_calls["count"] < 3:
+                return httpx.Response(503, json={"detail": "Service unavailable"})
+            return httpx.Response(200, json={"company": "MetaQuotes"})
+        return httpx.Response(404, json={"detail": f"Unhandled {request.url.path}"})
+
+    transport = httpx.MockTransport(handler)
+    config = replace(
+        get_mt5_config(load_settings(root)),
+        agent_base_url="http://mt5-agent.local",
+        reconnect_attempts=3,
+        reconnect_backoff_seconds=0.0,
+    )
+    connector = RemoteMT5Connector(config, transport=transport)
+    connector.init()
+    try:
+        assert connector.terminal_info()["company"] == "MetaQuotes"
+    finally:
+        connector.shutdown()
+
+    assert terminal_calls["count"] == 3
+
+
+def test_remote_connector_does_not_retry_non_retryable_http_status(tmp_path: Path) -> None:
+    root = tmp_path
+    _write_settings(root)
+    terminal_calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/terminal-info":
+            terminal_calls["count"] += 1
+            return httpx.Response(401, json={"detail": "Invalid MT5 agent key."})
+        return httpx.Response(404, json={"detail": f"Unhandled {request.url.path}"})
+
+    transport = httpx.MockTransport(handler)
+    config = replace(
+        get_mt5_config(load_settings(root)),
+        agent_base_url="http://mt5-agent.local",
+        reconnect_attempts=4,
+        reconnect_backoff_seconds=0.0,
+    )
+    connector = RemoteMT5Connector(config, transport=transport)
+    connector.init()
+    try:
+        with pytest.raises(MT5ConnectionError, match="Invalid MT5 agent key"):
+            connector.terminal_info()
+    finally:
+        connector.shutdown()
+
+    assert terminal_calls["count"] == 1
+
+
+def test_remote_connector_retries_retryable_network_errors(tmp_path: Path) -> None:
+    root = tmp_path
+    _write_settings(root)
+    terminal_calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/terminal-info":
+            terminal_calls["count"] += 1
+            if terminal_calls["count"] < 3:
+                raise httpx.ReadTimeout("simulated timeout", request=request)
+            return httpx.Response(200, json={"company": "MetaQuotes"})
+        return httpx.Response(404, json={"detail": f"Unhandled {request.url.path}"})
+
+    transport = httpx.MockTransport(handler)
+    config = replace(
+        get_mt5_config(load_settings(root)),
+        agent_base_url="http://mt5-agent.local",
+        reconnect_attempts=3,
+        reconnect_backoff_seconds=0.0,
+    )
+    connector = RemoteMT5Connector(config, transport=transport)
+    connector.init()
+    try:
+        assert connector.terminal_info()["company"] == "MetaQuotes"
+    finally:
+        connector.shutdown()
+
+    assert terminal_calls["count"] == 3
+
+
+def test_remote_connector_order_send_is_not_retried_on_retryable_status(tmp_path: Path) -> None:
+    root = tmp_path
+    _write_settings(root)
+    order_send_calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/order-send":
+            order_send_calls["count"] += 1
+            if order_send_calls["count"] == 1:
+                return httpx.Response(503, json={"detail": "Service unavailable"})
+            return httpx.Response(200, json={"retcode": 10009, "comment": "Request completed"})
+        return httpx.Response(404, json={"detail": f"Unhandled {request.url.path}"})
+
+    transport = httpx.MockTransport(handler)
+    config = replace(
+        get_mt5_config(load_settings(root)),
+        agent_base_url="http://mt5-agent.local",
+        reconnect_attempts=3,
+        reconnect_backoff_seconds=0.0,
+    )
+    connector = RemoteMT5Connector(config, transport=transport)
+    connector.init()
+    try:
+        with pytest.raises(MT5ConnectionError, match="Service unavailable"):
+            connector.order_send({"symbol": "EURUSD", "volume": 0.05, "type": 0, "price": 1.09})
+    finally:
+        connector.shutdown()
+
+    assert order_send_calls["count"] == 1

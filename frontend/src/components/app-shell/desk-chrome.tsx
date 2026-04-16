@@ -28,7 +28,8 @@ import type {
 } from "@/lib/api/types";
 import { OperatorActions } from "@/components/app-shell/operator-actions";
 import { DeskLiveProvider, useDeskLive } from "@/components/app-shell/desk-live-provider";
-import { dedupeOperatorAlerts, dedupePersistedAlerts } from "@/lib/alerts";
+import { deriveLiveRuntimeDiagnostics } from "@/components/app-shell/live-runtime-phase";
+import { alertPriorityCode, dedupeOperatorAlerts, dedupePersistedAlerts } from "@/lib/alerts";
 import { cn, formatTimestamp } from "@/lib/utils";
 import { useRelativeTime } from "@/lib/use-relative-time";
 
@@ -150,8 +151,14 @@ function DeskChromeFrame({
 }) {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [portfolioDropdownOpen, setPortfolioDropdownOpen] = useState(false);
-  const { liveState, transport } = useDeskLive();
-  const liveAlerts = dedupeOperatorAlerts(liveState?.operator_alerts ?? []);
+  const { liveState, heartbeatAt, transport } = useDeskLive();
+  const liveAlerts = [...dedupeOperatorAlerts(liveState?.operator_alerts ?? [])].sort((left, right) => {
+    const rankDelta = alertPriorityCode(left.code) - alertPriorityCode(right.code);
+    if (rankDelta !== 0) {
+      return rankDelta;
+    }
+    return left.code.localeCompare(right.code);
+  });
   const activePortfolioSlug = portfolioSlug ?? null;
   const activePortfolioId =
     portfolios.find((portfolio) => portfolio.slug === portfolioSlug)?.id ?? null;
@@ -163,9 +170,31 @@ function DeskChromeFrame({
   );
 
   const apiStatus = health.status === "ok" ? "ok" : "off";
-  const mt5Status = liveState?.status === "ok" ? "ok" : liveState?.degraded ? "warn" : "off";
+  const runtimeDiagnostics = deriveLiveRuntimeDiagnostics(liveState, transport);
+  const runtimePhase = runtimeDiagnostics.phase;
+  const mt5Status = runtimePhase === "live"
+    ? "ok"
+    : runtimePhase === "recovering" || runtimePhase === "degraded"
+      ? "warn"
+      : "off";
+  const transportLabel = transport === "stream" ? "SSE" : transport === "polling" ? "Poll" : "";
+  const phaseLabel = runtimePhase === "recovering"
+    ? runtimeDiagnostics.isRetrying
+      ? "retrying"
+      : "recovering"
+    : runtimePhase === "degraded"
+      ? "delayed"
+      : runtimePhase === "offline"
+        ? "offline"
+        : "";
+  const retryDelayLabel = runtimeDiagnostics.retryInSeconds == null
+    ? ""
+    : runtimeDiagnostics.retryInSeconds >= 10
+      ? `${Math.round(runtimeDiagnostics.retryInSeconds)}s`
+      : `${runtimeDiagnostics.retryInSeconds.toFixed(1)}s`;
   const alertCount = liveAlerts.length;
-  const liveRelativeTime = useRelativeTime(liveState?.generated_at);
+  const freshestUpdateAt = heartbeatAt ?? liveState?.generated_at ?? null;
+  const liveRelativeTime = useRelativeTime(freshestUpdateAt);
   const liveProfit = liveState?.account?.profit ?? null;
 
   return (
@@ -287,7 +316,10 @@ function DeskChromeFrame({
                   <StatusDot status={mt5Status as "ok" | "warn" | "off"} />
                 )}
                 MT5
-                {transport === "stream" ? " | SSE" : transport === "polling" ? " | Poll" : ""}
+                {transportLabel ? ` | ${transportLabel}` : ""}
+                {phaseLabel ? ` | ${phaseLabel}` : ""}
+                {runtimeDiagnostics.isRetrying && retryDelayLabel ? ` | retry ${retryDelayLabel}` : ""}
+                {runtimeDiagnostics.failureCount > 0 ? ` | fail ${runtimeDiagnostics.failureCount}` : ""}
               </span>
               {liveProfit != null ? (
                 <span className={cn(
@@ -297,8 +329,8 @@ function DeskChromeFrame({
                   {liveProfit >= 0 ? "+" : ""}{liveProfit.toFixed(2)}
                 </span>
               ) : null}
-              {liveState?.generated_at ? (
-                <span className="mono text-[10px] tabular-nums" title={formatTimestamp(liveState.generated_at)}>
+              {freshestUpdateAt ? (
+                <span className="mono text-[10px] tabular-nums" title={formatTimestamp(freshestUpdateAt)}>
                   {liveRelativeTime}
                 </span>
               ) : null}

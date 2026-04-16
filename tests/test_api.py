@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from pathlib import Path
+import time
 
 import numpy as np
 import pandas as pd
@@ -129,6 +130,7 @@ def test_api_runs_snapshot_backtest_and_report(tmp_path: Path):
     assert root_discovery.status_code == 200
     assert root_discovery.json()["docs"] == "/docs"
     assert root_discovery.json()["health"] == "/health"
+    assert root_discovery.json()["readiness"] == "/health/readiness"
 
     health = client.get("/health")
     assert health.status_code == 200
@@ -137,6 +139,13 @@ def test_api_runs_snapshot_backtest_and_report(tmp_path: Path):
     dependencies = client.get("/health/dependencies")
     assert dependencies.status_code == 200
     assert "mt5_live" in dependencies.json()["dependencies"]
+    readiness = client.get("/health/readiness")
+    assert readiness.status_code == 200
+    readiness_body = readiness.json()
+    assert readiness_body["status"] in {"ready", "degraded", "not_ready"}
+    assert readiness_body["portfolio_slug"] == "fx_eur_20k"
+    assert "database" in readiness_body["checks"]
+    assert "mt5_live" in readiness_body["checks"]
 
     jobs_status = client.get("/jobs/status")
     assert jobs_status.status_code == 200
@@ -210,11 +219,20 @@ def test_api_runs_snapshot_backtest_and_report(tmp_path: Path):
     comparison_body = latest_comparison.json()
     assert comparison_body["champion_model"] in {"hist", "param", "mc", "ewma", "garch", "fhs"}
     assert comparison_body["ranking"]
+    first_ranking_row = comparison_body["ranking"][0]
+    assert "es_acerbi_status" in first_ranking_row
+    assert "es_acerbi_p_value" in first_ranking_row
+    assert "es_acerbi_observations" in first_ranking_row
 
     latest_attribution = client.get("/snapshots/attribution/latest", params={"source": "historical"})
     assert latest_attribution.status_code == 200
     attribution_body = latest_attribution.json()
     assert attribution_body["models"]["hist"]["positions"]["EURUSD"]["standalone_var"] >= 0.0
+    hist_attribution = attribution_body["models"]["hist"]
+    assert hist_attribution["concentration_var"] is not None
+    assert hist_attribution["concentration_var"]["hhi"] is not None
+    assert hist_attribution["concentration_var"]["top1_share"] is not None
+    assert hist_attribution["diversification_ratio_var"] is not None
 
     latest_budget = client.get("/snapshots/budget/latest", params={"source": "historical"})
     assert latest_budget.status_code == 200
@@ -574,6 +592,139 @@ def test_risk_summary_fallback_tolerates_empty_data_quality_snapshot(tmp_path: P
     assert payload["data_quality"]["minimum_valid_days"] >= 20
 
 
+def test_risk_summary_fallback_uses_snapshot_when_live_state_times_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path
+    _write_settings(root)
+    service = DeskApiService(root, mt5_connector_factory=FailingMT5Connector, bootstrap_storage=True)
+    portfolio_id = service.runtime._resolve_portfolio_id("fx_eur_20k")
+
+    service.runtime.storage.record_snapshot(
+        {
+            "time_utc": "2026-04-04T09:00:00+00:00",
+            "source": "historical",
+            "alpha": 0.95,
+            "timeframe": "H1",
+            "days": 60,
+            "window": 20,
+            "sample_size": 45,
+            "var": {"hist": 11.0},
+            "es": {"hist": 16.0},
+            "risk_surface": {},
+            "headline_risk": [],
+            "stress_surface": {},
+            "data_quality": {},
+            "model_diagnostics": {},
+            "risk_nowcast": {},
+            "microstructure": {},
+            "tick_quality": {},
+            "pnl_explain": {},
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+
+    def slow_live_state(*, portfolio_slug=None, detail_level="summary", force_refresh=False):
+        time.sleep(0.6)
+        return {"risk_summary": {"source": "mt5_live_bridge"}}
+
+    monkeypatch.setenv("VAR_PROJECT_API_LIVE_READ_TIMEOUT_MS", "100")
+    service.mt5.live_state = slow_live_state  # type: ignore[method-assign]
+
+    started = time.perf_counter()
+    payload = service.risk_summary()
+    elapsed = time.perf_counter() - started
+
+    assert payload is not None
+    assert payload["source"] == "historical"
+    assert elapsed < 0.45
+
+
+def test_latest_capital_fallback_when_live_state_times_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path
+    _write_settings(root)
+    service = DeskApiService(root, mt5_connector_factory=FailingMT5Connector, bootstrap_storage=True)
+    portfolio_id = service.runtime._resolve_portfolio_id("fx_eur_20k")
+
+    service.runtime.storage.record_capital_snapshot(
+        {
+            "portfolio_slug": "fx_eur_20k",
+            "reference_model": "hist",
+            "snapshot_timestamp": "2026-04-04T09:00:00+00:00",
+            "total_capital_budget_eur": 1_000.0,
+            "total_capital_consumed_eur": 400.0,
+            "total_capital_reserved_eur": 100.0,
+            "total_capital_remaining_eur": 500.0,
+            "headroom_ratio": 0.5,
+            "allocations": {
+                "EURUSD": {"target_capital_eur": 300.0},
+                "USDJPY": {"target_capital_eur": 300.0},
+            },
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+
+    def slow_live_state(*, portfolio_slug=None, detail_level="summary", force_refresh=False):
+        time.sleep(0.6)
+        return {"capital_usage": {"source": "mt5_live_bridge"}}
+
+    monkeypatch.setenv("VAR_PROJECT_API_LIVE_READ_TIMEOUT_MS", "100")
+    service.mt5.live_state = slow_live_state  # type: ignore[method-assign]
+
+    started = time.perf_counter()
+    payload = service.latest_capital(portfolio_slug="fx_eur_20k")
+    elapsed = time.perf_counter() - started
+
+    assert payload["portfolio_slug"] == "fx_eur_20k"
+    assert payload["source"] == "historical"
+    assert payload["total_capital_budget_eur"] >= payload["total_capital_consumed_eur"]
+    assert elapsed < 0.45
+
+
+def test_health_readiness_refresh_timeout_does_not_reuse_cached_ready_state(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    service = DeskApiService(root, mt5_connector_factory=FailingMT5Connector, bootstrap_storage=True)
+
+    def cached_ready_state(*, portfolio_slug=None, detail_level="summary"):
+        return {
+            "status": "ok",
+            "connected": True,
+            "degraded": False,
+            "stale": False,
+            "fallback_snapshot_used": False,
+            "generated_at": utcnow().isoformat(),
+        }
+
+    def slow_live_state(*, portfolio_slug=None, detail_level="summary", force_refresh=False):
+        time.sleep(0.6)
+        return {
+            "status": "ok",
+            "connected": True,
+            "degraded": False,
+            "stale": False,
+            "fallback_snapshot_used": False,
+            "generated_at": utcnow().isoformat(),
+        }
+
+    service.mt5.cached_live_state = cached_ready_state  # type: ignore[method-assign]
+    service.mt5.live_state = slow_live_state  # type: ignore[method-assign]
+
+    payload = service.health_readiness(refresh_live=True, max_wait_ms=100)
+    mt5_check = payload["checks"]["mt5_live"]
+
+    assert payload["status"] in {"degraded", "not_ready"}
+    assert mt5_check["status"] in {"degraded", "not_ready"}
+    assert mt5_check["value"]["timed_out"] is True
+    assert "Request timed out" in str(mt5_check["detail"])
+
+
 def test_api_exposes_mt5_market_sync_and_reconciliation(tmp_path: Path):
     root = tmp_path
     _write_settings(root, portfolio_mode="live_mt5")
@@ -772,12 +923,16 @@ def test_live_state_backfills_market_data_without_manual_sync(tmp_path: Path):
     risk_summary_body = risk_summary.json()
     assert risk_summary_body["headline_risk"]
     assert risk_summary_body["risk_nowcast"]["live_1d_99"]["nowcast_var"] is not None
+    assert risk_summary_body["concentration"] is not None
+    assert risk_summary_body["concentration"]["var"]["top3_share"] is not None
 
     risk_contributions = client.get("/risk/contributions")
     assert risk_contributions.status_code == 200
     risk_contributions_body = risk_contributions.json()
     assert risk_contributions_body["models"]
     assert risk_contributions_body["models"]["hist"]["asset_classes"]
+    assert risk_contributions_body["models"]["hist"]["concentration_es"] is not None
+    assert risk_contributions_body["models"]["hist"]["concentration_es"]["effective_count"] is not None
 
     instruments = client.get("/instruments")
     assert instruments.status_code == 200

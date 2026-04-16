@@ -1,6 +1,6 @@
 import type { OperatorAlertResponse } from "@/lib/api/types";
 import { StatusBadge } from "@/components/ui/primitives";
-import { dedupeOperatorAlerts } from "@/lib/alerts";
+import { alertPriorityCode, dedupeOperatorAlerts, isValidationGovernanceAlertCode } from "@/lib/alerts";
 import { humanizeIdentifier } from "@/lib/utils";
 
 function toneFromSeverity(severity: string) {
@@ -14,19 +14,45 @@ function toneFromSeverity(severity: string) {
   return "neutral" as const;
 }
 
-function priorityFromAlert(alert: OperatorAlertResponse): number {
-  const code = String(alert.code || "").toUpperCase();
-  if (code.includes("BROKER_REJECTION")) return 0;
-  if (code.includes("RECONCILIATION_INCOMPLETE")) return 1;
-  if (code.includes("WINDOW_EXPIRED")) return 2;
-  if (code.includes("PARTIAL_FILL")) return 3;
-  if (code.includes("MANUAL_TRADE") || code.includes("MANUAL_EVENTS")) return 4;
-  if (code.includes("DRIFT") || code.includes("ORPHAN")) return 5;
-  return 6;
-}
-
 function contextLabel(alert: OperatorAlertResponse): string | null {
   const context = alert.context ?? {};
+  const code = String(alert.code || "").toUpperCase();
+  if (code === "VALIDATION_GOVERNANCE_FAIL" || code === "VALIDATION_GOVERNANCE_WARN") {
+    if (typeof context.fail_count === "number") {
+      return `${context.fail_count} fail`;
+    }
+    if (typeof context.warn_count === "number") {
+      return `${context.warn_count} warn`;
+    }
+  }
+  if (code === "VALIDATION_SURFACE_COVERAGE_FAIL" && typeof context.coverage_fail_count === "number") {
+    return `${context.coverage_fail_count} coverage`;
+  }
+  if (code === "VALIDATION_SURFACE_CONDITIONAL_FAIL" && typeof context.conditional_fail_count === "number") {
+    return `${context.conditional_fail_count} conditional`;
+  }
+  if (code === "VALIDATION_SURFACE_INDEPENDENCE_FAIL" && typeof context.independence_fail_count === "number") {
+    return `${context.independence_fail_count} indep`;
+  }
+  if (
+    (code === "VALIDATION_ES_SHORTFALL_BREACH" || code === "VALIDATION_ES_SHORTFALL_WARN")
+    && typeof context.es_shortfall_ratio === "number"
+  ) {
+    return `ES ${(context.es_shortfall_ratio as number).toFixed(3)}`;
+  }
+  if (
+    (code === "VALIDATION_ES_BREACH_RATE_BREACH" || code === "VALIDATION_ES_BREACH_RATE_WARN")
+    && typeof context.es_breach_rate === "number"
+  ) {
+    return `ES ${(context.es_breach_rate as number * 100).toFixed(1)}%`;
+  }
+  if (
+    (code === "VALIDATION_HORIZON_FAIL" || code === "VALIDATION_HORIZON_WARN")
+    && typeof context.horizon_days === "number"
+  ) {
+    const verdict = typeof context.verdict === "string" ? context.verdict.toUpperCase() : null;
+    return verdict ? `${Math.round(context.horizon_days as number)}d ${verdict}` : `${Math.round(context.horizon_days as number)}d`;
+  }
   if (context.evidence_state === "empty_live_book") {
     return "broker empty";
   }
@@ -58,7 +84,7 @@ export function LiveOperatorAlerts({
   }
 
   const sortedAlerts = [...dedupedAlerts].sort((left, right) => {
-    const severityDelta = priorityFromAlert(left) - priorityFromAlert(right);
+    const severityDelta = alertPriorityCode(left.code) - alertPriorityCode(right.code);
     if (severityDelta !== 0) {
       return severityDelta;
     }
@@ -82,8 +108,9 @@ export function LiveOperatorAlerts({
       <div className="grid gap-2 xl:grid-cols-2">
         {sortedAlerts.map((alert) => {
           const context = alert.context ?? {};
-          const highlight = priorityFromAlert(alert) <= 4;
+          const highlight = alertPriorityCode(alert.code) <= 3;
           const contextText = contextLabel(alert);
+          const governanceLabel = isValidationGovernanceAlertCode(alert.code) ? "model validation" : null;
           return (
             <div
               key={`${alert.code}:${JSON.stringify(context)}`}
@@ -100,6 +127,7 @@ export function LiveOperatorAlerts({
                   </span>
                   <StatusBadge label={alert.severity} tone={toneFromSeverity(alert.severity)} />
                   {contextText ? <StatusBadge label={contextText} tone="neutral" /> : null}
+                  {governanceLabel ? <StatusBadge label={governanceLabel} tone="accent" /> : null}
                 </div>
                 <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
                   {alert.message}

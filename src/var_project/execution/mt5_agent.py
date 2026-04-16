@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
+import time
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -31,14 +32,51 @@ class MT5AgentRuntime:
             self._reset_locked()
 
     def execute(self, operation):
+        max_attempts = max(int(getattr(self.config, "reconnect_attempts", 2) or 2), 1)
+        backoff_seconds = max(float(getattr(self.config, "reconnect_backoff_seconds", 0.25) or 0.0), 0.0)
         with self._lock:
-            connector = self._ensure_connector_locked()
-            try:
-                return operation(connector)
-            except MT5ConnectionError:
-                self._reset_locked()
+            for attempt in range(max_attempts):
                 connector = self._ensure_connector_locked()
-                return operation(connector)
+                try:
+                    return operation(connector)
+                except MT5ConnectionError as exc:
+                    if not self._is_retryable_error(exc) or attempt >= max_attempts - 1:
+                        raise
+                    self._reset_locked()
+                    sleep_for = backoff_seconds * (2**attempt)
+                    if sleep_for > 0:
+                        time.sleep(sleep_for)
+
+    @staticmethod
+    def _is_retryable_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        retryable_markers = (
+            "ipc",
+            "connection",
+            "timeout",
+            "temporar",
+            "busy",
+            "network",
+            "broken pipe",
+            "econnreset",
+            "econnrefused",
+            "service unavailable",
+        )
+        non_retryable_markers = (
+            "invalid mt5 agent key",
+            "unknown symbol",
+            "timeframe inconnu",
+            "not configured",
+            "non-json response",
+            "http 400",
+            "http 401",
+            "http 403",
+            "http 404",
+            "http 422",
+        )
+        if any(marker in message for marker in non_retryable_markers):
+            return False
+        return any(marker in message for marker in retryable_markers)
 
     def _ensure_connector_locked(self):
         if self._connector is None:
@@ -84,6 +122,31 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
     app.state.mt5_config = mt5_config
     app.state.mt5_runtime = runtime
     app.state.mt5_live_bridge = live_bridge
+
+    def parse_utc_datetime(value: str, *, field_name: str) -> datetime:
+        text = str(value or "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail=f"Missing {field_name}.")
+        normalized = text.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid {field_name}.") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def normalize_datetime_range(
+        start: datetime,
+        end: datetime,
+        *,
+        minimum_seconds: float = 1.0,
+    ) -> tuple[datetime, datetime]:
+        if end > start:
+            return start, end
+        if start == end:
+            return start, start + timedelta(seconds=max(float(minimum_seconds), 0.001))
+        return end, start
 
     def authorize(x_mt5_agent_key: str | None = Header(default=None)) -> None:
         expected = app.state.mt5_config.agent_api_key
@@ -159,11 +222,10 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
         date_to: str = Query(...),
         _: None = Depends(authorize),
     ) -> list[dict[str, Any]]:
-        try:
-            start = datetime.fromisoformat(date_from)
-            end = datetime.fromisoformat(date_to)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid bar date range.") from exc
+        start = parse_utc_datetime(date_from, field_name="date_from")
+        end = parse_utc_datetime(date_to, field_name="date_to")
+        if end <= start:
+            raise HTTPException(status_code=400, detail="Invalid bar date range.")
         try:
             frame = app.state.mt5_runtime.execute(
                 lambda connector: connector.fetch_bars_range(
@@ -185,11 +247,9 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
         flags: int | None = Query(default=None),
         _: None = Depends(authorize),
     ) -> list[dict[str, Any]]:
-        try:
-            start = datetime.fromisoformat(date_from)
-            end = datetime.fromisoformat(date_to)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid tick date range.") from exc
+        start = parse_utc_datetime(date_from, field_name="date_from")
+        end = parse_utc_datetime(date_to, field_name="date_to")
+        start, end = normalize_datetime_range(start, end)
         try:
             frame = app.state.mt5_runtime.execute(
                 lambda connector: connector.fetch_ticks_range(
@@ -232,11 +292,10 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
         position: int | None = Query(default=None),
         _: None = Depends(authorize),
     ) -> list[dict[str, Any]]:
-        try:
-            start = datetime.fromisoformat(date_from)
-            end = datetime.fromisoformat(date_to)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid date range.") from exc
+        start = parse_utc_datetime(date_from, field_name="date_from")
+        end = parse_utc_datetime(date_to, field_name="date_to")
+        if end <= start:
+            raise HTTPException(status_code=400, detail="Invalid date range.")
         try:
             return app.state.mt5_runtime.execute(
                 lambda connector: connector.history_orders_get(
@@ -259,11 +318,10 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
         position: int | None = Query(default=None),
         _: None = Depends(authorize),
     ) -> list[dict[str, Any]]:
-        try:
-            start = datetime.fromisoformat(date_from)
-            end = datetime.fromisoformat(date_to)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid date range.") from exc
+        start = parse_utc_datetime(date_from, field_name="date_from")
+        end = parse_utc_datetime(date_to, field_name="date_to")
+        if end <= start:
+            raise HTTPException(status_code=400, detail="Invalid date range.")
         try:
             return app.state.mt5_runtime.execute(
                 lambda connector: connector.history_deals_get(

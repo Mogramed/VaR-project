@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Mapping, Sequence
@@ -7,6 +8,7 @@ from typing import Any, Dict, Iterable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from var_project.core.alpha_codec import encode_alpha_token
 from var_project.core.model_registry import ordered_model_names
 from var_project.engine.monte_carlo import mc_var_es
 from var_project.portfolio.holdings import (
@@ -17,9 +19,11 @@ from var_project.portfolio.holdings import (
 from var_project.portfolio.pnl import daily_from_intraday_pnl, portfolio_pnl_from_returns
 from var_project.risk.ewma import ewma_var_es
 from var_project.risk.expected_shortfall import RiskTail, historical_var_es, normal_parametric_var_es
-from var_project.risk.fhs import fhs_var_es
+from var_project.risk.fhs import FHS_MIN_WINDOW, fhs_var_es
 from var_project.risk.garch import garch_var_es
 from var_project.risk.stress import StressScenario, stress_report
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -164,7 +168,7 @@ class RiskSurfaceSnapshot:
         by_model: dict[str, dict[str, dict[str, Any]]] = {}
         for point in self.points:
             model_payload = by_model.setdefault(point.model, {})
-            alpha_key = f"a{int(round(point.alpha * 100))}"
+            alpha_key = f"a{encode_alpha_token(point.alpha)}"
             horizon_key = f"h{point.horizon_days}"
             model_payload.setdefault(alpha_key, {})[horizon_key] = {
                 "var": point.var,
@@ -388,19 +392,25 @@ class RiskEngine:
         )
         selected_models = set(requested_models)
         models: dict[str, ModelRiskResult] = {}
+        model_failures: dict[str, str] = {}
+
+        def _record_model_failure(model_name: str, exc: Exception) -> None:
+            message = f"{type(exc).__name__}: {exc}"
+            model_failures[model_name] = message
+            logger.warning("Risk model '%s' evaluation failed: %s", model_name, message, exc_info=True)
 
         if "hist" in selected_models:
             try:
                 hist = historical_var_es(pnl_series, config.alpha)
                 models["hist"] = ModelRiskResult("hist", hist.var, hist.es)
-            except Exception:
-                pass
+            except Exception as exc:
+                _record_model_failure("hist", exc)
         if "param" in selected_models:
             try:
                 param = normal_parametric_var_es(pnl_series, config.alpha)
                 models["param"] = ModelRiskResult("param", param.var, param.es)
-            except Exception:
-                pass
+            except Exception as exc:
+                _record_model_failure("param", exc)
         if "mc" in selected_models:
             try:
                 mc_var, mc_es = mc_var_es(
@@ -413,8 +423,8 @@ class RiskEngine:
                     seed=config.mc.seed,
                 )
                 models["mc"] = ModelRiskResult("mc", float(mc_var), float(mc_es))
-            except Exception:
-                pass
+            except Exception as exc:
+                _record_model_failure("mc", exc)
         if "ewma" in selected_models:
             try:
                 ewma_var, ewma_es = ewma_var_es(
@@ -424,8 +434,8 @@ class RiskEngine:
                     lam=config.ewma_lambda,
                 )
                 models["ewma"] = ModelRiskResult("ewma", float(ewma_var), float(ewma_es))
-            except Exception:
-                pass
+            except Exception as exc:
+                _record_model_failure("ewma", exc)
         if "garch" in selected_models and config.garch.enabled:
             try:
                 garch_tail = garch_var_es(
@@ -437,22 +447,43 @@ class RiskEngine:
                     mean=config.garch.mean,
                 )
                 models["garch"] = ModelRiskResult("garch", float(garch_tail.var), float(garch_tail.es))
-            except Exception:
-                pass
+            except Exception as exc:
+                _record_model_failure("garch", exc)
         if "fhs" in selected_models:
-            try:
-                fhs_var, fhs_es = fhs_var_es(
-                    pnl_train=pnl_series.to_numpy(dtype=float),
-                    alpha=config.alpha,
-                    lam=config.fhs_lambda,
+            sample_size = len(pnl_series)
+            if sample_size < FHS_MIN_WINDOW:
+                model_failures["fhs"] = (
+                    f"ValueError: fenetre trop courte pour FHS (obs={sample_size}, min={FHS_MIN_WINDOW})"
                 )
-                models["fhs"] = ModelRiskResult("fhs", float(fhs_var), float(fhs_es))
-            except Exception:
-                pass
+                logger.debug(
+                    "Risk model 'fhs' skipped: insufficient history (obs=%s, min=%s).",
+                    sample_size,
+                    FHS_MIN_WINDOW,
+                )
+            else:
+                try:
+                    fhs_var, fhs_es = fhs_var_es(
+                        pnl_train=pnl_series.to_numpy(dtype=float),
+                        alpha=config.alpha,
+                        lam=config.fhs_lambda,
+                    )
+                    models["fhs"] = ModelRiskResult("fhs", float(fhs_var), float(fhs_es))
+                except Exception as exc:
+                    _record_model_failure("fhs", exc)
 
         ordered_models = {name: models[name] for name in ordered_model_names(models.keys())}
         if not ordered_models:
-            raise RuntimeError("No risk model could be evaluated for the requested window.")
+            diagnostics = (
+                ", ".join(
+                    f"{model_name}={model_failures[model_name]}"
+                    for model_name in ordered_model_names(model_failures.keys())
+                )
+                if model_failures
+                else "no diagnostics"
+            )
+            raise RuntimeError(
+                f"No risk model could be evaluated for the requested window. Diagnostics: {diagnostics}"
+            )
         return RiskSnapshot(alpha=config.alpha, sample_size=len(pnl_series), models=ordered_models)
 
     def snapshot_from_returns(
@@ -1114,7 +1145,7 @@ class RiskEngine:
                 for alpha in selected_alphas:
                     alpha_config = replace(config, alpha=float(alpha))
                     snapshot = self.evaluate_models(aggregated_pnl, aggregated_returns, alpha_config)
-                    alpha_suffix = f"_a{int(round(alpha * 100))}_h{horizon_days}"
+                    alpha_suffix = f"_a{encode_alpha_token(alpha)}_h{horizon_days}"
 
                     for model_name, result in snapshot.models.items():
                         row[f"var_{model_name}{alpha_suffix}"] = result.var

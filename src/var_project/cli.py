@@ -62,6 +62,13 @@ def main() -> None:
     s = sub.add_parser("seed-demo")
     s.add_argument("--portfolio-slug", default=None)
 
+    s = sub.add_parser("demo-smoke")
+    s.add_argument("--base-url", default="http://127.0.0.1:8000")
+    s.add_argument("--portfolio-slug", default=None)
+    s.add_argument("--timeout-seconds", type=float, default=5.0)
+    s.add_argument("--max-wait-ms", type=int, default=1200)
+    s.add_argument("--strict", action="store_true")
+
     s = sub.add_parser("db")
     db_sub = s.add_subparsers(dest="db_cmd", required=True)
     s = db_sub.add_parser("upgrade")
@@ -119,6 +126,20 @@ def main() -> None:
             result["database_url"],
         )
         raise SystemExit(0)
+
+    if args.cmd == "demo-smoke":
+        from var_project.demo_smoke import format_demo_smoke_report, run_demo_smoke
+
+        result = run_demo_smoke(
+            base_url=str(args.base_url),
+            portfolio_slug=args.portfolio_slug,
+            timeout_seconds=float(args.timeout_seconds),
+            max_wait_ms=int(args.max_wait_ms),
+            strict=bool(args.strict),
+        )
+        for line in format_demo_smoke_report(result):
+            print(line)
+        raise SystemExit(0 if bool(result.get("ok", False)) else 1)
 
     if args.cmd == "db" and args.db_cmd == "upgrade":
         result = upgrade_database(root, revision=str(args.revision))

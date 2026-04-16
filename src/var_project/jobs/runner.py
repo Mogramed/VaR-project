@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
+from var_project.core.exceptions import MT5ConnectionError
 from var_project.core.settings import (
     get_data_defaults,
     get_mt5_config,
@@ -327,6 +328,47 @@ class JobRunner:
             return True
         return (time.time() - last) >= max(1, int(interval_seconds))
 
+    @staticmethod
+    def _extract_mt5_live_unavailable_detail(exc: Exception) -> str | None:
+        seen: set[int] = set()
+        pending: list[BaseException] = [exc]
+        while pending:
+            current = pending.pop()
+            identifier = id(current)
+            if identifier in seen:
+                continue
+            seen.add(identifier)
+            detail = str(current or "").strip()
+            if isinstance(current, MT5ConnectionError):
+                return detail or "MT5 connection is unavailable."
+            if detail.lower().startswith("mt5_live_unavailable"):
+                return detail
+            cause = getattr(current, "__cause__", None)
+            if cause is not None:
+                pending.append(cause)
+            context = getattr(current, "__context__", None)
+            if context is not None:
+                pending.append(context)
+        return None
+
+    def _build_mt5_unavailable_job_result(
+        self,
+        *,
+        job_name: str,
+        portfolio_slug: str | None,
+        exc: Exception,
+    ) -> dict[str, Any] | None:
+        detail = self._extract_mt5_live_unavailable_detail(exc)
+        if detail is None:
+            return None
+        return {
+            "status": "skipped",
+            "reason": "mt5_live_unavailable",
+            "job": str(job_name),
+            "portfolio_slug": None if portfolio_slug is None else str(portfolio_slug),
+            "detail": detail,
+        }
+
     def _run_job(self, job_name: str, job_cfg: ScheduledJob) -> dict[str, Any]:
         from var_project.api.service import DeskApiService
 
@@ -337,53 +379,85 @@ class JobRunner:
         )
         if job_name == "snapshot":
             portfolio = service.runtime._resolve_portfolio_context(None)
-            if (
-                str(portfolio.get("mode") or "").lower() in {"live_mt5", "hybrid"}
-                and service.runtime.market_data.should_use_mt5_market_data(portfolio)
-            ):
-                service.runtime.market_data.sync_market_data_if_stale(
-                    portfolio_slug=portfolio["slug"],
-                    max_age_seconds=300.0,
+            portfolio_slug = str(portfolio.get("slug") or "")
+            try:
+                if (
+                    str(portfolio.get("mode") or "").lower() in {"live_mt5", "hybrid"}
+                    and service.runtime.market_data.should_use_mt5_market_data(portfolio)
+                ):
+                    service.runtime.market_data.sync_market_data_if_stale(
+                        portfolio_slug=portfolio["slug"],
+                        max_age_seconds=300.0,
+                        days=job_cfg.days,
+                        timeframes=[job_cfg.timeframe] if job_cfg.timeframe else None,
+                    )
+                result = service.run_snapshot(
+                    timeframe=job_cfg.timeframe,
                     days=job_cfg.days,
-                    timeframes=[job_cfg.timeframe] if job_cfg.timeframe else None,
+                    min_coverage=job_cfg.min_coverage,
+                    alpha=job_cfg.alpha,
+                    window=job_cfg.window,
+                    n_sims=job_cfg.n_sims,
+                    dist=job_cfg.dist,
+                    df_t=job_cfg.df_t,
+                    seed=job_cfg.seed,
                 )
-            result = service.run_snapshot(
-                timeframe=job_cfg.timeframe,
-                days=job_cfg.days,
-                min_coverage=job_cfg.min_coverage,
-                alpha=job_cfg.alpha,
-                window=job_cfg.window,
-                n_sims=job_cfg.n_sims,
-                dist=job_cfg.dist,
-                df_t=job_cfg.df_t,
-                seed=job_cfg.seed,
-            )
+            except Exception as exc:
+                degraded = self._build_mt5_unavailable_job_result(
+                    job_name=job_name,
+                    portfolio_slug=portfolio_slug or None,
+                    exc=exc,
+                )
+                if degraded is None:
+                    raise
+                self.log.warning(
+                    "snapshot job skipped for %s: %s",
+                    portfolio_slug or "unknown",
+                    degraded["detail"],
+                )
+                return degraded
             self.log.info("snapshot job ok: %s", result["artifact_path"])
             return result
 
         if job_name == "backtest":
             portfolio = service.runtime._resolve_portfolio_context(None)
-            if (
-                str(portfolio.get("mode") or "").lower() in {"live_mt5", "hybrid"}
-                and service.runtime.market_data.should_use_mt5_market_data(portfolio)
-            ):
-                service.runtime.market_data.sync_market_data_if_stale(
-                    portfolio_slug=portfolio["slug"],
-                    max_age_seconds=300.0,
+            portfolio_slug = str(portfolio.get("slug") or "")
+            try:
+                if (
+                    str(portfolio.get("mode") or "").lower() in {"live_mt5", "hybrid"}
+                    and service.runtime.market_data.should_use_mt5_market_data(portfolio)
+                ):
+                    service.runtime.market_data.sync_market_data_if_stale(
+                        portfolio_slug=portfolio["slug"],
+                        max_age_seconds=300.0,
+                        days=job_cfg.days,
+                        timeframes=[job_cfg.timeframe] if job_cfg.timeframe else None,
+                    )
+                result = service.run_backtest(
+                    timeframe=job_cfg.timeframe,
                     days=job_cfg.days,
-                    timeframes=[job_cfg.timeframe] if job_cfg.timeframe else None,
+                    min_coverage=job_cfg.min_coverage,
+                    alpha=job_cfg.alpha,
+                    window=job_cfg.window,
+                    n_sims=job_cfg.n_sims,
+                    dist=job_cfg.dist,
+                    df_t=job_cfg.df_t,
+                    seed=job_cfg.seed,
                 )
-            result = service.run_backtest(
-                timeframe=job_cfg.timeframe,
-                days=job_cfg.days,
-                min_coverage=job_cfg.min_coverage,
-                alpha=job_cfg.alpha,
-                window=job_cfg.window,
-                n_sims=job_cfg.n_sims,
-                dist=job_cfg.dist,
-                df_t=job_cfg.df_t,
-                seed=job_cfg.seed,
-            )
+            except Exception as exc:
+                degraded = self._build_mt5_unavailable_job_result(
+                    job_name=job_name,
+                    portfolio_slug=portfolio_slug or None,
+                    exc=exc,
+                )
+                if degraded is None:
+                    raise
+                self.log.warning(
+                    "backtest job skipped for %s: %s",
+                    portfolio_slug or "unknown",
+                    degraded["detail"],
+                )
+                return degraded
             self.log.info("backtest job ok: %s", result["compare_csv"])
             return result
 

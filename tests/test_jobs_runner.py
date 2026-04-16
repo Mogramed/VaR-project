@@ -8,6 +8,7 @@ import yaml
 
 from test_mt5_execution_api import FakeMT5Connector
 
+from var_project.core.exceptions import MT5ConnectionError
 from var_project.jobs import JobRunner, build_worker_status
 
 
@@ -132,3 +133,56 @@ def test_job_runner_live_refresh_auto_generates_report(tmp_path: Path):
     assert "live_refresh" in status["jobs"]
     assert status["jobs"]["live_refresh"]["enabled"] is True
     assert status["jobs"]["live_refresh"]["state"] in {"pending", "due", "ok"}
+
+
+def test_job_runner_skips_snapshot_and_backtest_when_mt5_is_unreachable(tmp_path: Path, monkeypatch):
+    root = tmp_path
+    _write_settings(
+        root,
+        portfolio_mode="hybrid",
+        report_enabled=False,
+    )
+
+    class _UnavailableMarketData:
+        @staticmethod
+        def should_use_mt5_market_data(_portfolio):
+            return True
+
+        @staticmethod
+        def sync_market_data_if_stale(**_kwargs):
+            raise MT5ConnectionError("[Errno 101] Network is unreachable")
+
+    class _UnavailableRuntime:
+        def __init__(self):
+            self.market_data = _UnavailableMarketData()
+
+        @staticmethod
+        def _resolve_portfolio_context(_slug):
+            return {"slug": "fx_eur_20k", "mode": "hybrid"}
+
+    class _UnavailableDeskApiService:
+        def __init__(self, *_args, **_kwargs):
+            self.runtime = _UnavailableRuntime()
+
+        @staticmethod
+        def reap_stale_operator_runs(limit=50):
+            return []
+
+        @staticmethod
+        def operator_runs(limit=10, statuses=None):
+            return []
+
+    import var_project.api.service as service_module
+
+    monkeypatch.setattr(service_module, "DeskApiService", _UnavailableDeskApiService)
+
+    runner = JobRunner(root, bootstrap_storage=True)
+    results = runner.run_pending(force_all=True)
+
+    assert set(results) == {"snapshot", "backtest"}
+    assert results["snapshot"]["status"] == "skipped"
+    assert results["snapshot"]["reason"] == "mt5_live_unavailable"
+    assert "Network is unreachable" in results["snapshot"]["detail"]
+    assert results["backtest"]["status"] == "skipped"
+    assert results["backtest"]["reason"] == "mt5_live_unavailable"
+    assert "Network is unreachable" in results["backtest"]["detail"]

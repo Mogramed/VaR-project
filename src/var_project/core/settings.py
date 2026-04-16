@@ -199,6 +199,18 @@ def get_mt5_config(raw_cfg: Mapping[str, Any]) -> MT5Config:
         "VAR_PROJECT_MT5_LIVE_STALE_AFTER_SECONDS",
         mt5_cfg.get("live_stale_after_seconds"),
     )
+    reconnect_attempts = os.getenv(
+        "VAR_PROJECT_MT5_RECONNECT_ATTEMPTS",
+        mt5_cfg.get("reconnect_attempts"),
+    )
+    reconnect_backoff_seconds = os.getenv(
+        "VAR_PROJECT_MT5_RECONNECT_BACKOFF_SECONDS",
+        mt5_cfg.get("reconnect_backoff_seconds"),
+    )
+    live_error_backoff_max_seconds = os.getenv(
+        "VAR_PROJECT_MT5_LIVE_ERROR_BACKOFF_MAX_SECONDS",
+        mt5_cfg.get("live_error_backoff_max_seconds"),
+    )
 
     return MT5Config(
         login=None if login in {None, "", "null"} else int(login),
@@ -227,6 +239,13 @@ def get_mt5_config(raw_cfg: Mapping[str, Any]) -> MT5Config:
         live_stale_after_seconds=6.0
         if live_stale_after_seconds in {None, "", "null"}
         else float(live_stale_after_seconds),
+        reconnect_attempts=2 if reconnect_attempts in {None, "", "null"} else int(reconnect_attempts),
+        reconnect_backoff_seconds=0.25
+        if reconnect_backoff_seconds in {None, "", "null"}
+        else float(reconnect_backoff_seconds),
+        live_error_backoff_max_seconds=30.0
+        if live_error_backoff_max_seconds in {None, "", "null"}
+        else float(live_error_backoff_max_seconds),
     )
 
 

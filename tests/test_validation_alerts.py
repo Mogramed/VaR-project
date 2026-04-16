@@ -10,7 +10,13 @@ from var_project.alerts.engine import (
     alerts_from_risk_decision,
     alerts_from_validation_summary,
 )
-from var_project.validation.model_validation import validate_compare_frame
+from var_project.validation.model_validation import (
+    BacktestModelValidation,
+    ValidationSummary,
+    build_champion_challenger_summary,
+    validate_compare_frame,
+    validate_compare_surface,
+)
 
 
 def _compare_frame() -> pd.DataFrame:
@@ -35,6 +41,17 @@ def test_validation_summary_picks_best_model():
     assert summary.best_model == "param"
 
 
+def test_validation_summary_exposes_es_tail_diagnostics():
+    summary = validate_compare_frame(_compare_frame(), alpha=0.95)
+    hist = summary.model_results["hist"]
+
+    assert hist.es_tail_observations == 4
+    assert hist.es_shortfall_ratio is not None
+    assert hist.es_shortfall_ratio > 1.0
+    assert hist.es_breach_rate is not None
+    assert 0.0 <= hist.es_breach_rate <= 1.0
+
+
 def test_validation_summary_ignores_surface_suffixes():
     frame = _compare_frame().assign(
         var_hist_a95_h1=[10] * 10,
@@ -50,11 +67,529 @@ def test_validation_summary_ignores_surface_suffixes():
     assert set(summary.model_results) == {"hist", "param"}
 
 
+def test_validation_surface_supports_fractional_alpha_token_format():
+    frame = _compare_frame().assign(
+        var_hist_a97p5_h10=[17] * 10,
+        es_hist_a97p5_h10=[20] * 10,
+        exc_hist_a97p5_h10=[0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    )
+
+    surface = validate_compare_surface(frame, alphas=[0.975], horizons=[10])
+
+    assert surface["points"]
+    assert "a97p5_h10" in surface["current_metrics"]
+
+
+def test_validation_surface_reads_legacy_fractional_alpha_columns():
+    frame = _compare_frame().assign(
+        var_hist_a98_h10=[17] * 10,
+        es_hist_a98_h10=[20] * 10,
+        exc_hist_a98_h10=[0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    )
+
+    surface = validate_compare_surface(frame, alphas=[0.975], horizons=[10])
+
+    assert surface["points"]
+    assert "a97p5_h10" in surface["current_metrics"]
+
+
+def test_validation_surface_exposes_statistical_governance_summary():
+    frame = _compare_frame().assign(
+        var_hist_a95_h1=[10] * 10,
+        es_hist_a95_h1=[12] * 10,
+        exc_hist_a95_h1=[1, 0, 1, 0, 1, 0, 1, 0, 0, 0],
+        var_param_a95_h1=[14] * 10,
+        es_param_a95_h1=[16] * 10,
+        exc_param_a95_h1=[0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    )
+
+    surface = validate_compare_surface(frame, alphas=[0.95], horizons=[1])
+
+    assert surface["points"]
+    governance = surface.get("governance_summary")
+    assert isinstance(governance, dict)
+    assert governance["pvalue_threshold"] == 0.05
+    assert governance["total_points"] == len(surface["points"])
+    status_counts = governance["status_counts"]
+    assert status_counts["PASS"] + status_counts["WARN"] + status_counts["FAIL"] == len(surface["points"])
+    assert governance["coverage_fail_count"] >= 0
+    assert governance["independence_fail_count"] >= 0
+    assert governance["conditional_fail_count"] >= 0
+
+    first_point = surface["points"][0]
+    assert "coverage_pass" in first_point
+    assert "independence_pass" in first_point
+    assert "conditional_pass" in first_point
+    assert first_point["statistical_status"] in {"PASS", "WARN", "FAIL"}
+
+
+def test_validation_surface_exposes_horizon_governance_rollup():
+    frame = _compare_frame().assign(
+        var_hist_a95_h5=[11] * 10,
+        es_hist_a95_h5=[13] * 10,
+        exc_hist_a95_h5=[0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+        var_param_a95_h5=[14] * 10,
+        es_param_a95_h5=[16] * 10,
+        exc_param_a95_h5=[0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    )
+
+    surface = validate_compare_surface(frame, alphas=[0.95], horizons=[1, 5])
+
+    horizon_governance = surface.get("horizon_governance")
+    assert isinstance(horizon_governance, dict)
+    assert horizon_governance.get("horizon_order") == [1, 5]
+    assert horizon_governance.get("overall_verdict") in {"PASS", "WARN", "FAIL"}
+
+    horizons_payload = horizon_governance.get("horizons")
+    assert isinstance(horizons_payload, dict)
+    assert "h1" in horizons_payload
+    assert "h5" in horizons_payload
+
+    h1 = horizons_payload["h1"]
+    h5 = horizons_payload["h5"]
+    assert h1["horizon_days"] == 1
+    assert h5["horizon_days"] == 5
+    assert h1["verdict"] in {"PASS", "WARN", "FAIL"}
+    assert h5["verdict"] in {"PASS", "WARN", "FAIL"}
+    assert h1["champion_model"] in {"hist", "param"}
+    assert h5["champion_model"] in {"hist", "param"}
+
+
 def test_validation_alerts_flag_rejected_models():
     summary = validate_compare_frame(_compare_frame(), alpha=0.95)
     alerts = alerts_from_validation_summary(summary)
 
     assert any(alert.code == "KUPIEC_REJECTED" for alert in alerts)
+
+
+def test_validation_alerts_include_surface_governance_failures():
+    summary = ValidationSummary(
+        alpha=0.95,
+        expected_rate=0.05,
+        model_results={},
+        best_model=None,
+        surface={
+            "governance_summary": {
+                "pvalue_threshold": 0.05,
+                "total_points": 12,
+                "status_counts": {"PASS": 7, "WARN": 3, "FAIL": 2},
+                "coverage_fail_count": 2,
+                "independence_fail_count": 1,
+                "conditional_fail_count": 2,
+                "pass_rate": 7 / 12,
+            }
+        },
+    )
+
+    alerts = alerts_from_validation_summary(summary)
+    codes = {alert.code for alert in alerts}
+
+    assert "VALIDATION_GOVERNANCE_FAIL" in codes
+    assert "VALIDATION_SURFACE_COVERAGE_FAIL" in codes
+    assert "VALIDATION_SURFACE_CONDITIONAL_FAIL" in codes
+    assert "VALIDATION_SURFACE_INDEPENDENCE_FAIL" in codes
+
+
+def test_validation_alerts_include_surface_governance_warning_without_fail():
+    summary = ValidationSummary(
+        alpha=0.95,
+        expected_rate=0.05,
+        model_results={},
+        best_model=None,
+        surface={
+            "governance_summary": {
+                "pvalue_threshold": 0.05,
+                "total_points": 10,
+                "status_counts": {"PASS": 8, "WARN": 2, "FAIL": 0},
+                "coverage_fail_count": 0,
+                "independence_fail_count": 2,
+                "conditional_fail_count": 0,
+                "pass_rate": 0.8,
+            }
+        },
+    )
+
+    alerts = alerts_from_validation_summary(summary)
+    codes = {alert.code for alert in alerts}
+
+    assert "VALIDATION_GOVERNANCE_WARN" in codes
+    assert "VALIDATION_GOVERNANCE_FAIL" not in codes
+    assert "VALIDATION_SURFACE_INDEPENDENCE_FAIL" in codes
+    assert "VALIDATION_SURFACE_COVERAGE_FAIL" not in codes
+    assert "VALIDATION_SURFACE_CONDITIONAL_FAIL" not in codes
+
+
+def test_validation_alerts_include_horizon_governance_codes():
+    summary = ValidationSummary(
+        alpha=0.95,
+        expected_rate=0.05,
+        model_results={},
+        best_model=None,
+        surface={
+            "governance_summary": {
+                "pvalue_threshold": 0.05,
+                "total_points": 6,
+                "status_counts": {"PASS": 4, "WARN": 1, "FAIL": 1},
+                "coverage_fail_count": 1,
+                "independence_fail_count": 0,
+                "conditional_fail_count": 1,
+                "pass_rate": 4 / 6,
+            },
+            "horizon_governance": {
+                "horizon_order": [1, 5],
+                "overall_verdict": "FAIL",
+                "horizons": {
+                    "h1": {
+                        "horizon_days": 1,
+                        "total_points": 3,
+                        "status_counts": {"PASS": 2, "WARN": 0, "FAIL": 1},
+                        "coverage_fail_count": 1,
+                        "independence_fail_count": 0,
+                        "conditional_fail_count": 1,
+                        "pass_rate": 2 / 3,
+                        "verdict": "FAIL",
+                        "champion_model": "hist",
+                    },
+                    "h5": {
+                        "horizon_days": 5,
+                        "total_points": 3,
+                        "status_counts": {"PASS": 2, "WARN": 1, "FAIL": 0},
+                        "coverage_fail_count": 0,
+                        "independence_fail_count": 1,
+                        "conditional_fail_count": 0,
+                        "pass_rate": 2 / 3,
+                        "verdict": "WARN",
+                        "champion_model": "param",
+                    },
+                },
+            },
+        },
+    )
+
+    alerts = alerts_from_validation_summary(summary)
+    codes = {alert.code for alert in alerts}
+
+    assert "VALIDATION_HORIZON_FAIL" in codes
+    assert "VALIDATION_HORIZON_WARN" in codes
+    fail_alert = next(alert for alert in alerts if alert.code == "VALIDATION_HORIZON_FAIL")
+    warn_alert = next(alert for alert in alerts if alert.code == "VALIDATION_HORIZON_WARN")
+    assert fail_alert.context.get("horizon_days") == 1
+    assert warn_alert.context.get("horizon_days") == 5
+
+
+def test_validation_alerts_include_es_shortfall_and_breach_rate_signals():
+    summary = ValidationSummary(
+        alpha=0.99,
+        expected_rate=0.01,
+        model_results={
+            "hist": BacktestModelValidation(
+                model="hist",
+                n=250,
+                exceptions=7,
+                expected_rate=0.01,
+                actual_rate=7 / 250,
+                lr_uc=0.0,
+                p_uc=0.12,
+                lr_ind=0.0,
+                p_ind=0.22,
+                lr_cc=0.0,
+                p_cc=0.11,
+                exceptions_last_250=7,
+                traffic_light="YELLOW",
+                score=74.0,
+                es_tail_observations=12,
+                es_shortfall_ratio=1.32,
+                es_breach_rate=0.58,
+            ),
+            "param": BacktestModelValidation(
+                model="param",
+                n=250,
+                exceptions=4,
+                expected_rate=0.01,
+                actual_rate=4 / 250,
+                lr_uc=0.0,
+                p_uc=0.55,
+                lr_ind=0.0,
+                p_ind=0.65,
+                lr_cc=0.0,
+                p_cc=0.62,
+                exceptions_last_250=4,
+                traffic_light="GREEN",
+                score=88.0,
+                es_tail_observations=9,
+                es_shortfall_ratio=1.14,
+                es_breach_rate=0.41,
+            ),
+        },
+        best_model="param",
+    )
+
+    alerts = alerts_from_validation_summary(summary)
+    codes = {alert.code for alert in alerts}
+
+    assert "VALIDATION_ES_SHORTFALL_BREACH" in codes
+    assert "VALIDATION_ES_BREACH_RATE_BREACH" in codes
+    assert "VALIDATION_ES_SHORTFALL_WARN" in codes
+    assert "VALIDATION_ES_BREACH_RATE_WARN" in codes
+
+
+def test_validation_alerts_skip_es_signals_when_tail_sample_is_too_small():
+    summary = ValidationSummary(
+        alpha=0.99,
+        expected_rate=0.01,
+        model_results={
+            "hist": BacktestModelValidation(
+                model="hist",
+                n=250,
+                exceptions=2,
+                expected_rate=0.01,
+                actual_rate=2 / 250,
+                lr_uc=0.0,
+                p_uc=0.5,
+                lr_ind=0.0,
+                p_ind=0.5,
+                lr_cc=0.0,
+                p_cc=0.5,
+                exceptions_last_250=2,
+                traffic_light="GREEN",
+                score=92.0,
+                es_tail_observations=2,
+                es_shortfall_ratio=1.40,
+                es_breach_rate=0.75,
+            ),
+        },
+        best_model="hist",
+    )
+
+    alerts = alerts_from_validation_summary(summary)
+    codes = {alert.code for alert in alerts}
+
+    assert "VALIDATION_ES_SHORTFALL_BREACH" not in codes
+    assert "VALIDATION_ES_BREACH_RATE_BREACH" not in codes
+
+
+def test_validation_alerts_include_es_acerbi_signals():
+    summary = ValidationSummary(
+        alpha=0.99,
+        expected_rate=0.01,
+        model_results={
+            "hist": BacktestModelValidation(
+                model="hist",
+                n=500,
+                exceptions=12,
+                expected_rate=0.01,
+                actual_rate=12 / 500,
+                lr_uc=0.0,
+                p_uc=0.32,
+                lr_ind=0.0,
+                p_ind=0.28,
+                lr_cc=0.0,
+                p_cc=0.30,
+                exceptions_last_250=6,
+                traffic_light="YELLOW",
+                score=70.0,
+                es_tail_observations=12,
+                es_shortfall_ratio=1.08,
+                es_breach_rate=0.29,
+                es_acerbi_stat=2.95,
+                es_acerbi_p_value=0.0032,
+                es_acerbi_observations=320,
+            ),
+            "param": BacktestModelValidation(
+                model="param",
+                n=500,
+                exceptions=8,
+                expected_rate=0.01,
+                actual_rate=8 / 500,
+                lr_uc=0.0,
+                p_uc=0.61,
+                lr_ind=0.0,
+                p_ind=0.54,
+                lr_cc=0.0,
+                p_cc=0.58,
+                exceptions_last_250=4,
+                traffic_light="GREEN",
+                score=88.0,
+                es_tail_observations=8,
+                es_shortfall_ratio=1.04,
+                es_breach_rate=0.25,
+                es_acerbi_stat=1.98,
+                es_acerbi_p_value=0.047,
+                es_acerbi_observations=320,
+            ),
+        },
+        best_model="param",
+    )
+
+    alerts = alerts_from_validation_summary(summary)
+    codes = {alert.code for alert in alerts}
+
+    assert "VALIDATION_ES_ACERBI_BREACH" in codes
+    assert "VALIDATION_ES_ACERBI_WARN" in codes
+
+
+def test_validation_alerts_skip_es_acerbi_when_observations_are_too_small():
+    summary = ValidationSummary(
+        alpha=0.99,
+        expected_rate=0.01,
+        model_results={
+            "hist": BacktestModelValidation(
+                model="hist",
+                n=250,
+                exceptions=4,
+                expected_rate=0.01,
+                actual_rate=4 / 250,
+                lr_uc=0.0,
+                p_uc=0.5,
+                lr_ind=0.0,
+                p_ind=0.5,
+                lr_cc=0.0,
+                p_cc=0.5,
+                exceptions_last_250=4,
+                traffic_light="GREEN",
+                score=90.0,
+                es_tail_observations=6,
+                es_shortfall_ratio=1.02,
+                es_breach_rate=0.20,
+                es_acerbi_stat=3.10,
+                es_acerbi_p_value=0.002,
+                es_acerbi_observations=20,
+            ),
+        },
+        best_model="hist",
+    )
+
+    alerts = alerts_from_validation_summary(summary)
+    codes = {alert.code for alert in alerts}
+
+    assert "VALIDATION_ES_ACERBI_BREACH" not in codes
+    assert "VALIDATION_ES_ACERBI_WARN" not in codes
+
+
+def test_champion_ranking_downgrades_acerbi_failed_model():
+    summary = ValidationSummary(
+        alpha=0.99,
+        expected_rate=0.01,
+        model_results={
+            "hist": BacktestModelValidation(
+                model="hist",
+                n=500,
+                exceptions=7,
+                expected_rate=0.01,
+                actual_rate=7 / 500,
+                lr_uc=0.0,
+                p_uc=0.75,
+                lr_ind=0.0,
+                p_ind=0.72,
+                lr_cc=0.0,
+                p_cc=0.71,
+                exceptions_last_250=4,
+                traffic_light="GREEN",
+                score=95.0,
+                es_tail_observations=8,
+                es_shortfall_ratio=1.01,
+                es_breach_rate=0.11,
+                es_acerbi_stat=3.02,
+                es_acerbi_p_value=0.0025,
+                es_acerbi_observations=320,
+            ),
+            "param": BacktestModelValidation(
+                model="param",
+                n=500,
+                exceptions=9,
+                expected_rate=0.01,
+                actual_rate=9 / 500,
+                lr_uc=0.0,
+                p_uc=0.55,
+                lr_ind=0.0,
+                p_ind=0.61,
+                lr_cc=0.0,
+                p_cc=0.57,
+                exceptions_last_250=5,
+                traffic_light="GREEN",
+                score=90.0,
+                es_tail_observations=9,
+                es_shortfall_ratio=1.03,
+                es_breach_rate=0.15,
+                es_acerbi_stat=0.41,
+                es_acerbi_p_value=0.68,
+                es_acerbi_observations=320,
+            ),
+        },
+        best_model="hist",
+        champion_model_live="hist",
+    )
+
+    comparison = build_champion_challenger_summary(summary)
+
+    assert comparison.champion_model == "param"
+    assert comparison.challenger_model == "hist"
+    assert comparison.ranking[0].model == "param"
+    assert comparison.ranking[0].es_acerbi_status == "PASS"
+    assert comparison.ranking[1].es_acerbi_status == "FAIL"
+
+
+def test_champion_ranking_keeps_score_priority_when_acerbi_bucket_is_same():
+    summary = ValidationSummary(
+        alpha=0.99,
+        expected_rate=0.01,
+        model_results={
+            "hist": BacktestModelValidation(
+                model="hist",
+                n=500,
+                exceptions=6,
+                expected_rate=0.01,
+                actual_rate=6 / 500,
+                lr_uc=0.0,
+                p_uc=0.80,
+                lr_ind=0.0,
+                p_ind=0.74,
+                lr_cc=0.0,
+                p_cc=0.76,
+                exceptions_last_250=3,
+                traffic_light="GREEN",
+                score=96.0,
+                es_tail_observations=7,
+                es_shortfall_ratio=1.01,
+                es_breach_rate=0.10,
+                es_acerbi_stat=0.48,
+                es_acerbi_p_value=0.63,
+                es_acerbi_observations=320,
+            ),
+            "param": BacktestModelValidation(
+                model="param",
+                n=500,
+                exceptions=8,
+                expected_rate=0.01,
+                actual_rate=8 / 500,
+                lr_uc=0.0,
+                p_uc=0.61,
+                lr_ind=0.0,
+                p_ind=0.66,
+                lr_cc=0.0,
+                p_cc=0.62,
+                exceptions_last_250=4,
+                traffic_light="GREEN",
+                score=90.0,
+                es_tail_observations=8,
+                es_shortfall_ratio=1.03,
+                es_breach_rate=0.13,
+                es_acerbi_stat=0.72,
+                es_acerbi_p_value=0.47,
+                es_acerbi_observations=320,
+            ),
+        },
+        best_model="hist",
+        champion_model_live="param",
+    )
+
+    comparison = build_champion_challenger_summary(summary)
+
+    assert comparison.champion_model == "hist"
+    assert comparison.challenger_model == "param"
+    assert comparison.ranking[0].model == "hist"
+    assert comparison.ranking[0].es_acerbi_status == "PASS"
+    assert comparison.ranking[1].es_acerbi_status == "PASS"
 
 
 def test_live_snapshot_alerts_flag_limit_breaches():

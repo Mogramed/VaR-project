@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { OverviewLiveStripPanel } from "@/components/app-shell/overview-live-strip";
@@ -8,6 +8,10 @@ import { ChartSurface } from "@/components/charts/chart-surface";
 import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
 import { CHART_PALETTE, makeBarOption } from "@/lib/chart-options";
+import {
+  deskArtifactQueryKey,
+  deskArtifactQueryOptions,
+} from "@/components/app-shell/desk-artifact-query";
 import type { CapitalUsageSnapshotResponse, DeskSnapshotResponse } from "@/lib/api/types";
 import {
   formatCurrency,
@@ -44,27 +48,14 @@ export function OverviewLiveDashboard({
   snapshotCreatedAt: string | null;
   snapshotSource: string | null;
 }) {
-  const { liveState, transport, artifactVersion } = useDeskLive();
-  const [desk, setDesk] = useState<DeskSnapshotResponse | null>(initialDesk);
-  const liveCapitalTimestamp = liveState?.capital_usage?.snapshot_timestamp ?? null;
-
-  useEffect(() => {
-    startTransition(() => setDesk(initialDesk));
-  }, [initialDesk]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const next = await api.deskOverview(deskSlug);
-        if (!cancelled) startTransition(() => setDesk(next));
-      } catch { /* keep current */ }
-    };
-    void refresh();
-    return () => {
-      cancelled = true;
-    };
-  }, [artifactVersion, deskSlug, liveCapitalTimestamp]);
+  const { liveState, heartbeatAt, transport } = useDeskLive();
+  const deskQuery = useQuery({
+    queryKey: deskArtifactQueryKey("overview", deskSlug),
+    queryFn: () => api.deskOverview(deskSlug),
+    initialData: initialDesk,
+    ...deskArtifactQueryOptions,
+  });
+  const desk = deskQuery.data ?? initialDesk;
 
   const reconciliation = liveState?.reconciliation ?? null;
   const deskSeries = desk ? buildDeskConsumptionSeries(desk) : [];
@@ -132,6 +123,7 @@ export function OverviewLiveDashboard({
     <div className="space-y-4">
       <OverviewLiveStripPanel
         liveState={liveState}
+        heartbeatAt={heartbeatAt}
         transport={transport}
         initialCapital={initialCapital}
         fallbackSelectedModel={fallbackSelectedModel}

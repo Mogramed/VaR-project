@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
+import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
+import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { DealHistoryTable, ExecutionFillsTable, ExecutionHistoryTable, OrderHistoryTable, ReconciliationTable } from "@/components/data/risk-tables";
 import { FieldLabel, FieldSelect, FieldTextarea, FormError, FormSection, SubmitButton } from "@/components/forms/shared";
@@ -152,11 +154,11 @@ export function Mt5BlotterLiveSurface({
     <div className="desk-page space-y-4">
       <PageHeader eyebrow="Blotter" title="MT5 orders, deals, fills and reconciliation"
         aside={<>
-          <StatusBadge label={liveState?.status ?? "unknown"} tone={liveState?.status === "ok" ? "success" : "warning"} />
-          <StatusBadge label={transport} tone={transport === "stream" ? "success" : "warning"} />
+          <LiveRuntimeBadgeGroup liveState={liveState} transport={transport} />
           <ButtonLink href={`/desk/incidents?portfolio=${portfolioSlug}`} variant="secondary">Incidents</ButtonLink>
         </>}
       />
+      <LivePostureBanner liveState={liveState} transport={transport} />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         <MetricBlock label="Orders" value={String(orders.length)} hint={`${manual.orders} manual`} tone="accent" />

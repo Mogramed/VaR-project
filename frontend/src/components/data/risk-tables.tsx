@@ -15,7 +15,7 @@ function tone(v: string) {
   const s = v.toLowerCase();
   if (s.includes("reject") || s.includes("breach") || s.includes("critical") || s.includes("failed")) return "danger" as const;
   if (s.includes("reduce") || s.includes("warn") || s.includes("partial") || s.includes("manual") || s.includes("drift") || s.includes("hold")) return "warning" as const;
-  if (s.includes("accept") || s.includes("ok") || s.includes("stable") || s.includes("executed") || s.includes("connected")) return "success" as const;
+  if (s.includes("accept") || s.includes("ok") || s.includes("stable") || s.includes("executed") || s.includes("connected") || s.includes("pass")) return "success" as const;
   if (s.includes("champion")) return "accent" as const;
   return "neutral" as const;
 }
@@ -23,11 +23,43 @@ function tone(v: string) {
 export function ModelRankingTable({ rows }: { rows: ModelComparisonRow[] }) {
   const cols: ColumnDef<ModelComparisonRow>[] = [
     { accessorKey: "rank", header: "#" },
-    { accessorKey: "model", header: "Model", cell: ({ row }) => <span className="font-semibold text-[var(--color-text)]">{row.original.model.toUpperCase()}</span> },
-    { accessorKey: "score", header: "Score", cell: ({ row }) => <span className="mono text-[var(--color-text)]">{row.original.score.toFixed(1)}</span> },
+    {
+      accessorKey: "model",
+      header: "Model",
+      cell: ({ row }) => <span className="font-semibold text-[var(--color-text)]">{row.original.model.toUpperCase()}</span>,
+    },
+    {
+      accessorKey: "score",
+      header: "Score",
+      cell: ({ row }) => <span className="mono text-[var(--color-text)]">{row.original.score.toFixed(1)}</span>,
+    },
     { accessorKey: "actual_rate", header: "Rate", cell: ({ row }) => formatPercent(row.original.actual_rate) },
     { accessorKey: "exceptions", header: "Exc." },
-    { accessorKey: "traffic_light", header: "Signal", cell: ({ row }) => row.original.traffic_light ? <StatusBadge label={row.original.traffic_light} tone={tone(row.original.traffic_light)} /> : "—" },
+    {
+      accessorKey: "es_acerbi_status",
+      header: "ES",
+      cell: ({ row }) => {
+        const status = row.original.es_acerbi_status;
+        if (!status || status === "N/A") {
+          return "-";
+        }
+        return <StatusBadge label={status} tone={tone(status)} />;
+      },
+    },
+    {
+      accessorKey: "es_acerbi_p_value",
+      header: "ES p",
+      cell: ({ row }) => {
+        const pValue = row.original.es_acerbi_p_value;
+        return pValue == null ? "-" : <span className="mono">{pValue.toFixed(4)}</span>;
+      },
+    },
+    {
+      accessorKey: "traffic_light",
+      header: "Signal",
+      cell: ({ row }) =>
+        row.original.traffic_light ? <StatusBadge label={row.original.traffic_light} tone={tone(row.original.traffic_light)} /> : "-",
+    },
   ];
   return <DataGrid data={rows} columns={cols} maxHeight="28rem" />;
 }
@@ -207,3 +239,5 @@ function humanize(v: string | null | undefined) {
   if (!v) return "Unknown";
   return v.split("_").map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
 }
+
+

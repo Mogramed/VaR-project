@@ -795,6 +795,8 @@ class DeskMarketDataService:
                                 tick_date_from = started_at - timedelta(hours=(24 if market_closed else 6))
                             else:
                                 tick_date_from = latest_tick_at.to_pydatetime() - timedelta(minutes=5)
+                            if tick_date_from >= started_at:
+                                tick_date_from = started_at - timedelta(hours=(24 if market_closed else 6))
                             tick_frame = live.connector.fetch_ticks_range(
                                 str(symbol).upper(),
                                 tick_date_from,

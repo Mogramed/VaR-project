@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -83,6 +84,51 @@ def _fmt_number(value: Optional[float], decimals: int = 2) -> str:
         return f"{float(value):,.{decimals}f}"
     except Exception:
         return "n/a"
+
+
+def _fmt_percent(value: Optional[float], decimals: int = 1) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value) * 100.0:.{decimals}f}%"
+    except Exception:
+        return "n/a"
+
+
+def _as_float(value: object) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _as_int(value: object) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _validation_verdict(
+    *,
+    p_uc: object,
+    p_ind: object,
+    p_cc: object,
+    threshold: float,
+) -> str:
+    uc = _as_float(p_uc)
+    ind = _as_float(p_ind)
+    cc = _as_float(p_cc)
+    if uc is None and ind is None and cc is None:
+        return "N/A"
+    if (uc is not None and uc < threshold) or (cc is not None and cc < threshold):
+        return "FAIL"
+    if ind is not None and ind < threshold:
+        return "WARN"
+    return "PASS"
 
 
 def render_daily_markdown(
@@ -382,17 +428,196 @@ def render_daily_markdown(
     lines.append("")
 
     lines.append("## Model Validation")
-    lines.append("| Model | Score | Rate | Kupiec p | Ind p | CC p | Traffic light |")
-    lines.append("|---|---:|---:|---:|---:|---:|---|")
-    for model_name, result in validation.model_results.items():
-        traffic_light = result.traffic_light or "n/a"
-        lines.append(
-            f"| {model_name} | {result.score:.2f} | {result.actual_rate:.4f} "
-            f"| {result.p_uc:.4f} | {result.p_ind:.4f} | {result.p_cc:.4f} | {traffic_light} |"
+    validation_surface = dict(validation.surface or {})
+    governance = dict(validation_surface.get("governance_summary") or {})
+    horizon_governance = dict(validation_surface.get("horizon_governance") or {})
+    pvalue_threshold = _as_float(governance.get("pvalue_threshold"))
+    if pvalue_threshold is None:
+        pvalue_threshold = 0.05
+
+    ranked_validation = sorted(
+        list(validation.model_results.items()),
+        key=lambda item: (
+            -float(item[1].score),
+            abs(float(item[1].actual_rate) - float(item[1].expected_rate)),
+            int(item[1].exceptions),
+            str(item[0]).lower(),
+        ),
+    )
+    champion_name = (
+        str(validation.best_model).lower()
+        if validation.best_model
+        else (None if not ranked_validation else str(ranked_validation[0][0]).lower())
+    )
+    champion_entry = next(
+        (item for item in ranked_validation if str(item[0]).lower() == champion_name),
+        None,
+    )
+    if champion_entry is None and ranked_validation:
+        champion_entry = ranked_validation[0]
+
+    if champion_entry is not None:
+        _, champion_result = champion_entry
+        champion_model = str(champion_result.model).upper()
+        champion_traffic = str(champion_result.traffic_light or "n/a").upper()
+        champion_verdict = _validation_verdict(
+            p_uc=champion_result.p_uc,
+            p_ind=champion_result.p_ind,
+            p_cc=champion_result.p_cc,
+            threshold=float(pvalue_threshold),
         )
-    if validation.best_model:
+        lines.append(f"- Champion model: **{champion_model}**")
+        lines.append(
+            f"- Champion verdict: **{champion_verdict}** | "
+            f"Traffic light: **{champion_traffic}**"
+        )
+    lines.append(f"- Statistical threshold (p-value): **{_fmt_percent(pvalue_threshold, 1)}**")
+    lines.append("")
+    lines.append(
+        "| Model | Rank | Score | Exceptions | Rate (actual / expected) | "
+        "p(UC) | p(IND) | p(CC) | ES tail n | ES shortfall ratio | ES breach rate | "
+        "ES Acerbi n | ES Acerbi z | ES Acerbi p | Traffic light | Verdict |"
+    )
+    lines.append("|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|")
+    lines.append(
+        "_ES tail diagnostics are measured on VaR exceedance observations "
+        "(tail observations where portfolio loss is greater than VaR)._"
+    )
+    lines.append("")
+    for rank, (_, result) in enumerate(ranked_validation, start=1):
+        verdict = _validation_verdict(
+            p_uc=result.p_uc,
+            p_ind=result.p_ind,
+            p_cc=result.p_cc,
+            threshold=float(pvalue_threshold),
+        )
+        traffic_light = str(result.traffic_light or "n/a").upper()
+        actual_rate = _fmt_percent(_as_float(result.actual_rate), 2)
+        expected_rate = _fmt_percent(_as_float(result.expected_rate), 2)
+        lines.append(
+            f"| {str(result.model).upper()} | {rank} | {_fmt_number(result.score, 2)} | "
+            f"{result.exceptions}/{result.n} | {actual_rate} / {expected_rate} | "
+            f"{_fmt_number(_as_float(result.p_uc), 4)} | {_fmt_number(_as_float(result.p_ind), 4)} | "
+            f"{_fmt_number(_as_float(result.p_cc), 4)} | {int(result.es_tail_observations)} | "
+            f"{_fmt_number(_as_float(result.es_shortfall_ratio), 3)} | "
+            f"{_fmt_percent(_as_float(result.es_breach_rate), 2)} | "
+            f"{_as_int(getattr(result, 'es_acerbi_observations', 0))} | "
+            f"{_fmt_number(_as_float(getattr(result, 'es_acerbi_stat', None)), 3)} | "
+            f"{_fmt_number(_as_float(getattr(result, 'es_acerbi_p_value', None)), 4)} | "
+            f"{traffic_light} | {verdict} |"
+        )
+    if not ranked_validation:
+        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
+
+    if governance:
+        status_counts = {
+            str(key).upper(): _as_int(value)
+            for key, value in dict(governance.get("status_counts") or {}).items()
+        }
+        total_points = _as_int(governance.get("total_points"))
+        pass_count = _as_int(status_counts.get("PASS"))
+        warn_count = _as_int(status_counts.get("WARN"))
+        fail_count = _as_int(status_counts.get("FAIL"))
+        pass_rate = _as_float(governance.get("pass_rate"))
+        if pass_rate is None and total_points > 0:
+            pass_rate = float(pass_count / total_points)
+
+        coverage_fail_count = _as_int(governance.get("coverage_fail_count"))
+        independence_fail_count = _as_int(governance.get("independence_fail_count"))
+        conditional_fail_count = _as_int(governance.get("conditional_fail_count"))
+        traffic_counts = {
+            str(key).upper(): _as_int(value)
+            for key, value in dict(governance.get("traffic_lights") or {}).items()
+        }
+        champion_model_live = validation_surface.get("champion_model_live")
+        champion_model_reporting = validation_surface.get("champion_model_reporting")
+
         lines.append("")
-        lines.append(f"- Best model by score: **{validation.best_model}**")
+        lines.append("### Model Governance Surface")
+        lines.append(f"- Statistical threshold (p-value): **{_fmt_percent(pvalue_threshold, 1)}**")
+        if champion_model_live or champion_model_reporting:
+            lines.append(
+                f"- Surface champions (live/reporting): **"
+                f"{str(champion_model_live or 'n/a').upper()} / {str(champion_model_reporting or 'n/a').upper()}**"
+            )
+        lines.append(
+            f"- PASS/WARN/FAIL points: **{pass_count} / {warn_count} / {fail_count}** "
+            f"(total **{total_points}**)"
+        )
+        lines.append(f"- Statistical pass rate: **{_fmt_percent(pass_rate, 1)}**")
+        lines.append(
+            f"- Traffic lights G/Y/R: **{traffic_counts.get('GREEN', 0)} / "
+            f"{traffic_counts.get('YELLOW', 0)} / {traffic_counts.get('RED', 0)}**"
+        )
+        lines.append(
+            f"- Coverage fails: **{coverage_fail_count}** | "
+            f"Independence fails: **{independence_fail_count}** | "
+            f"Conditional fails: **{conditional_fail_count}**"
+        )
+    horizon_items = {
+        str(key): dict(value)
+        for key, value in dict(horizon_governance.get("horizons") or {}).items()
+        if isinstance(value, dict)
+    }
+    horizon_order_raw = horizon_governance.get("horizon_order") or []
+    horizon_order: list[int] = []
+    if isinstance(horizon_order_raw, list):
+        for item in horizon_order_raw:
+            try:
+                horizon_days = int(item)
+            except (TypeError, ValueError):
+                continue
+            if horizon_days > 0:
+                horizon_order.append(horizon_days)
+    if not horizon_order:
+        inferred_horizons: list[int] = []
+        for key in horizon_items.keys():
+            if not key.startswith("h"):
+                continue
+            try:
+                inferred_horizons.append(int(key[1:]))
+            except (TypeError, ValueError):
+                continue
+        horizon_order = sorted({int(item) for item in inferred_horizons if int(item) > 0})
+
+    if horizon_order and horizon_items:
+        lines.append("")
+        lines.append("### Multi-Horizon Validation")
+        overall_horizon_verdict = horizon_governance.get("overall_verdict")
+        if overall_horizon_verdict:
+            lines.append(
+                f"- Overall horizon verdict: **{str(overall_horizon_verdict).upper()}**"
+            )
+        lines.append(
+            "| Horizon | Champion | Verdict | Pass rate | PASS/WARN/FAIL | "
+            "Coverage fails | Independence fails | Conditional fails |"
+        )
+        lines.append("|---:|---|---|---:|---|---:|---:|---:|")
+        for horizon_days in horizon_order:
+            payload = horizon_items.get(f"h{int(horizon_days)}") or {}
+            status_counts = {
+                str(key).upper(): _as_int(value)
+                for key, value in dict(payload.get("status_counts") or {}).items()
+            }
+            pass_count = _as_int(status_counts.get("PASS"))
+            warn_count = _as_int(status_counts.get("WARN"))
+            fail_count = _as_int(status_counts.get("FAIL"))
+            total_points = _as_int(payload.get("total_points"))
+            if total_points <= 0:
+                total_points = pass_count + warn_count + fail_count
+            pass_rate = _as_float(payload.get("pass_rate"))
+            if pass_rate is None and total_points > 0:
+                pass_rate = float(pass_count / total_points)
+            lines.append(
+                f"| {int(horizon_days)}d | "
+                f"{str(payload.get('champion_model') or 'n/a').upper()} | "
+                f"{str(payload.get('verdict') or 'N/A').upper()} | "
+                f"{_fmt_percent(pass_rate, 1)} | "
+                f"{pass_count}/{warn_count}/{fail_count} | "
+                f"{_as_int(payload.get('coverage_fail_count'))} | "
+                f"{_as_int(payload.get('independence_fail_count'))} | "
+                f"{_as_int(payload.get('conditional_fail_count'))} |"
+            )
     lines.append("")
 
     combined_alerts = validation_alerts + snapshot_alerts

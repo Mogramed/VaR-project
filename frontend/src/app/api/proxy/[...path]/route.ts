@@ -132,11 +132,23 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
   const headers = new Headers();
   const contentType = request.headers.get("content-type");
   const accept = request.headers.get("accept");
+  const ifNoneMatch = request.headers.get("if-none-match");
+  const lastEventId = request.headers.get("last-event-id");
+  const cacheControlRequest = request.headers.get("cache-control");
   if (contentType && body !== undefined) {
     headers.set("Content-Type", contentType);
   }
   if (accept) {
     headers.set("Accept", accept);
+  }
+  if (ifNoneMatch) {
+    headers.set("If-None-Match", ifNoneMatch);
+  }
+  if (lastEventId) {
+    headers.set("Last-Event-ID", lastEventId);
+  }
+  if (cacheControlRequest) {
+    headers.set("Cache-Control", cacheControlRequest);
   }
   const requestId = request.headers.get("x-request-id");
   if (requestId) {
@@ -200,6 +212,20 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
   if (upstreamRunId) {
     responseHeaders.set("X-Operator-Run-ID", upstreamRunId);
   }
+  for (const headerName of [
+    "etag",
+    "x-live-sequence",
+    "x-live-detail-level",
+    "x-live-health-status",
+    "x-live-next-poll-seconds",
+    "last-modified",
+    "retry-after",
+  ]) {
+    const headerValue = response.headers.get(headerName);
+    if (headerValue) {
+      responseHeaders.set(headerName, headerValue);
+    }
+  }
   if (isEventStream) {
     responseHeaders.set("Cache-Control", "no-cache, no-transform");
     responseHeaders.set("Connection", "keep-alive");
@@ -207,6 +233,13 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
   }
 
   if (!isEventStream) {
+    if (response.status === 304) {
+      return new NextResponse(null, {
+        status: response.status,
+        headers: responseHeaders,
+      });
+    }
+
     const buffer = response.status === 204 ? null : await response.arrayBuffer();
     const text =
       buffer == null ? "" : new TextDecoder().decode(buffer);

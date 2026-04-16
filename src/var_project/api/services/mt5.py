@@ -12,11 +12,13 @@ from var_project.alerts.engine import (
     alerts_from_execution_result,
     alerts_from_live_operator_state,
     alerts_from_risk_budget,
+    alerts_from_validation_summary,
 )
 from var_project.api.services.runtime import DeskServiceRuntime
 from var_project.core.exceptions import MT5ConnectionError
 from var_project.execution.mt5_bridge import build_empty_live_state, collect_live_state_from_connector
 from var_project.execution.mt5_live import ExecutionPreview, ExecutionResult, MT5TerminalStatus
+from var_project.validation.model_validation import ValidationSummary
 
 
 class DeskMt5Service:
@@ -26,6 +28,7 @@ class DeskMt5Service:
     _shared_enriched_live_state_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
     _shared_live_analytics_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
     _shared_last_broker_analytics: dict[tuple[str, str], dict[str, Any]] = {}
+    _shared_last_good_live_state: dict[tuple[str, str], dict[str, Any]] = {}
     _shared_live_state_response_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
     _shared_last_execution_reconciliation_heal_at: dict[tuple[str, str], float] = {}
     _shared_reconciliation_match_streak: dict[tuple[str, str, str], int] = {}
@@ -49,9 +52,22 @@ class DeskMt5Service:
         configured = max(float(self.runtime.mt5_config.live_poll_seconds), 0.5)
         return min(max(configured * 0.75, 0.5), 2.0)
 
+    def _detail_cache_ttl_seconds(self, detail_level: str) -> float:
+        normalized = str(detail_level or "full").strip().lower()
+        if normalized == "summary":
+            return self._summary_cache_ttl_seconds()
+        configured = max(float(self.runtime.mt5_config.live_poll_seconds), 0.5)
+        if normalized == "inspector":
+            return min(max(configured * 0.20, 0.15), 0.50)
+        return min(max(configured * 0.35, 0.20), 1.00)
+
     def _analytics_fallback_ttl_seconds(self) -> float:
         configured = max(float(self.runtime.mt5_config.live_history_poll_seconds), 5.0)
         return min(max(configured * 12.0, 300.0), 1800.0)
+
+    def _last_good_live_state_ttl_seconds(self) -> float:
+        configured = max(float(self.runtime.mt5_config.live_history_poll_seconds), 5.0)
+        return min(max(configured * 20.0, 300.0), 3600.0)
 
     def _remember_last_broker_analytics(
         self,
@@ -84,6 +100,104 @@ class DeskMt5Service:
         if not payload:
             return None
         return deepcopy(payload)
+
+    def _remember_last_good_live_state(
+        self,
+        *,
+        portfolio_slug: str,
+        payload: Mapping[str, Any],
+    ) -> None:
+        scope_key = self._live_scope_key(portfolio_slug)
+        self._shared_last_good_live_state[scope_key] = {
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "payload": deepcopy(dict(payload)),
+        }
+
+    def _latest_good_live_state(
+        self,
+        *,
+        portfolio_slug: str,
+    ) -> dict[str, Any] | None:
+        scope_key = self._live_scope_key(portfolio_slug)
+        cached = self._shared_last_good_live_state.get(scope_key)
+        if cached is None:
+            return None
+        captured_at = self._to_utc_datetime(cached.get("captured_at"))
+        if captured_at is None:
+            return None
+        age_seconds = max((datetime.now(timezone.utc) - captured_at).total_seconds(), 0.0)
+        if age_seconds > self._last_good_live_state_ttl_seconds():
+            return None
+        payload = dict(cached.get("payload") or {})
+        if not payload:
+            return None
+        return deepcopy(payload)
+
+    def _overlay_dynamic_live_fields(
+        self,
+        *,
+        cached_state: Mapping[str, Any],
+        raw_state: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        merged = deepcopy(dict(cached_state))
+        dynamic_fields = (
+            "sequence",
+            "source",
+            "status",
+            "connected",
+            "degraded",
+            "stale",
+            "fallback_snapshot_used",
+            "generated_at",
+            "last_success_at",
+            "last_error",
+            "poll_interval_seconds",
+            "history_poll_interval_seconds",
+            "history_lookback_minutes",
+            "effective_history_lookback_minutes",
+            "market_closed",
+            "market_closed_reason",
+            "market_reference_timestamp",
+            "market_reference_source",
+            "bridge_consecutive_failures",
+            "bridge_next_poll_delay_seconds",
+            "bridge_last_error_at",
+            "bridge_capture_duration_ms",
+            "bridge_event_buffer_usage",
+            "bridge_event_buffer_capacity",
+            "bridge_last_event_kind",
+            "symbols",
+            "terminal_status",
+            "account",
+            "ticks",
+            "holdings",
+            "pending_orders",
+            "order_history",
+            "deal_history",
+        )
+        for field in dynamic_fields:
+            if field in raw_state:
+                merged[field] = deepcopy(raw_state.get(field))
+
+        analytics_generated_at = (
+            (dict(merged.get("risk_summary") or {}).get("generated_at"))
+            or merged.get("generated_at")
+        )
+        analytics_timestamp = self._to_utc_datetime(analytics_generated_at)
+        max_age_seconds = max(
+            60.0,
+            float(self.runtime.mt5_config.live_history_poll_seconds) * 3.0,
+        )
+        analytics_stale = True
+        if analytics_timestamp is not None:
+            analytics_stale = (
+                max((datetime.now(timezone.utc) - analytics_timestamp).total_seconds(), 0.0)
+                > max_age_seconds
+            )
+        merged["analytics_generated_at"] = analytics_generated_at
+        merged["analytics_stale"] = bool(analytics_stale)
+        merged["health"] = self._build_live_health(merged)
+        return merged
 
     def cached_live_state(
         self,
@@ -142,12 +256,14 @@ class DeskMt5Service:
             )
         )
         latest_sync_marker = self._latest_market_sync_marker(portfolio_slug)
+        latest_validation_marker = self._latest_validation_marker(portfolio_slug)
         return (
             *self._live_scope_key(portfolio_slug),
             json.dumps(
                 {
                     "holdings": holdings,
                     "latest_sync_marker": latest_sync_marker,
+                    "latest_validation_marker": latest_validation_marker,
                     "market_closed": bool(raw_state.get("market_closed", False)),
                     "market_reference_timestamp": raw_state.get("market_reference_timestamp"),
                 },
@@ -175,6 +291,19 @@ class DeskMt5Service:
         if latest_sync is None:
             return ""
         return str(latest_sync.get("synced_at") or latest_sync.get("updated_at") or "")
+
+    def _latest_validation_marker(self, portfolio_slug: str) -> str:
+        if not self.runtime.storage_ready:
+            return ""
+        latest_validation = self.runtime.storage.latest_validation_run(portfolio_slug=portfolio_slug)
+        if latest_validation is None:
+            return ""
+        return str(
+            latest_validation.get("updated_at")
+            or latest_validation.get("created_at")
+            or latest_validation.get("id")
+            or ""
+        )
 
     def _cached_enrich_live_state(
         self,
@@ -277,6 +406,7 @@ class DeskMt5Service:
         payload["connected"] = bool(payload.get("connected", True))
         payload["degraded"] = bool(payload.get("degraded", False))
         payload["stale"] = bool(payload.get("stale", False))
+        payload["fallback_snapshot_used"] = bool(payload.get("fallback_snapshot_used", False))
         payload["poll_interval_seconds"] = float(
             payload.get("poll_interval_seconds") or self.runtime.mt5_config.live_poll_seconds
         )
@@ -296,6 +426,29 @@ class DeskMt5Service:
         payload["generated_at"] = str(payload.get("generated_at") or datetime.now(timezone.utc).isoformat())
         payload["last_success_at"] = payload.get("last_success_at") or payload["generated_at"]
         payload["source"] = str(payload.get("source") or "mt5_agent_bridge")
+        payload["bridge_consecutive_failures"] = int(self._coerce_int(payload.get("bridge_consecutive_failures")) or 0)
+        payload["bridge_next_poll_delay_seconds"] = float(
+            self._coerce_float(payload.get("bridge_next_poll_delay_seconds"))
+            or payload["poll_interval_seconds"]
+        )
+        payload["bridge_last_error_at"] = payload.get("bridge_last_error_at")
+        payload["bridge_capture_duration_ms"] = self._coerce_float(payload.get("bridge_capture_duration_ms"))
+        event_buffer_capacity = int(
+            self._coerce_int(payload.get("bridge_event_buffer_capacity"))
+            or max(int(self.runtime.mt5_config.live_event_buffer_size), 10)
+        )
+        event_buffer_usage = int(self._coerce_int(payload.get("bridge_event_buffer_usage")) or 0)
+        payload["bridge_event_buffer_capacity"] = max(event_buffer_capacity, 1)
+        payload["bridge_event_buffer_usage"] = min(
+            max(event_buffer_usage, 0),
+            payload["bridge_event_buffer_capacity"],
+        )
+        payload["bridge_last_event_kind"] = (
+            None
+            if payload.get("bridge_last_event_kind") in {None, "", "null"}
+            else str(payload.get("bridge_last_event_kind"))
+        )
+        payload["health"] = dict(payload.get("health") or {})
         return payload
 
     def _check_startup_import(self, raw_state: dict[str, Any], *, portfolio_slug: str | None = None) -> None:
@@ -558,6 +711,7 @@ class DeskMt5Service:
         capital_usage = dict(bundle["capital"])
         capital_usage["snapshot_source"] = "mt5_live_bridge"
         capital_usage["snapshot_timestamp"] = snapshot_timestamp
+        validation_alerts = self._validation_governance_alerts(portfolio_slug=portfolio["slug"])
         return {
             "bundle": bundle,
             "risk_summary": {
@@ -586,8 +740,36 @@ class DeskMt5Service:
             "alerts": [
                 *[alert.to_dict() for alert in alerts_from_risk_budget(risk_budget)],
                 *[alert.to_dict() for alert in alerts_from_capital_snapshot(capital_usage)],
+                *validation_alerts,
             ],
         }
+
+    def _validation_governance_alerts(self, *, portfolio_slug: str) -> list[dict[str, Any]]:
+        if not self.runtime.storage_ready:
+            return []
+        latest_validation = self.runtime.storage.latest_validation_run(portfolio_slug=portfolio_slug)
+        if latest_validation is None:
+            return []
+        try:
+            summary = ValidationSummary.from_dict(
+                dict(latest_validation.get("summary") or latest_validation)
+            )
+        except Exception:
+            return []
+
+        validation_run_id = latest_validation.get("id")
+        payload: list[dict[str, Any]] = []
+        for alert in alerts_from_validation_summary(summary):
+            if not str(alert.code).startswith("VALIDATION_"):
+                continue
+            row = alert.to_dict()
+            context = dict(row.get("context") or {})
+            context.setdefault("portfolio_slug", portfolio_slug)
+            if validation_run_id is not None:
+                context.setdefault("validation_run_id", validation_run_id)
+            row["context"] = context
+            payload.append(row)
+        return payload
 
     def _dedupe_alerts(self, alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         deduped: list[dict[str, Any]] = []
@@ -622,6 +804,133 @@ class DeskMt5Service:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _is_retryable_live_error(value: Any) -> bool | None:
+        if value in {None, "", "null"}:
+            return None
+        message = str(value).lower()
+        non_retryable_markers = (
+            "invalid mt5 agent key",
+            "unknown symbol",
+            "timeframe inconnu",
+            "not configured",
+            "non-json response",
+            "http 400",
+            "http 401",
+            "http 403",
+            "http 404",
+            "http 422",
+        )
+        if any(marker in message for marker in non_retryable_markers):
+            return False
+        retryable_markers = (
+            "ipc",
+            "connection",
+            "timeout",
+            "temporar",
+            "busy",
+            "network",
+            "broken pipe",
+            "econnreset",
+            "econnrefused",
+            "service unavailable",
+            "unavailable",
+        )
+        return any(marker in message for marker in retryable_markers)
+
+    def _build_live_health(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        connected = bool(payload.get("connected", False))
+        degraded = bool(payload.get("degraded", False))
+        stale = bool(payload.get("stale", False))
+        market_closed = bool(payload.get("market_closed", False))
+        analytics_stale = bool(payload.get("analytics_stale", False))
+        fallback_snapshot_used = bool(payload.get("fallback_snapshot_used", False))
+        last_error = None if payload.get("last_error") in {None, "", "null"} else str(payload.get("last_error"))
+        truth_score = self._coerce_float(payload.get("truth_score"))
+        operational_truth = str(payload.get("operational_truth") or "").strip().lower() or None
+        tick_quality_status = str(dict(payload.get("tick_quality") or {}).get("status") or "").strip().lower() or None
+        nowcast_status = str(dict(payload.get("risk_nowcast") or {}).get("status") or "").strip().lower() or None
+        now = datetime.now(timezone.utc)
+        generated_at = self._to_utc_datetime(payload.get("generated_at"))
+        last_success_at = self._to_utc_datetime(payload.get("last_success_at"))
+        generated_age_seconds = (
+            None
+            if generated_at is None
+            else round(max((now - generated_at).total_seconds(), 0.0), 3)
+        )
+        last_success_age_seconds = (
+            None
+            if last_success_at is None
+            else round(max((now - last_success_at).total_seconds(), 0.0), 3)
+        )
+        error_retryable = self._is_retryable_live_error(last_error)
+        bridge_consecutive_failures = int(self._coerce_int(payload.get("bridge_consecutive_failures")) or 0)
+        bridge_next_poll_delay_seconds = self._coerce_float(payload.get("bridge_next_poll_delay_seconds"))
+        bridge_capture_duration_ms = self._coerce_float(payload.get("bridge_capture_duration_ms"))
+        bridge_event_buffer_usage = self._coerce_int(payload.get("bridge_event_buffer_usage"))
+        bridge_event_buffer_capacity = self._coerce_int(payload.get("bridge_event_buffer_capacity"))
+        bridge_event_buffer_fill_ratio = None
+        if (
+            bridge_event_buffer_usage is not None
+            and bridge_event_buffer_capacity is not None
+            and bridge_event_buffer_capacity > 0
+        ):
+            bridge_event_buffer_fill_ratio = round(
+                min(max(float(bridge_event_buffer_usage) / float(bridge_event_buffer_capacity), 0.0), 1.0),
+                4,
+            )
+
+        status = "healthy"
+        message = "Live bridge healthy."
+        quality_degraded = tick_quality_status in {"stale", "incomplete"}
+        if not connected:
+            status = "offline"
+            message = "Live bridge disconnected from MT5."
+        elif stale:
+            status = "stale"
+            message = "Live state is stale while waiting for fresh MT5 evidence."
+        elif market_closed:
+            status = "market_closed"
+            message = "Market is closed; live state is anchored to the latest known snapshot."
+        elif (
+            degraded
+            or analytics_stale
+            or quality_degraded
+            or nowcast_status == "degraded"
+            or bridge_consecutive_failures > 0
+        ):
+            status = "degraded"
+            message = "Live bridge connected but running in degraded mode."
+
+        if last_error and status in {"offline", "stale", "degraded"}:
+            message = f"{message} Last error: {last_error}"
+        if fallback_snapshot_used:
+            base_message = "Serving last known broker snapshot while MT5 is unavailable."
+            message = base_message if not last_error else f"{base_message} Last error: {last_error}"
+
+        return {
+            "status": status,
+            "message": message,
+            "connected": connected,
+            "degraded": degraded,
+            "stale": stale,
+            "market_closed": market_closed,
+            "analytics_stale": analytics_stale,
+            "fallback_snapshot_used": fallback_snapshot_used,
+            "generated_age_seconds": generated_age_seconds,
+            "last_success_age_seconds": last_success_age_seconds,
+            "tick_quality_status": tick_quality_status,
+            "nowcast_status": nowcast_status,
+            "operational_truth": operational_truth,
+            "truth_score": truth_score,
+            "error_retryable": error_retryable,
+            "last_error": last_error,
+            "bridge_consecutive_failures": bridge_consecutive_failures,
+            "bridge_next_poll_delay_seconds": bridge_next_poll_delay_seconds,
+            "bridge_capture_duration_ms": bridge_capture_duration_ms,
+            "bridge_event_buffer_fill_ratio": bridge_event_buffer_fill_ratio,
+        }
 
     def _build_quality_checks(self, payload: Mapping[str, Any]) -> tuple[list[dict[str, Any]], float | None]:
         checks: list[dict[str, Any]] = []
@@ -1454,6 +1763,8 @@ class DeskMt5Service:
         for key in list(self._shared_live_state_response_cache):
             if key[:2] == scope_key:
                 del self._shared_live_state_response_cache[key]
+        if scope_key in self._shared_last_good_live_state:
+            del self._shared_last_good_live_state[scope_key]
 
     def _reconciliation_heal_interval_seconds(self) -> float:
         configured = max(float(self.runtime.mt5_config.live_poll_seconds), 0.5)
@@ -1843,6 +2154,7 @@ class DeskMt5Service:
         enriched["analytics_generated_at"] = analytics_generated_at
         enriched["analytics_stale"] = bool(analytics_stale)
         enriched["operator_alerts"] = self._dedupe_alerts(operator_alerts)
+        enriched["health"] = self._build_live_health(enriched)
         return enriched
 
     def live_state(
@@ -1850,13 +2162,14 @@ class DeskMt5Service:
         *,
         portfolio_slug: str | None = None,
         detail_level: Literal["summary", "full", "inspector"] = "full",
+        force_refresh: bool = False,
     ) -> dict[str, Any]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
-        if detail_level == "summary":
-            cache_key = self._live_state_response_cache_key(
-                portfolio_slug=portfolio["slug"],
-                detail_level=detail_level,
-            )
+        cache_key = self._live_state_response_cache_key(
+            portfolio_slug=portfolio["slug"],
+            detail_level=detail_level,
+        )
+        if not force_refresh:
             cached = self._shared_live_state_response_cache.get(cache_key)
             if cached is not None and float(cached.get("expires_at") or 0.0) > time.monotonic():
                 return deepcopy(dict(cached.get("payload") or {}))
@@ -1876,28 +2189,66 @@ class DeskMt5Service:
                     )
                 )
         except Exception as exc:
-            raw_state = build_empty_live_state(
-                config=self.runtime.mt5_config,
-                seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
-                status="degraded",
-                connected=False,
-                degraded=True,
-                stale=True,
-                last_error=str(exc),
-            )
+            fallback_state = self._latest_good_live_state(portfolio_slug=portfolio["slug"])
+            if fallback_state is not None:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                raw_state = self._normalize_live_state(dict(fallback_state))
+                raw_state.update(
+                    {
+                        "status": "degraded",
+                        "connected": False,
+                        "degraded": True,
+                        "stale": True,
+                        "fallback_snapshot_used": True,
+                        "generated_at": now_iso,
+                        "last_error": str(exc),
+                        "bridge_last_error_at": now_iso,
+                        "bridge_last_event_kind": "connection_error_fallback",
+                        "bridge_consecutive_failures": max(
+                            int(raw_state.get("bridge_consecutive_failures") or 0),
+                            1,
+                        ),
+                    }
+                )
+                if raw_state.get("last_success_at") in {None, "", "null"}:
+                    raw_state["last_success_at"] = str(fallback_state.get("generated_at") or now_iso)
+            else:
+                raw_state = build_empty_live_state(
+                    config=self.runtime.mt5_config,
+                    seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
+                    status="degraded",
+                    connected=False,
+                    degraded=True,
+                    stale=True,
+                    last_error=str(exc),
+                )
         finally:
             connector.shutdown()
-        enriched = self._cached_enrich_live_state(raw_state, portfolio_slug=portfolio["slug"])
-        payload = self._apply_live_detail_level(enriched, detail_level=detail_level)
-        if detail_level == "summary":
-            cache_key = self._live_state_response_cache_key(
-                portfolio_slug=portfolio["slug"],
-                detail_level=detail_level,
+
+        cached_good_state = self._latest_good_live_state(portfolio_slug=portfolio["slug"])
+        can_use_fast_overlay = (
+            not force_refresh
+            and cached_good_state is not None
+        )
+
+        if can_use_fast_overlay and cached_good_state is not None:
+            enriched = self._overlay_dynamic_live_fields(
+                cached_state=cached_good_state,
+                raw_state=raw_state,
             )
-            self._shared_live_state_response_cache[cache_key] = {
-                "expires_at": time.monotonic() + self._summary_cache_ttl_seconds(),
-                "payload": deepcopy(payload),
-            }
+        else:
+            enriched = self._cached_enrich_live_state(raw_state, portfolio_slug=portfolio["slug"])
+
+        if bool(enriched.get("connected", False)) and not bool(enriched.get("stale", False)):
+            self._remember_last_good_live_state(
+                portfolio_slug=portfolio["slug"],
+                payload=enriched,
+            )
+        payload = self._apply_live_detail_level(enriched, detail_level=detail_level)
+        self._shared_live_state_response_cache[cache_key] = {
+            "expires_at": time.monotonic() + self._detail_cache_ttl_seconds(detail_level),
+            "payload": deepcopy(payload),
+        }
         return payload
 
     def live_events(
@@ -1932,21 +2283,47 @@ class DeskMt5Service:
                     }
                 ]
         except Exception as exc:
+            fallback_state = self._latest_good_live_state(portfolio_slug=portfolio["slug"])
+            if fallback_state is not None:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                degraded_state = self._normalize_live_state(dict(fallback_state))
+                degraded_state.update(
+                    {
+                        "status": "degraded",
+                        "connected": False,
+                        "degraded": True,
+                        "stale": True,
+                        "fallback_snapshot_used": True,
+                        "generated_at": now_iso,
+                        "last_error": str(exc),
+                        "bridge_last_error_at": now_iso,
+                        "bridge_last_event_kind": "connection_error_fallback",
+                        "bridge_consecutive_failures": max(
+                            int(degraded_state.get("bridge_consecutive_failures") or 0),
+                            1,
+                        ),
+                    }
+                )
+                if degraded_state.get("last_success_at") in {None, "", "null"}:
+                    degraded_state["last_success_at"] = str(fallback_state.get("generated_at") or now_iso)
+                error_state = degraded_state
+            else:
+                error_state = build_empty_live_state(
+                    config=self.runtime.mt5_config,
+                    seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
+                    status="degraded",
+                    connected=False,
+                    degraded=True,
+                    stale=True,
+                    last_error=str(exc),
+                )
             events = [
                 {
                     "sequence": int(after) + 1,
                     "kind": "connection_error",
                     "timestamp_utc": datetime.now(timezone.utc).isoformat(),
                     "change_summary": {},
-                    "state": build_empty_live_state(
-                        config=self.runtime.mt5_config,
-                        seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
-                        status="degraded",
-                        connected=False,
-                        degraded=True,
-                        stale=True,
-                        last_error=str(exc),
-                    ),
+                    "state": error_state,
                 }
             ]
         finally:

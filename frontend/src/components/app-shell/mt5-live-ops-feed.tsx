@@ -4,6 +4,9 @@ import { startTransition, useEffect, useState } from "react";
 
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
+import { deriveLiveRuntimeDiagnostics } from "@/components/app-shell/live-runtime-phase";
+import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
+import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { ChartSurface } from "@/components/charts/chart-surface";
 import {
@@ -114,9 +117,13 @@ function coerceNumber(value: unknown): number | null {
 }
 
 export function Mt5LiveOpsFeed() {
-  const { liveState, transport } = useDeskLive();
+  const { liveState, heartbeatAt, transport } = useDeskLive();
   const ls = liveState;
   const [analyticsPoints, setAnalyticsPoints] = useState<AnalyticsPoint[]>([]);
+  const analyticsRefreshMs = Math.max(
+    1_000,
+    Math.round((Number(ls?.poll_interval_seconds ?? 1) || 1) * 1_000),
+  );
 
   useEffect(() => {
     const activePortfolioSlug = ls?.portfolio_slug ?? undefined;
@@ -141,7 +148,7 @@ export function Mt5LiveOpsFeed() {
         if (!cancelled) {
           timer = window.setTimeout(() => {
             void loop();
-          }, 15000);
+          }, analyticsRefreshMs);
         }
       }
     };
@@ -151,7 +158,7 @@ export function Mt5LiveOpsFeed() {
       cancelled = true;
       if (timer != null) window.clearTimeout(timer);
     };
-  }, [ls?.portfolio_slug]);
+  }, [analyticsRefreshMs, ls?.portfolio_slug]);
 
   if (ls == null) {
     return (
@@ -169,13 +176,48 @@ export function Mt5LiveOpsFeed() {
   const pendingOrders = ls.pending_orders ?? [];
   const orderHistory = ls.order_history ?? [];
   const dealHistory = ls.deal_history ?? [];
+  const pollIntervalSeconds = Number(ls.poll_interval_seconds);
+  const pollHint = Number.isFinite(pollIntervalSeconds) && pollIntervalSeconds > 0
+    ? `Poll ${pollIntervalSeconds.toFixed(1)}s`
+    : "Poll n/a";
   const liveExposure = ls.exposure?.gross_exposure_base_ccy
-    ?? holdings.reduce((sum, item) => sum + Math.abs(item.signed_exposure_base_ccy), 0);
+    ?? holdings.reduce((sum, item) => {
+      const exposure = Number(item.signed_exposure_base_ccy);
+      return sum + (Number.isFinite(exposure) ? Math.abs(exposure) : 0);
+    }, 0);
   const marketReference = formatTimestampWithSource({
     source: reconciliation?.market_reference_source,
     timestamp: reconciliation?.market_reference_timestamp,
   });
   const analyticsAsOf = ls.analytics_generated_at ? formatTimestamp(ls.analytics_generated_at) : "n/a";
+  const runtimeDiagnostics = deriveLiveRuntimeDiagnostics(ls, transport);
+  const runtimePhase = runtimeDiagnostics.phase;
+  const bridgeLabel = runtimePhase === "live"
+    ? "Live"
+    : runtimePhase === "recovering"
+      ? runtimeDiagnostics.isRetrying
+        ? "Retrying"
+        : "Recovering"
+      : runtimePhase === "degraded"
+        ? "Delayed"
+        : runtimePhase === "offline"
+          ? "Offline"
+          : "Pending";
+  const bridgeTone = runtimePhase === "live"
+    ? "success"
+    : runtimePhase === "recovering"
+      ? "accent"
+      : runtimePhase === "degraded"
+        ? "warning"
+        : runtimePhase === "offline"
+          ? "danger"
+          : "neutral";
+  const retryDelayLabel = runtimeDiagnostics.retryInSeconds == null
+    ? null
+    : runtimeDiagnostics.retryInSeconds >= 10
+      ? `${Math.round(runtimeDiagnostics.retryInSeconds)}s`
+      : `${runtimeDiagnostics.retryInSeconds.toFixed(1)}s`;
+  const transportValue = transport === "stream" ? "Streaming" : transport === "polling" ? "Polling" : "Starting";
   const inspectorPayload = {
     exported_at: new Date().toISOString(),
     transport,
@@ -261,22 +303,18 @@ export function Mt5LiveOpsFeed() {
         eyebrow="MT5 Ops"
         title="Live telemetry from the MT5 bridge"
         aside={(
-          <>
-            <StatusBadge label={ls.status === "ok" ? "Live" : ls.status} tone={ls.status === "ok" ? "success" : "warning"} />
-            <StatusBadge label={transport === "stream" ? "SSE" : transport} tone={transport === "stream" ? "success" : "warning"} />
-          </>
+          <LiveRuntimeBadgeGroup
+            liveState={ls}
+            heartbeatAt={heartbeatAt}
+            transport={transport}
+            showFreshness
+          />
         )}
       />
-
-      {ls.last_error ? (
-        <div className="rounded-[var(--radius-md)] border border-[var(--color-amber)]/20 bg-[var(--color-amber-soft)] px-3 py-2 text-[11px] text-[var(--color-text-soft)]">
-          {ls.last_error}
-        </div>
-      ) : null}
-
+      <LivePostureBanner liveState={ls} transport={transport} />
       {reconciliation?.market_closed ? (
         <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-[11px] text-[var(--color-text-soft)]">
-          Market closed. Live analytics use the latest available reference: <span className="mono">{marketReference}</span>.
+          Reference market snapshot: <span className="mono">{marketReference}</span>.
         </div>
       ) : null}
 
@@ -285,14 +323,19 @@ export function Mt5LiveOpsFeed() {
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricBlock
           label="Bridge"
-          value={ls.connected ? "Connected" : "Degraded"}
-          hint={`Seq ${ls.sequence} | ${formatTimestamp(ls.generated_at)}`}
-          tone={ls.status === "ok" ? "success" : "warning"}
+          value={bridgeLabel}
+          hint={[
+            `Seq ${ls.sequence}`,
+            retryDelayLabel && runtimeDiagnostics.isRetrying ? `retry ${retryDelayLabel}` : null,
+            runtimeDiagnostics.failureCount > 0 ? `fail ${runtimeDiagnostics.failureCount}` : null,
+            formatTimestamp(ls.generated_at),
+          ].filter(Boolean).join(" | ")}
+          tone={bridgeTone}
         />
         <MetricBlock
           label="Transport"
-          value={transport === "stream" ? "Streaming" : transport === "polling" ? "Polling" : "Starting"}
-          hint={`Poll ${ls.poll_interval_seconds.toFixed(1)}s`}
+          value={transportValue}
+          hint={pollHint}
         />
         <MetricBlock label="Exposure" value={formatCurrency(liveExposure)} hint={`${holdings.length} positions`} tone="accent" />
         <MetricBlock

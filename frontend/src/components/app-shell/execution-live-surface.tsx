@@ -2,6 +2,8 @@
 
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
+import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
+import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { ExecutionFillsTable, ExecutionHistoryTable } from "@/components/data/risk-tables";
 import { ExecutionPanel } from "@/components/forms/execution-panel";
@@ -35,9 +37,10 @@ export function ExecutionLiveSurface({
       <PageHeader eyebrow="Execution" title="Pre-trade dry run with MT5 routing"
         aside={<>
           <StatusBadge label={status.ready ? "MT5 ready" : "Guarded"} tone={status.ready ? "success" : "warning"} />
-          <StatusBadge label={transport} tone={transport === "stream" ? "success" : "warning"} />
+          <LiveRuntimeBadgeGroup liveState={liveState} transport={transport} showBridge={false} />
         </>}
       />
+      <LivePostureBanner liveState={liveState} transport={transport} />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <MetricBlock label="Terminal" value={status.connected ? "Connected" : "Offline"} tone={status.connected ? "success" : "danger"} />

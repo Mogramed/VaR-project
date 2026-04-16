@@ -1,9 +1,11 @@
 "use client";
 
-import { startTransition, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
+import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
+import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { ChartSurface } from "@/components/charts/chart-surface";
 import { CapitalAllocationTable } from "@/components/data/risk-tables";
@@ -13,6 +15,10 @@ import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
 import { CHART_PALETTE, makeLineOption } from "@/lib/chart-options";
 import type { CapitalUsageSnapshotResponse } from "@/lib/api/types";
+import {
+  deskArtifactQueryKey,
+  deskArtifactQueryOptions,
+} from "@/components/app-shell/desk-artifact-query";
 import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
 import { buildCapitalHistorySeries, flattenCapitalAllocations } from "@/lib/view-models";
 
@@ -27,38 +33,26 @@ export function CapitalLiveSurface({
   initialCapital: CapitalUsageSnapshotResponse | null;
   initialHistory: CapitalUsageSnapshotResponse[];
 }) {
-  const { liveState, transport, artifactVersion } = useDeskLive();
-  const [capital, setCapital] = useState(initialCapital);
-  const [history, setHistory] = useState(initialHistory);
+  const { liveState, transport } = useDeskLive();
+  const queryClient = useQueryClient();
   const src = preferredSource(liveState);
-  const capitalSignal = liveState?.capital_usage?.snapshot_timestamp ?? null;
+  const capitalQueryKey = deskArtifactQueryKey("capital", "latest", portfolioSlug, src);
+  const historyQueryKey = deskArtifactQueryKey("capital", "history", portfolioSlug, 18, src);
+  const capitalQuery = useQuery({
+    queryKey: capitalQueryKey,
+    queryFn: () => api.latestCapital(portfolioSlug, src),
+    initialData: initialCapital,
+    ...deskArtifactQueryOptions,
+  });
+  const historyQuery = useQuery({
+    queryKey: historyQueryKey,
+    queryFn: () => api.capitalHistory(portfolioSlug, 18, src),
+    initialData: initialHistory,
+    ...deskArtifactQueryOptions,
+  });
 
-  useEffect(() => {
-    startTransition(() => {
-      setCapital(initialCapital);
-      setHistory(initialHistory);
-    });
-  }, [initialCapital, initialHistory]);
-
-  useEffect(() => {
-    const next = liveState?.capital_usage;
-    if (next) startTransition(() => setCapital(next));
-  }, [liveState?.capital_usage]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const nextHistory = await api.capitalHistory(portfolioSlug, 18, src);
-        if (!cancelled) startTransition(() => setHistory(nextHistory));
-      } catch {
-        // Keep current data.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [artifactVersion, capitalSignal, src, portfolioSlug]);
-
-  const resolved = liveState?.capital_usage ?? capital;
+  const resolved = liveState?.capital_usage ?? capitalQuery.data ?? initialCapital;
+  const history = historyQuery.data ?? initialHistory;
   const allocations = resolved ? flattenCapitalAllocations(resolved) : [];
   const capitalSeries = buildCapitalHistorySeries(history);
 
@@ -70,10 +64,11 @@ export function CapitalLiveSurface({
         aside={(
           <>
             {resolved ? <StatusBadge label={resolved.status} tone="accent" /> : null}
-            <StatusBadge label={transport} tone={transport === "stream" ? "success" : "warning"} />
+            <LiveRuntimeBadgeGroup liveState={liveState} transport={transport} showBridge={false} />
           </>
         )}
       />
+      <LivePostureBanner liveState={liveState} transport={transport} />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <MetricBlock label="Budget" value={resolved ? formatCurrency(resolved.total_capital_budget_eur) : "n/a"} />
@@ -132,10 +127,13 @@ export function CapitalLiveSurface({
           <CapitalRebalancePanel
             portfolioSlug={resolved.portfolio_slug}
             referenceModel={resolved.reference_model}
-            onRebalanced={(result) => startTransition(() => {
-              setCapital(result);
-              setHistory((current) => [result, ...current].slice(0, 18));
-            })}
+            onRebalanced={(result) => {
+              queryClient.setQueryData<CapitalUsageSnapshotResponse | null>(capitalQueryKey, result);
+              queryClient.setQueryData<CapitalUsageSnapshotResponse[]>(
+                historyQueryKey,
+                (current) => [result, ...(current ?? [])].slice(0, 18),
+              );
+            }}
           />
         ) : null}
       </div>
