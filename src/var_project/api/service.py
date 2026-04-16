@@ -513,8 +513,15 @@ class DeskApiService:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         normalized_source = str(source or "auto").strip().lower()
         live_source_requested = normalized_source in {"", "auto", "mt5_live_bridge", "mt5_live"}
+        # Only live/hybrid portfolios should consume MT5 live-state fast paths for capital.
+        # Offline portfolios must remain deterministic and use the historical read path.
         live_state = self._safe_live_state_summary(portfolio_slug=portfolio["slug"])
-        if live_source_requested and live_state is not None and live_state.get("capital_usage") is not None:
+        if (
+            self.runtime.is_live_portfolio(portfolio)
+            and live_source_requested
+            and live_state is not None
+            and live_state.get("capital_usage") is not None
+        ):
             capital_usage = dict(live_state["capital_usage"])
             if normalized_source in {"", "auto"}:
                 return capital_usage
