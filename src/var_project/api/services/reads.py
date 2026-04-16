@@ -17,6 +17,13 @@ class DeskReadService:
         self.runtime = runtime
 
     @staticmethod
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    @staticmethod
     def _expected_portfolio_symbols(portfolio: dict[str, Any]) -> set[str]:
         symbols = set()
         for symbol in list(portfolio.get("symbols") or []):
@@ -40,28 +47,57 @@ class DeskReadService:
         return normalized
 
     @classmethod
-    def _normalize_capital_snapshot(cls, payload: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_capital_snapshot(
+        cls,
+        payload: dict[str, Any],
+        *,
+        expected_symbols: set[str] | None = None,
+    ) -> dict[str, Any]:
         normalized = dict(payload)
 
         allocations = cls._normalize_symbol_keyed_map(normalized.get("allocations"))
-        if allocations:
-            normalized["allocations"] = allocations
+        normalized["allocations"] = allocations
 
         budget = dict(normalized.get("budget") or {})
         symbol_budgets_raw = budget.get("symbol_budgets")
+        symbol_budgets: dict[str, float] = {}
         if isinstance(symbol_budgets_raw, dict):
-            symbol_budgets: dict[str, float] = {}
             for raw_symbol, raw_amount in symbol_budgets_raw.items():
                 symbol = str(raw_symbol or "").upper().strip()
                 if not symbol:
                     continue
-                try:
-                    symbol_budgets[symbol] = float(raw_amount)
-                except (TypeError, ValueError):
+                symbol_budgets[symbol] = cls._safe_float(raw_amount, default=0.0)
+        expected = {str(symbol or "").upper().strip() for symbol in (expected_symbols or set())}
+        expected.discard("")
+        if expected:
+            denominator = float(
+                sum(max(symbol_budgets.get(symbol, 0.0), 0.0) for symbol in expected)
+            )
+            for symbol in sorted(expected):
+                if symbol in allocations:
                     continue
-            if symbol_budgets:
-                budget["symbol_budgets"] = symbol_budgets
-                normalized["budget"] = budget
+                target_capital = cls._safe_float(symbol_budgets.get(symbol, 0.0), default=0.0)
+                if denominator > 0.0:
+                    weight = float(max(target_capital, 0.0) / denominator)
+                else:
+                    weight = float(1.0 / max(len(expected), 1))
+                allocations[symbol] = {
+                    "symbol": symbol,
+                    "weight": weight,
+                    "target_capital_eur": target_capital,
+                    "consumed_capital_eur": 0.0,
+                    "reserved_capital_eur": 0.0,
+                    "remaining_capital_eur": target_capital,
+                    "utilization": 0.0 if target_capital > 0.0 else None,
+                    "action": "HOLD",
+                    "status": "OK",
+                }
+            for symbol in expected:
+                symbol_budgets.setdefault(symbol, 0.0)
+        if symbol_budgets:
+            budget["symbol_budgets"] = symbol_budgets
+        if budget:
+            normalized["budget"] = budget
         return normalized
 
     @classmethod
@@ -308,7 +344,10 @@ class DeskReadService:
                 else None
             )
             if capital is not None:
-                normalized = self._normalize_capital_snapshot(dict(capital))
+                normalized = self._normalize_capital_snapshot(
+                    dict(capital),
+                    expected_symbols=expected_symbols,
+                )
                 if self._capital_snapshot_has_expected_symbols(normalized, expected_symbols=expected_symbols):
                     return normalized
                 # Snapshot appears partially malformed (for example stale lowercase/missing symbol keys).
@@ -317,7 +356,10 @@ class DeskReadService:
         if self.runtime.strict_live_required(portfolio):
             raise self.runtime.strict_live_unavailable_error(portfolio=portfolio)
         bundle = self.runtime._compute_portfolio_state(portfolio_slug=portfolio["slug"])
-        return self._normalize_capital_snapshot(dict(bundle["capital"]))
+        return self._normalize_capital_snapshot(
+            dict(bundle["capital"]),
+            expected_symbols=expected_symbols,
+        )
 
     def capital_history(
         self,

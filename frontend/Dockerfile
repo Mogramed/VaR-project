@@ -21,6 +21,8 @@ FROM base AS quality
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+RUN mkdir -p /app/public
+
 RUN npm run typecheck
 RUN npm run lint
 RUN npm run build
