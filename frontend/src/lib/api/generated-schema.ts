@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** API entrypoint */
+        get: operations["health_root"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -13,6 +30,40 @@ export interface paths {
         };
         /** Health */
         get: operations["health_health"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/health/dependencies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Health Dependencies */
+        get: operations["health_health_dependencies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/health/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Health Readiness */
+        get: operations["health_health_readiness"];
         put?: never;
         post?: never;
         delete?: never;
@@ -283,7 +334,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Latest Stress Test */
+        get: operations["analytics_latest_stress_test"];
         put?: never;
         /** Run Stress Test */
         post: operations["analytics_run_stress_test"];
@@ -455,6 +507,23 @@ export interface paths {
         };
         /** Mt5 Live State */
         get: operations["mt5_mt5_live_state"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mt5/analytics/series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Mt5 Analytics Series */
+        get: operations["mt5_mt5_analytics_series"];
         put?: never;
         post?: never;
         delete?: never;
@@ -642,6 +711,23 @@ export interface paths {
         };
         /** Recent Alerts */
         get: operations["trading_recent_alerts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alerts/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Active Alerts */
+        get: operations["trading_active_alerts"];
         put?: never;
         post?: never;
         delete?: never;
@@ -854,6 +940,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/reports/charts/{chart_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Latest Report Chart */
+        get: operations["reports_latest_report_chart"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/reports/decision-history": {
         parameters: {
             query?: never;
@@ -888,6 +991,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/operator/actions/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Enqueue Sync */
+        post: operations["operator_enqueue_sync"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/operator/actions/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Enqueue Snapshot */
+        post: operations["operator_enqueue_snapshot"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/operator/actions/backtest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Enqueue Backtest */
+        post: operations["operator_enqueue_backtest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/operator/actions/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Enqueue Report */
+        post: operations["operator_enqueue_report"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/operator/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Operator Run */
+        get: operations["operator_operator_run"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/operator/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Operator Runs */
+        get: operations["operator_operator_runs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -902,6 +1107,8 @@ export interface components {
             snapshot_id?: number | null;
             /** Validation Run Id */
             validation_run_id?: number | null;
+            /** Is Active */
+            is_active?: boolean | null;
             /** Source */
             source: string;
             /** Severity */
@@ -992,6 +1199,13 @@ export interface components {
             exception_counts: {
                 [key: string]: number;
             };
+            /** Source */
+            source?: string | null;
+            /**
+             * Flat Book
+             * @default false
+             */
+            flat_book: boolean;
         };
         /** BacktestRunSummary */
         BacktestRunSummary: {
@@ -1463,6 +1677,53 @@ export interface components {
             /** Scenario Name */
             scenario_name?: string | null;
         };
+        /** HealthDependenciesResponse */
+        HealthDependenciesResponse: {
+            /** Status */
+            status: string;
+            /** Generated At */
+            generated_at: string;
+            /** Portfolio Slug */
+            portfolio_slug: string;
+            /** Dependencies */
+            dependencies?: {
+                [key: string]: unknown;
+            };
+        };
+        /** HealthReadinessCheckResponse */
+        HealthReadinessCheckResponse: {
+            /** Status */
+            status: string;
+            /** Required */
+            required: boolean;
+            /** Detail */
+            detail?: string | null;
+            /** Value */
+            value?: {
+                [key: string]: unknown;
+            };
+        };
+        /** HealthReadinessResponse */
+        HealthReadinessResponse: {
+            /** Status */
+            status: string;
+            /** Generated At */
+            generated_at: string;
+            /** Portfolio Slug */
+            portfolio_slug: string;
+            /** Portfolio Mode */
+            portfolio_mode?: string | null;
+            /** Strict Live Required */
+            strict_live_required: boolean;
+            /** Summary */
+            summary: string;
+            /** Checks */
+            checks?: {
+                [key: string]: components["schemas"]["HealthReadinessCheckResponse"];
+            };
+            /** Recommendations */
+            recommendations?: string[];
+        };
         /** HealthResponse */
         HealthResponse: {
             /** Status */
@@ -1641,6 +1902,7 @@ export interface components {
             model_diagnostics?: {
                 [key: string]: unknown;
             };
+            concentration?: components["schemas"]["RiskSummaryConcentrationResponse"] | null;
             /** Risk Nowcast */
             risk_nowcast?: {
                 [key: string]: unknown;
@@ -1691,6 +1953,45 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** MT5AnalyticsSeriesPointResponse */
+        MT5AnalyticsSeriesPointResponse: {
+            /** Timestamp */
+            timestamp: string;
+            /** Balance */
+            balance?: number | null;
+            /** Equity */
+            equity?: number | null;
+            /** Margin Free */
+            margin_free?: number | null;
+            /** Margin Level */
+            margin_level?: number | null;
+            /** Profit */
+            profit?: number | null;
+            /** Avg Spread Bps */
+            avg_spread_bps?: number | null;
+            /** Tick Age Seconds */
+            tick_age_seconds?: number | null;
+            /** Tick Quality Status */
+            tick_quality_status?: string | null;
+        };
+        /** MT5AnalyticsSeriesResponse */
+        MT5AnalyticsSeriesResponse: {
+            /** Generated At */
+            generated_at: string;
+            /** Portfolio Slug */
+            portfolio_slug: string;
+            /** Window Minutes */
+            window_minutes: number;
+            /**
+             * Market Closed
+             * @default false
+             */
+            market_closed: boolean;
+            /** Market Reference Timestamp */
+            market_reference_timestamp?: string | null;
+            /** Points */
+            points?: components["schemas"]["MT5AnalyticsSeriesPointResponse"][];
+        };
         /** MT5LiveEventChangeSummaryResponse */
         MT5LiveEventChangeSummaryResponse: {
             /** Symbols Added */
@@ -1729,6 +2030,55 @@ export interface components {
             change_summary?: components["schemas"]["MT5LiveEventChangeSummaryResponse"];
             state: components["schemas"]["MT5LiveStateResponse"];
         };
+        /** MT5LiveHealthResponse */
+        MT5LiveHealthResponse: {
+            /** Status */
+            status: string;
+            /** Message */
+            message?: string | null;
+            /** Connected */
+            connected: boolean;
+            /** Degraded */
+            degraded: boolean;
+            /** Stale */
+            stale: boolean;
+            /**
+             * Fallback Snapshot Used
+             * @default false
+             */
+            fallback_snapshot_used: boolean;
+            /**
+             * Market Closed
+             * @default false
+             */
+            market_closed: boolean;
+            /** Analytics Stale */
+            analytics_stale?: boolean | null;
+            /** Generated Age Seconds */
+            generated_age_seconds?: number | null;
+            /** Last Success Age Seconds */
+            last_success_age_seconds?: number | null;
+            /** Tick Quality Status */
+            tick_quality_status?: string | null;
+            /** Nowcast Status */
+            nowcast_status?: string | null;
+            /** Operational Truth */
+            operational_truth?: string | null;
+            /** Truth Score */
+            truth_score?: number | null;
+            /** Error Retryable */
+            error_retryable?: boolean | null;
+            /** Last Error */
+            last_error?: string | null;
+            /** Bridge Consecutive Failures */
+            bridge_consecutive_failures?: number | null;
+            /** Bridge Next Poll Delay Seconds */
+            bridge_next_poll_delay_seconds?: number | null;
+            /** Bridge Capture Duration Ms */
+            bridge_capture_duration_ms?: number | null;
+            /** Bridge Event Buffer Fill Ratio */
+            bridge_event_buffer_fill_ratio?: number | null;
+        };
         /** MT5LiveStateResponse */
         MT5LiveStateResponse: {
             /** Sequence */
@@ -1743,6 +2093,11 @@ export interface components {
             degraded: boolean;
             /** Stale */
             stale: boolean;
+            /**
+             * Fallback Snapshot Used
+             * @default false
+             */
+            fallback_snapshot_used: boolean;
             /** Generated At */
             generated_at: string;
             /** Last Success At */
@@ -1757,14 +2112,34 @@ export interface components {
             history_lookback_minutes: number;
             /** Effective History Lookback Minutes */
             effective_history_lookback_minutes?: number | null;
-            /** Market Closed */
-            market_closed?: boolean;
+            /**
+             * Market Closed
+             * @default false
+             */
+            market_closed: boolean;
             /** Market Closed Reason */
             market_closed_reason?: string | null;
             /** Market Reference Timestamp */
             market_reference_timestamp?: string | null;
             /** Market Reference Source */
             market_reference_source?: string | null;
+            /**
+             * Bridge Consecutive Failures
+             * @default 0
+             */
+            bridge_consecutive_failures: number;
+            /** Bridge Next Poll Delay Seconds */
+            bridge_next_poll_delay_seconds?: number | null;
+            /** Bridge Last Error At */
+            bridge_last_error_at?: string | null;
+            /** Bridge Capture Duration Ms */
+            bridge_capture_duration_ms?: number | null;
+            /** Bridge Event Buffer Usage */
+            bridge_event_buffer_usage?: number | null;
+            /** Bridge Event Buffer Capacity */
+            bridge_event_buffer_capacity?: number | null;
+            /** Bridge Last Event Kind */
+            bridge_last_event_kind?: string | null;
             /** Portfolio Slug */
             portfolio_slug?: string | null;
             /** Portfolio Mode */
@@ -1789,6 +2164,18 @@ export interface components {
             risk_summary?: components["schemas"]["LiveRiskSummaryResponse"] | null;
             risk_budget?: components["schemas"]["RiskBudgetResponse"] | null;
             capital_usage?: components["schemas"]["CapitalUsageSnapshotResponse"] | null;
+            /** Operational Truth */
+            operational_truth?: string | null;
+            /** Truth Score */
+            truth_score?: number | null;
+            /** Quality Checks */
+            quality_checks?: {
+                [key: string]: unknown;
+            }[];
+            /** Analytics Generated At */
+            analytics_generated_at?: string | null;
+            /** Analytics Stale */
+            analytics_stale?: boolean | null;
             reconciliation?: components["schemas"]["ReconciliationSummaryResponse"] | null;
             /** Tick Quality */
             tick_quality?: {
@@ -1808,6 +2195,7 @@ export interface components {
             };
             /** Operator Alerts */
             operator_alerts?: components["schemas"]["OperatorAlertResponse"][];
+            health?: components["schemas"]["MT5LiveHealthResponse"] | null;
         };
         /** MT5PendingOrderResponse */
         MT5PendingOrderResponse: {
@@ -1942,6 +2330,13 @@ export interface components {
              * @default 0
              */
             stored_history_days: number;
+            /**
+             * Market Closed
+             * @default false
+             */
+            market_closed: boolean;
+            /** Market Closed Reason */
+            market_closed_reason?: string | null;
             /** Retention Tiers */
             retention_tiers?: {
                 [key: string]: number;
@@ -2055,6 +2450,12 @@ export interface components {
             current_var?: number | null;
             /** Current Es */
             current_es?: number | null;
+            /** Es Acerbi Status */
+            es_acerbi_status?: string | null;
+            /** Es Acerbi P Value */
+            es_acerbi_p_value?: number | null;
+            /** Es Acerbi Observations */
+            es_acerbi_observations?: number | null;
         };
         /** OperatorAlertResponse */
         OperatorAlertResponse: {
@@ -2070,6 +2471,67 @@ export interface components {
             context?: {
                 [key: string]: unknown;
             };
+        };
+        /** OperatorRunResponse */
+        OperatorRunResponse: {
+            /** Id */
+            id: number;
+            /** Portfolio Id */
+            portfolio_id?: number | null;
+            /** Portfolio Slug */
+            portfolio_slug?: string | null;
+            /** Action */
+            action: string;
+            /** Request Id */
+            request_id: string;
+            /** Status */
+            status: string;
+            /** Stage */
+            stage: string;
+            /** Request Payload */
+            request_payload?: {
+                [key: string]: unknown;
+            };
+            /** Artifact Refs */
+            artifact_refs?: {
+                [key: string]: unknown;
+            };
+            /** Result */
+            result?: {
+                [key: string]: unknown;
+            };
+            /** Error Code */
+            error_code?: string | null;
+            /** Error Message */
+            error_message?: string | null;
+            /** Hint */
+            hint?: string | null;
+            /** Queue Task Id */
+            queue_task_id?: string | null;
+            /** Reused Run Id */
+            reused_run_id?: number | null;
+            /**
+             * Reused
+             * @default false
+             */
+            reused: boolean;
+            /** Elapsed Seconds */
+            elapsed_seconds?: number | null;
+            /**
+             * Is Stale
+             * @default false
+             */
+            is_stale: boolean;
+            /** Poll After Ms */
+            poll_after_ms?: number | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
         };
         /** OrderHistoryEntryResponse */
         OrderHistoryEntryResponse: {
@@ -2362,36 +2824,81 @@ export interface components {
             market_data_status: string;
             /** Latest Sync At */
             latest_sync_at?: string | null;
+            /** Operational Truth */
+            operational_truth?: string | null;
+            /** Target Exposure By Symbol */
+            target_exposure_by_symbol?: {
+                [key: string]: number;
+            };
+            /** Broker Exposure By Symbol */
+            broker_exposure_by_symbol?: {
+                [key: string]: number;
+            };
+            /** Staleness Reason */
+            staleness_reason?: string | null;
             /** Open Positions Count */
             open_positions_count: number;
             /** Pending Orders Count */
             pending_orders_count: number;
+            /** Live Window Minutes */
+            live_window_minutes?: number | null;
             /** History Window Minutes */
             history_window_minutes?: number | null;
             /** Effective History Lookback Minutes */
             effective_history_lookback_minutes?: number | null;
+            /** Heal Window Days */
+            heal_window_days?: number | null;
+            /**
+             * History Backfill Applied
+             * @default false
+             */
+            history_backfill_applied: boolean;
             /** Manual Event Count */
             manual_event_count: number;
             /** Unmatched Execution Count */
             unmatched_execution_count: number;
-            /** History Window Expired Execution Count */
-            history_window_expired_execution_count?: number;
+            /**
+             * History Window Expired Execution Count
+             * @default 0
+             */
+            history_window_expired_execution_count: number;
+            /**
+             * Active Incident Count
+             * @default 0
+             */
+            active_incident_count: number;
+            /**
+             * Resolved Incident Count
+             * @default 0
+             */
+            resolved_incident_count: number;
+            /**
+             * Autoresolved Count
+             * @default 0
+             */
+            autoresolved_count: number;
             /** Bridge Connected */
             bridge_connected?: boolean | null;
             /** Live Base Ready */
             live_base_ready?: boolean | null;
             /** Bridge Status */
             bridge_status?: string | null;
-            /** Market Closed */
-            market_closed?: boolean;
+            /**
+             * Market Closed
+             * @default false
+             */
+            market_closed: boolean;
             /** Market Closed Reason */
             market_closed_reason?: string | null;
             /** Market Reference Timestamp */
             market_reference_timestamp?: string | null;
             /** Market Reference Source */
             market_reference_source?: string | null;
-            /** Live Evidence Present */
-            live_evidence_present?: boolean;
+            /**
+             * Live Evidence Present
+             * @default false
+             */
+            live_evidence_present: boolean;
             /** Live Evidence Counts */
             live_evidence_counts?: {
                 [key: string]: number;
@@ -2425,6 +2932,8 @@ export interface components {
         };
         /** ReportContentResponse */
         ReportContentResponse: {
+            /** Report Id */
+            report_id?: number | null;
             /** Report Markdown */
             report_markdown: string;
             /** Portfolio Slug */
@@ -2483,6 +2992,12 @@ export interface components {
             total_var: number;
             /** Total Es */
             total_es: number;
+            /** Diversification Ratio Var */
+            diversification_ratio_var?: number | null;
+            /** Diversification Ratio Es */
+            diversification_ratio_es?: number | null;
+            concentration_var?: components["schemas"]["RiskConcentrationResponse"] | null;
+            concentration_es?: components["schemas"]["RiskConcentrationResponse"] | null;
             /** Positions */
             positions: {
                 [key: string]: components["schemas"]["RiskAttributionPositionResponse"];
@@ -2630,6 +3145,47 @@ export interface components {
                 [key: string]: components["schemas"]["RiskBudgetModelResponse"];
             };
         };
+        /** RiskConcentrationContributorResponse */
+        RiskConcentrationContributorResponse: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Share */
+            share: number;
+            /** Component Var */
+            component_var?: number | null;
+            /** Component Es */
+            component_es?: number | null;
+        };
+        /** RiskConcentrationResponse */
+        RiskConcentrationResponse: {
+            /** Basis */
+            basis: string;
+            /**
+             * Count
+             * @default 0
+             */
+            count: number;
+            /** Hhi */
+            hhi?: number | null;
+            /** Normalized Hhi */
+            normalized_hhi?: number | null;
+            /** Effective Count */
+            effective_count?: number | null;
+            /** Top1 Share */
+            top1_share?: number | null;
+            /** Top3 Share */
+            top3_share?: number | null;
+            /** Top5 Share */
+            top5_share?: number | null;
+            /** Dominant Key */
+            dominant_key?: string | null;
+            /** Dominant Label */
+            dominant_label?: string | null;
+            /** Contributors */
+            contributors?: components["schemas"]["RiskConcentrationContributorResponse"][];
+        };
         /** RiskDataQualityResponse */
         RiskDataQualityResponse: {
             /** Status */
@@ -2718,6 +3274,17 @@ export interface components {
             /** Headline Risk */
             headline_risk?: components["schemas"]["HeadlineRiskPointResponse"][];
             data_quality?: components["schemas"]["RiskDataQualityResponse"] | null;
+        };
+        /** RiskSummaryConcentrationResponse */
+        RiskSummaryConcentrationResponse: {
+            /** Model */
+            model?: string | null;
+            /** Diversification Ratio Var */
+            diversification_ratio_var?: number | null;
+            /** Diversification Ratio Es */
+            diversification_ratio_es?: number | null;
+            var?: components["schemas"]["RiskConcentrationResponse"] | null;
+            es?: components["schemas"]["RiskConcentrationResponse"] | null;
         };
         /** RunBacktestRequest */
         RunBacktestRequest: {
@@ -2958,6 +3525,10 @@ export interface components {
             loop_sleep_seconds: number;
             /** Database Ready */
             database_ready: boolean;
+            /** Health */
+            health?: {
+                [key: string]: unknown;
+            } | null;
             /** Jobs */
             jobs: {
                 [key: string]: components["schemas"]["WorkerJobStatusResponse"];
@@ -2972,6 +3543,28 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    health_root: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     health_health: {
         parameters: {
             query?: never;
@@ -2988,6 +3581,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthResponse"];
+                };
+            };
+        };
+    };
+    health_health_dependencies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthDependenciesResponse"];
+                };
+            };
+        };
+    };
+    health_health_readiness: {
+        parameters: {
+            query?: {
+                portfolio_slug?: string | null;
+                refresh_live?: boolean;
+                max_wait_ms?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthReadinessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -3433,6 +4079,38 @@ export interface operations {
             };
         };
     };
+    analytics_latest_stress_test: {
+        parameters: {
+            query?: {
+                portfolio_slug?: string | null;
+                alpha?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StressReportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     analytics_run_stress_test: {
         parameters: {
             query?: never;
@@ -3501,6 +4179,7 @@ export interface operations {
         parameters: {
             query?: {
                 portfolio_slug?: string | null;
+                source?: string | null;
             };
             header?: never;
             path?: never;
@@ -3596,7 +4275,9 @@ export interface operations {
     };
     capital_portfolio_capital: {
         parameters: {
-            query?: never;
+            query?: {
+                source?: string | null;
+            };
             header?: never;
             path: {
                 portfolio_slug: string;
@@ -3731,8 +4412,11 @@ export interface operations {
         parameters: {
             query?: {
                 portfolio_slug?: string | null;
+                detail_level?: "summary" | "full" | "inspector";
             };
-            header?: never;
+            header?: {
+                "If-None-Match"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -3758,6 +4442,39 @@ export interface operations {
             };
         };
     };
+    mt5_mt5_analytics_series: {
+        parameters: {
+            query?: {
+                portfolio_slug?: string | null;
+                window_minutes?: number;
+                max_points?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MT5AnalyticsSeriesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     mt5_mt5_live_events: {
         parameters: {
             query?: {
@@ -3765,6 +4482,7 @@ export interface operations {
                 after?: number;
                 limit?: number;
                 wait_seconds?: number;
+                detail_level?: "summary" | "full" | "inspector";
             };
             header?: never;
             path?: never;
@@ -3796,8 +4514,13 @@ export interface operations {
         parameters: {
             query?: {
                 portfolio_slug?: string | null;
+                detail_level?: "summary" | "full" | "inspector";
+                after?: number | null;
+                bootstrap?: boolean;
             };
-            header?: never;
+            header?: {
+                "Last-Event-ID"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -4079,6 +4802,38 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trading_active_alerts: {
+        parameters: {
+            query?: {
+                limit?: number;
+                portfolio_slug?: string | null;
             };
             header?: never;
             path?: never;
@@ -4471,6 +5226,7 @@ export interface operations {
         parameters: {
             query?: {
                 portfolio_slug?: string | null;
+                report_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -4485,6 +5241,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReportContentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reports_latest_report_chart: {
+        parameters: {
+            query?: {
+                portfolio_slug?: string | null;
+                report_id?: number | null;
+            };
+            header?: never;
+            path: {
+                chart_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -4550,6 +5340,203 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CapitalUsageSnapshotResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    operator_enqueue_sync: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarketDataSyncRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    operator_enqueue_snapshot: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunSnapshotRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    operator_enqueue_backtest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunBacktestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    operator_enqueue_report: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunReportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    operator_operator_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    operator_operator_runs: {
+        parameters: {
+            query?: {
+                portfolio_slug?: string | null;
+                action?: string | null;
+                status?: string[] | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorRunResponse"][];
                 };
             };
             /** @description Validation Error */

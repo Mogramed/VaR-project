@@ -16,6 +16,70 @@ class DeskReadService:
     def __init__(self, runtime: DeskServiceRuntime):
         self.runtime = runtime
 
+    @staticmethod
+    def _expected_portfolio_symbols(portfolio: dict[str, Any]) -> set[str]:
+        symbols = set()
+        for symbol in list(portfolio.get("symbols") or []):
+            normalized = str(symbol or "").upper().strip()
+            if normalized:
+                symbols.add(normalized)
+        return symbols
+
+    @staticmethod
+    def _normalize_symbol_keyed_map(payload: Any) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {}
+        normalized: dict[str, Any] = {}
+        for raw_key, raw_value in payload.items():
+            item = dict(raw_value) if isinstance(raw_value, dict) else {"value": raw_value}
+            symbol = str(item.get("symbol") or raw_key or "").upper().strip()
+            if not symbol:
+                continue
+            item["symbol"] = symbol
+            normalized[symbol] = item
+        return normalized
+
+    @classmethod
+    def _normalize_capital_snapshot(cls, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(payload)
+
+        allocations = cls._normalize_symbol_keyed_map(normalized.get("allocations"))
+        if allocations:
+            normalized["allocations"] = allocations
+
+        budget = dict(normalized.get("budget") or {})
+        symbol_budgets_raw = budget.get("symbol_budgets")
+        if isinstance(symbol_budgets_raw, dict):
+            symbol_budgets: dict[str, float] = {}
+            for raw_symbol, raw_amount in symbol_budgets_raw.items():
+                symbol = str(raw_symbol or "").upper().strip()
+                if not symbol:
+                    continue
+                try:
+                    symbol_budgets[symbol] = float(raw_amount)
+                except (TypeError, ValueError):
+                    continue
+            if symbol_budgets:
+                budget["symbol_budgets"] = symbol_budgets
+                normalized["budget"] = budget
+        return normalized
+
+    @classmethod
+    def _capital_snapshot_has_expected_symbols(
+        cls,
+        payload: dict[str, Any],
+        *,
+        expected_symbols: set[str],
+    ) -> bool:
+        if not expected_symbols:
+            return True
+        allocations = payload.get("allocations")
+        if not isinstance(allocations, dict):
+            return False
+        available = {str(symbol or "").upper().strip() for symbol in allocations.keys()}
+        available.discard("")
+        return expected_symbols.issubset(available)
+
     def _preferred_snapshot_sources(
         self,
         *,
@@ -230,6 +294,7 @@ class DeskReadService:
         source: str | None = "auto",
     ) -> dict[str, Any]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        expected_symbols = self._expected_portfolio_symbols(portfolio)
         for candidate_source in self._preferred_snapshot_sources(
             portfolio_slug=portfolio["slug"],
             source=source,
@@ -243,11 +308,16 @@ class DeskReadService:
                 else None
             )
             if capital is not None:
-                return capital
+                normalized = self._normalize_capital_snapshot(dict(capital))
+                if self._capital_snapshot_has_expected_symbols(normalized, expected_symbols=expected_symbols):
+                    return normalized
+                # Snapshot appears partially malformed (for example stale lowercase/missing symbol keys).
+                # Recompute once from current portfolio state instead of returning incomplete capital allocations.
+                break
         if self.runtime.strict_live_required(portfolio):
             raise self.runtime.strict_live_unavailable_error(portfolio=portfolio)
         bundle = self.runtime._compute_portfolio_state(portfolio_slug=portfolio["slug"])
-        return bundle["capital"]
+        return self._normalize_capital_snapshot(dict(bundle["capital"]))
 
     def capital_history(
         self,
