@@ -9,9 +9,36 @@ from var_project.api.app import create_app
 from var_project.core.settings import find_repo_root
 
 
+def _normalize_validation_error_schema(schema: dict[str, Any]) -> None:
+    components = schema.get("components")
+    if not isinstance(components, dict):
+        return
+    schemas = components.get("schemas")
+    if not isinstance(schemas, dict):
+        return
+    validation_error = schemas.get("ValidationError")
+    if not isinstance(validation_error, dict):
+        return
+    properties = validation_error.get("properties")
+    if not isinstance(properties, dict):
+        return
+
+    # FastAPI/Pydantic versions can inject optional `input` / `ctx` fields here.
+    # They are runtime diagnostics only and create noisy non-functional diffs
+    # for generated frontend contracts across environments.
+    properties.pop("input", None)
+    properties.pop("ctx", None)
+
+    required = validation_error.get("required")
+    if isinstance(required, list):
+        validation_error["required"] = [item for item in required if item not in {"input", "ctx"}]
+
+
 def build_openapi_schema(repo_root: Path | None = None) -> dict[str, Any]:
     app = create_app(repo_root=(repo_root or find_repo_root()))
-    return app.openapi()
+    schema = app.openapi()
+    _normalize_validation_error_schema(schema)
+    return schema
 
 
 def export_openapi(output: Path | None = None, *, repo_root: Path | None = None) -> dict[str, Any]:
