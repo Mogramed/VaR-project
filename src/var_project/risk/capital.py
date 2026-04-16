@@ -181,7 +181,13 @@ def build_capital_usage_snapshot(
         raise ValueError(f"Reference model '{resolved_model}' not available in risk budget snapshot.")
 
     model_budgets_cfg = dict(capital_cfg.get("model_budgets_eur") or {})
-    symbol_budget_cfg = dict(overrides.get("symbol_weights") or capital_cfg.get("symbol_weights") or {})
+    raw_symbol_budget_cfg = dict(overrides.get("symbol_weights") or capital_cfg.get("symbol_weights") or {})
+    symbol_budget_cfg: dict[str, float] = {}
+    for symbol, value in raw_symbol_budget_cfg.items():
+        normalized_symbol = str(symbol or "").upper().strip()
+        if not normalized_symbol:
+            continue
+        symbol_budget_cfg[normalized_symbol] = float(value)
 
     total_consumed = float(max(ref_budget.total_var, ref_budget.total_es))
     default_total_budget = max(float(ref_budget.total_var_budget), float(ref_budget.total_es_budget))
@@ -221,15 +227,25 @@ def build_capital_usage_snapshot(
             status=_status_from_utilization(utilization, warn=warn, breach=breach),
         )
 
-    positions = ref_budget.positions
+    positions = {str(symbol).upper(): item for symbol, item in ref_budget.positions.items()}
+    all_symbols = list(dict.fromkeys([*positions.keys(), *symbol_budget_cfg.keys()]))
     raw_weights = {
-        symbol: float(symbol_budget_cfg.get(symbol, item.weight if item.weight > 0.0 else 0.0))
-        for symbol, item in positions.items()
+        symbol: float(
+            symbol_budget_cfg.get(
+                symbol,
+                (
+                    positions[symbol].weight
+                    if symbol in positions and float(positions[symbol].weight) > 0.0
+                    else 0.0
+                ),
+            )
+        )
+        for symbol in all_symbols
     }
     weight_total = float(sum(max(value, 0.0) for value in raw_weights.values()))
     if weight_total <= 0.0:
-        equal = 1.0 / float(len(positions) or 1)
-        normalized_weights = {symbol: equal for symbol in positions}
+        equal = 1.0 / float(len(all_symbols) or 1)
+        normalized_weights = {symbol: equal for symbol in all_symbols}
     else:
         normalized_weights = {symbol: max(weight, 0.0) / weight_total for symbol, weight in raw_weights.items()}
 
@@ -237,9 +253,12 @@ def build_capital_usage_snapshot(
     allocations: dict[str, CapitalAllocation] = {}
     overloaded: list[tuple[str, float, str]] = []
     underused: list[tuple[str, float]] = []
-    for symbol, item in positions.items():
+    for symbol in all_symbols:
+        item = positions.get(symbol)
         target_capital = float(symbol_budgets.get(symbol, 0.0))
-        consumed = float(max(abs(item.component_var), abs(item.component_es)))
+        component_var = 0.0 if item is None else float(item.component_var)
+        component_es = 0.0 if item is None else float(item.component_es)
+        consumed = float(max(abs(component_var), abs(component_es)))
         reserved = float(total_reserved * normalized_weights.get(symbol, 0.0))
         remaining = float(target_capital - consumed - reserved)
         utilization = None if target_capital <= 0.0 else float(consumed / target_capital)
@@ -251,7 +270,7 @@ def build_capital_usage_snapshot(
         elif remaining > rebalance_min_gap:
             action = "ADD"
             underused.append((symbol, remaining))
-        elif item.action == "HEDGE":
+        elif item is not None and item.action == "HEDGE":
             action = "HEDGE"
 
         allocations[symbol] = CapitalAllocation(

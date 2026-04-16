@@ -892,6 +892,24 @@ class DeskMarketDataService:
 
         since = _utcnow() - timedelta(days=int(days) + 5)
         selected_symbols = [str(symbol).upper() for symbol in (symbols or portfolio["symbols"])]
+        minimum_daily_observations = max(int(days // 2), 10)
+        target_daily_observations = max(int(days), minimum_daily_observations)
+
+        def _daily_returns_from_bars(rows: list[dict[str, Any]]) -> pd.DataFrame | None:
+            if not rows:
+                return None
+            frame = pd.DataFrame(rows)
+            frame["time"] = pd.to_datetime(frame["time_utc"], utc=True, errors="coerce")
+            frame = frame.dropna(subset=["time", "close"]).sort_values("time").reset_index(drop=True)
+            intraday = compute_log_returns(frame[["time", "close"]], price_col="close")
+            daily_frame = intraday_to_daily_log_returns(
+                intraday[["time", "log_return"]],
+                timeframe=timeframe,
+                min_coverage=min_coverage,
+            )
+            if daily_frame.empty:
+                return None
+            return daily_frame
 
         while True:
             frames: list[pd.DataFrame] = []
@@ -899,22 +917,26 @@ class DeskMarketDataService:
             insufficient_symbol: str | None = None
 
             for symbol in selected_symbols:
-                bars = self.runtime.storage.market_bars(symbol=symbol, timeframe=timeframe, since=since)
-                if not bars:
-                    missing_symbol = symbol
+                recent_rows = self.runtime.storage.market_bars(symbol=symbol, timeframe=timeframe, since=since)
+                daily = _daily_returns_from_bars(recent_rows)
+                recent_count = 0 if daily is None else int(len(daily))
+                has_any_rows = bool(recent_rows)
+
+                if daily is None or recent_count < minimum_daily_observations:
+                    full_rows = self.runtime.storage.market_bars(symbol=symbol, timeframe=timeframe, since=None)
+                    has_any_rows = has_any_rows or bool(full_rows)
+                    full_daily = _daily_returns_from_bars(full_rows)
+                    full_count = 0 if full_daily is None else int(len(full_daily))
+                    if full_daily is not None and full_count > recent_count:
+                        daily = full_daily
+
+                if daily is None:
+                    if has_any_rows:
+                        insufficient_symbol = symbol
+                    else:
+                        missing_symbol = symbol
                     break
-                frame = pd.DataFrame(bars)
-                frame["time"] = pd.to_datetime(frame["time_utc"], utc=True, errors="coerce")
-                frame = frame.dropna(subset=["time", "close"]).sort_values("time").reset_index(drop=True)
-                intraday = compute_log_returns(frame[["time", "close"]], price_col="close")
-                daily = intraday_to_daily_log_returns(
-                    intraday[["time", "log_return"]],
-                    timeframe=timeframe,
-                    min_coverage=min_coverage,
-                )
-                if daily.empty:
-                    insufficient_symbol = symbol
-                    break
+                daily = daily.tail(target_daily_observations).reset_index(drop=True)
                 daily[f"{symbol}_ret"] = np.expm1(daily["daily_log_return"].astype(float))
                 frames.append(daily[["date", f"{symbol}_ret"]])
 
