@@ -89,6 +89,8 @@ export function alertPriorityCode(code: string | null | undefined): number {
     normalized.includes("VALIDATION_GOVERNANCE_WARN")
     || normalized.includes("VALIDATION_SURFACE_INDEPENDENCE_FAIL")
     || normalized.includes("VALIDATION_HORIZON_WARN")
+    || normalized.includes("VALIDATION_SURFACE_SAMPLE_THIN")
+    || normalized.includes("VALIDATION_HORIZON_SAMPLE_THIN")
     || normalized.includes("VALIDATION_ES_SHORTFALL_WARN")
     || normalized.includes("VALIDATION_ES_BREACH_RATE_WARN")
     || normalized.includes("WINDOW_EXPIRED")

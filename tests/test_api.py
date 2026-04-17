@@ -907,6 +907,8 @@ def test_live_state_backfills_market_data_without_manual_sync(tmp_path: Path):
     assert live_state.status_code == 200
     assert live_state.json()["connected"] is True
     live_codes = {str(item.get("code") or "") for item in list(live_state.json().get("operator_alerts") or [])}
+    assert "VALIDATION_SURFACE_SAMPLE_THIN" not in live_codes
+    assert "VALIDATION_HORIZON_SAMPLE_THIN" not in live_codes
 
     status = client.get("/market-data/status")
     assert status.status_code == 200

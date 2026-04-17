@@ -53,6 +53,15 @@ function contextLabel(alert: OperatorAlertResponse): string | null {
     const verdict = typeof context.verdict === "string" ? context.verdict.toUpperCase() : null;
     return verdict ? `${Math.round(context.horizon_days as number)}d ${verdict}` : `${Math.round(context.horizon_days as number)}d`;
   }
+  if (code === "VALIDATION_SURFACE_SAMPLE_THIN" && typeof context.insufficient_sample_count === "number") {
+    return `${context.insufficient_sample_count} thin`;
+  }
+  if (code === "VALIDATION_HORIZON_SAMPLE_THIN" && typeof context.horizon_days === "number") {
+    if (typeof context.insufficient_sample_count === "number") {
+      return `${Math.round(context.horizon_days as number)}d ${context.insufficient_sample_count} thin`;
+    }
+    return `${Math.round(context.horizon_days as number)}d thin`;
+  }
   if (context.evidence_state === "empty_live_book") {
     return "broker empty";
   }

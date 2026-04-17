@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import logging
 import logging.config
 from pathlib import Path
@@ -48,6 +49,7 @@ def main() -> None:
     s.add_argument("--port", type=int, default=8000)
     s.add_argument("--workers", type=int, default=1)
     s.add_argument("--reload", action="store_true")
+    s.add_argument("--timeout-worker-healthcheck", type=int, default=30)
 
     s = sub.add_parser("mt5-agent")
     s.add_argument("--host", default="0.0.0.0")
@@ -82,13 +84,22 @@ def main() -> None:
         workers = max(int(getattr(args, "workers", 1) or 1), 1)
         if bool(args.reload):
             workers = 1
+        timeout_worker_healthcheck = max(
+            int(getattr(args, "timeout_worker_healthcheck", 30) or 30),
+            1,
+        )
+        uvicorn_kwargs: dict[str, Any] = {
+            "factory": True,
+            "host": str(args.host),
+            "port": int(args.port),
+            "workers": workers,
+            "reload": bool(args.reload),
+        }
+        if "timeout_worker_healthcheck" in inspect.signature(uvicorn.run).parameters:
+            uvicorn_kwargs["timeout_worker_healthcheck"] = timeout_worker_healthcheck
         uvicorn.run(
             "var_project.api.app:create_app",
-            factory=True,
-            host=str(args.host),
-            port=int(args.port),
-            workers=workers,
-            reload=bool(args.reload),
+            **uvicorn_kwargs,
         )
         raise SystemExit(0)
 

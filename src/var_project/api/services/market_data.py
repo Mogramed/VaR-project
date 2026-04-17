@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Lock
 import time
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
@@ -94,6 +95,11 @@ def _timeframe_minutes(timeframe: str) -> int:
 
 class DeskMarketDataService:
     _shared_tick_archive_summary_cache: dict[tuple[str, str], dict[str, Any]] = {}
+    _shared_market_status_cache: dict[tuple[str, str], dict[str, Any]] = {}
+    _shared_status_autosync_attempt_at: dict[tuple[str, str], float] = {}
+    _shared_market_status_cache_lock = Lock()
+    _shared_market_status_compute_locks: dict[tuple[str, str], Lock] = {}
+    _shared_status_autosync_lock = Lock()
 
     def __init__(self, runtime: "DeskServiceRuntime"):
         self.runtime = runtime
@@ -172,9 +178,93 @@ class DeskMarketDataService:
         )
         return (str(self.tick_archive_root().resolve()), ",".join(normalized_symbols))
 
+    def _market_status_scope_key(self, *, portfolio_slug: str) -> tuple[str, str]:
+        return (str(self.runtime.root.resolve()), str(portfolio_slug))
+
+    def _market_status_cache_key(self, *, portfolio_slug: str) -> tuple[str, str]:
+        return self._market_status_scope_key(portfolio_slug=portfolio_slug)
+
+    @staticmethod
+    def _market_status_cache_ttl_seconds() -> float:
+        return 1.5
+
+    def _cached_market_status(self, *, cache_key: tuple[str, str]) -> tuple[dict[str, Any] | None, bool]:
+        with self._shared_market_status_cache_lock:
+            cached = self._shared_market_status_cache.get(cache_key)
+            if cached is None:
+                return None, False
+            expired = float(cached.get("expires_at") or 0.0) <= time.monotonic()
+            payload = dict(cached.get("payload") or {})
+        if not payload:
+            return None, False
+        return deepcopy(payload), bool(expired)
+
+    def _store_market_status_cache(self, *, cache_key: tuple[str, str], payload: Mapping[str, Any]) -> None:
+        with self._shared_market_status_cache_lock:
+            self._shared_market_status_cache[cache_key] = {
+                "expires_at": time.monotonic() + self._market_status_cache_ttl_seconds(),
+                "payload": deepcopy(dict(payload)),
+            }
+
+    def _invalidate_market_status_cache(self, *, portfolio_slug: str | None = None) -> None:
+        scope_root = str(self.runtime.root.resolve())
+        with self._shared_market_status_cache_lock:
+            if portfolio_slug is None:
+                for key in list(self._shared_market_status_cache):
+                    if key[0] == scope_root:
+                        del self._shared_market_status_cache[key]
+                return
+            cache_key = (scope_root, str(portfolio_slug))
+            self._shared_market_status_cache.pop(cache_key, None)
+
+    def _market_status_lock(self, *, cache_key: tuple[str, str]) -> Lock:
+        with self._shared_market_status_cache_lock:
+            lock = self._shared_market_status_compute_locks.get(cache_key)
+            if lock is None:
+                lock = Lock()
+                self._shared_market_status_compute_locks[cache_key] = lock
+            return lock
+
     @staticmethod
     def _tick_archive_summary_cache_ttl_seconds() -> float:
         return 2.0
+
+    @staticmethod
+    def _market_status_autosync_cooldown_seconds() -> float:
+        return 2.0
+
+    def _should_autosync_market_status(
+        self,
+        *,
+        portfolio_slug: str,
+        configured: bool,
+        status: str,
+        latest_sync: Mapping[str, Any] | None,
+        missing_symbols: list[str],
+        missing_bars: list[str],
+    ) -> bool:
+        if not self.runtime._has_custom_mt5_factory:
+            return False
+        if not configured:
+            return False
+        if str(status).lower() != "incomplete":
+            return False
+        # Only opportunistically bootstrap once when no sync run exists yet.
+        # Existing runs (including stale/incomplete diagnostics) should remain observable.
+        if latest_sync is not None:
+            return False
+        if not missing_symbols and not missing_bars:
+            return False
+
+        scope_key = self._market_status_scope_key(portfolio_slug=portfolio_slug)
+        now_monotonic = time.monotonic()
+        cooldown = self._market_status_autosync_cooldown_seconds()
+        with self._shared_status_autosync_lock:
+            last_attempt = float(self._shared_status_autosync_attempt_at.get(scope_key) or 0.0)
+            if last_attempt > 0.0 and (now_monotonic - last_attempt) < cooldown:
+                return False
+            self._shared_status_autosync_attempt_at[scope_key] = now_monotonic
+        return True
 
     def _invalidate_tick_archive_summary_cache(self) -> None:
         root_key = str(self.tick_archive_root().resolve())
@@ -449,7 +539,42 @@ class DeskMarketDataService:
         refreshed = self.market_data_status(portfolio_slug=portfolio["slug"])
         return self.runtime.storage.list_instruments(symbols=refreshed["symbols"])
 
-    def market_data_status(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
+    def market_data_status(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        _allow_autosync: bool = True,
+    ) -> dict[str, Any]:
+        if not _allow_autosync:
+            return self._compute_market_data_status(
+                portfolio_slug=portfolio_slug,
+                _allow_autosync=False,
+            )
+
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        cache_key = self._market_status_cache_key(portfolio_slug=portfolio["slug"])
+        cached, expired = self._cached_market_status(cache_key=cache_key)
+        if cached is not None and not expired:
+            return cached
+
+        compute_lock = self._market_status_lock(cache_key=cache_key)
+        with compute_lock:
+            cached, expired = self._cached_market_status(cache_key=cache_key)
+            if cached is not None and not expired:
+                return cached
+            payload = self._compute_market_data_status(
+                portfolio_slug=portfolio["slug"],
+                _allow_autosync=True,
+            )
+            self._store_market_status_cache(cache_key=cache_key, payload=payload)
+            return dict(payload)
+
+    def _compute_market_data_status(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        _allow_autosync: bool = True,
+    ) -> dict[str, Any]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         timeframe = self.runtime._default_timeframe()
         self._close_stale_running_sync(portfolio_slug=portfolio["slug"])
@@ -494,6 +619,27 @@ class DeskMarketDataService:
                     age_seconds = max((_utcnow() - synced_at).total_seconds(), 0.0)
                     if age_seconds > self._market_sync_running_ttl_seconds():
                         status = "incomplete"
+        if _allow_autosync and self._should_autosync_market_status(
+            portfolio_slug=portfolio["slug"],
+            configured=configured,
+            status=status,
+            latest_sync=latest_sync,
+            missing_symbols=missing_symbols,
+            missing_bars=missing_bars,
+        ):
+            try:
+                self.sync_market_data(
+                    portfolio_slug=portfolio["slug"],
+                    days=self.history_backfill_days(),
+                    timeframes=self.startup_sync_timeframes(),
+                )
+            except Exception:
+                # Autosync is best-effort; preserve current status payload on failures.
+                pass
+            return self.market_data_status(
+                portfolio_slug=portfolio["slug"],
+                _allow_autosync=False,
+            )
         coverage_status = "healthy"
         if status in {"offline_fixture", "not_configured"}:
             coverage_status = status
@@ -544,6 +690,7 @@ class DeskMarketDataService:
     ) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        self._invalidate_market_status_cache(portfolio_slug=portfolio["slug"])
         if not self.should_use_mt5_market_data(portfolio):
             if self.runtime.strict_live_required(portfolio):
                 raise MT5ConnectionError(str(self.runtime.strict_live_unavailable_error(portfolio=portfolio)))
@@ -869,10 +1016,13 @@ class DeskMarketDataService:
                 mode=str(portfolio.get("mode") or "hybrid"),
                 status=completed_status,
                 details=final_details,
-            )
+        )
         if fatal_exception is not None:
             raise fatal_exception
-        return self.market_data_status(portfolio_slug=portfolio["slug"])
+        return self.market_data_status(
+            portfolio_slug=portfolio["slug"],
+            _allow_autosync=False,
+        )
 
     def load_daily_returns_for_portfolio(
         self,

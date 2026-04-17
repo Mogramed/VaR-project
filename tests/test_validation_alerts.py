@@ -277,6 +277,131 @@ def test_validation_alerts_include_horizon_governance_codes():
     assert warn_alert.context.get("horizon_days") == 5
 
 
+def test_validation_alerts_collapse_thin_sample_surface_to_dedicated_warning():
+    summary = ValidationSummary(
+        alpha=0.95,
+        expected_rate=0.05,
+        model_results={},
+        best_model=None,
+        surface={
+            "governance_summary": {
+                "pvalue_threshold": 0.05,
+                "total_points": 48,
+                "effective_points": 0,
+                "insufficient_sample_count": 48,
+                "status_counts": {"PASS": 0, "WARN": 48, "FAIL": 0},
+                "coverage_fail_count": 0,
+                "independence_fail_count": 0,
+                "conditional_fail_count": 0,
+                "pass_rate": 0.0,
+            },
+            "horizon_governance": {
+                "horizon_order": [1, 10],
+                "overall_verdict": "WARN",
+                "horizons": {
+                    "h1": {
+                        "horizon_days": 1,
+                        "total_points": 24,
+                        "effective_points": 0,
+                        "insufficient_sample_count": 24,
+                        "status_counts": {"PASS": 0, "WARN": 24, "FAIL": 0},
+                        "pass_rate": 0.0,
+                        "verdict": "WARN",
+                        "champion_model": "fhs",
+                    },
+                    "h10": {
+                        "horizon_days": 10,
+                        "total_points": 24,
+                        "effective_points": 0,
+                        "insufficient_sample_count": 24,
+                        "status_counts": {"PASS": 0, "WARN": 24, "FAIL": 0},
+                        "pass_rate": 0.0,
+                        "verdict": "WARN",
+                        "champion_model": "fhs",
+                    },
+                },
+            },
+        },
+    )
+
+    alerts = alerts_from_validation_summary(summary)
+    codes = {alert.code for alert in alerts}
+
+    assert "VALIDATION_SURFACE_SAMPLE_THIN" in codes
+    assert "VALIDATION_GOVERNANCE_WARN" not in codes
+    assert "VALIDATION_HORIZON_WARN" not in codes
+    assert "VALIDATION_HORIZON_SAMPLE_THIN" in codes
+
+
+def test_validation_alerts_downgrade_legacy_fail_surface_when_effective_points_are_zero():
+    summary = ValidationSummary(
+        alpha=0.95,
+        expected_rate=0.05,
+        model_results={},
+        best_model=None,
+        surface={
+            "governance_summary": {
+                "pvalue_threshold": 0.05,
+                "total_points": 48,
+                "effective_points": 0,
+                "insufficient_sample_count": 48,
+                "status_counts": {"PASS": 11, "WARN": 0, "FAIL": 37},
+                "coverage_fail_count": 37,
+                "independence_fail_count": 24,
+                "conditional_fail_count": 32,
+                "pass_rate": 11 / 48,
+            },
+            "horizon_governance": {
+                "horizon_order": [1, 5, 10],
+                "overall_verdict": "FAIL",
+                "horizons": {
+                    "h1": {
+                        "horizon_days": 1,
+                        "total_points": 18,
+                        "effective_points": 0,
+                        "insufficient_sample_count": 18,
+                        "status_counts": {"PASS": 8, "WARN": 0, "FAIL": 10},
+                        "pass_rate": 8 / 18,
+                        "verdict": "FAIL",
+                        "champion_model": "ewma",
+                    },
+                    "h5": {
+                        "horizon_days": 5,
+                        "total_points": 15,
+                        "effective_points": 0,
+                        "insufficient_sample_count": 15,
+                        "status_counts": {"PASS": 3, "WARN": 0, "FAIL": 12},
+                        "pass_rate": 3 / 15,
+                        "verdict": "FAIL",
+                        "champion_model": "ewma",
+                    },
+                    "h10": {
+                        "horizon_days": 10,
+                        "total_points": 15,
+                        "effective_points": 0,
+                        "insufficient_sample_count": 15,
+                        "status_counts": {"PASS": 0, "WARN": 0, "FAIL": 15},
+                        "pass_rate": 0.0,
+                        "verdict": "FAIL",
+                        "champion_model": "hist",
+                    },
+                },
+            },
+        },
+    )
+
+    alerts = alerts_from_validation_summary(summary)
+    codes = {alert.code for alert in alerts}
+
+    assert "VALIDATION_SURFACE_SAMPLE_THIN" in codes
+    assert "VALIDATION_HORIZON_SAMPLE_THIN" in codes
+    assert "VALIDATION_GOVERNANCE_FAIL" not in codes
+    assert "VALIDATION_SURFACE_COVERAGE_FAIL" not in codes
+    assert "VALIDATION_SURFACE_CONDITIONAL_FAIL" not in codes
+    assert "VALIDATION_SURFACE_INDEPENDENCE_FAIL" not in codes
+    assert "VALIDATION_HORIZON_FAIL" not in codes
+
+
 def test_validation_alerts_include_es_shortfall_and_breach_rate_signals():
     summary = ValidationSummary(
         alpha=0.99,
@@ -366,6 +491,43 @@ def test_validation_alerts_skip_es_signals_when_tail_sample_is_too_small():
 
     assert "VALIDATION_ES_SHORTFALL_BREACH" not in codes
     assert "VALIDATION_ES_BREACH_RATE_BREACH" not in codes
+
+
+def test_validation_alerts_skip_es_signals_when_total_sample_is_too_small():
+    summary = ValidationSummary(
+        alpha=0.95,
+        expected_rate=0.05,
+        model_results={
+            "hist": BacktestModelValidation(
+                model="hist",
+                n=24,
+                exceptions=6,
+                expected_rate=0.05,
+                actual_rate=6 / 24,
+                lr_uc=0.0,
+                p_uc=0.4,
+                lr_ind=0.0,
+                p_ind=0.4,
+                lr_cc=0.0,
+                p_cc=0.4,
+                exceptions_last_250=6,
+                traffic_light=None,
+                score=65.0,
+                es_tail_observations=8,
+                es_shortfall_ratio=1.35,
+                es_breach_rate=0.62,
+            ),
+        },
+        best_model="hist",
+    )
+
+    alerts = alerts_from_validation_summary(summary)
+    codes = {alert.code for alert in alerts}
+
+    assert "VALIDATION_ES_SHORTFALL_BREACH" not in codes
+    assert "VALIDATION_ES_SHORTFALL_WARN" not in codes
+    assert "VALIDATION_ES_BREACH_RATE_BREACH" not in codes
+    assert "VALIDATION_ES_BREACH_RATE_WARN" not in codes
 
 
 def test_validation_alerts_include_es_acerbi_signals():

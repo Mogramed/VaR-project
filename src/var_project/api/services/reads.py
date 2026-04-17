@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
+import time
 from typing import Any
 
 import pandas as pd
@@ -13,8 +16,68 @@ from var_project.validation.model_validation import ValidationSummary, build_cha
 
 
 class DeskReadService:
+    _shared_model_comparison_cache: dict[tuple[str, str], dict[str, Any]] = {}
+    _shared_model_comparison_cache_lock = Lock()
+    _shared_model_comparison_compute_locks: dict[tuple[str, str], Lock] = {}
+
     def __init__(self, runtime: DeskServiceRuntime):
         self.runtime = runtime
+
+    def _model_comparison_cache_key(self, *, portfolio_slug: str | None = None) -> tuple[str, str]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        return (str(self.runtime.root.resolve()), str(portfolio["slug"]))
+
+    @staticmethod
+    def _model_comparison_cache_ttl_seconds() -> float:
+        return 1.5
+
+    def _cached_model_comparison(self, *, cache_key: tuple[str, str]) -> tuple[dict[str, Any] | None, bool]:
+        with self._shared_model_comparison_cache_lock:
+            cached = self._shared_model_comparison_cache.get(cache_key)
+            if cached is None:
+                return None, False
+            expired = float(cached.get("expires_at") or 0.0) <= time.monotonic()
+            payload = dict(cached.get("payload") or {})
+        if not payload:
+            return None, False
+        return deepcopy(payload), bool(expired)
+
+    def _store_model_comparison(self, *, cache_key: tuple[str, str], payload: dict[str, Any]) -> None:
+        with self._shared_model_comparison_cache_lock:
+            self._shared_model_comparison_cache[cache_key] = {
+                "expires_at": time.monotonic() + self._model_comparison_cache_ttl_seconds(),
+                "payload": deepcopy(dict(payload)),
+            }
+
+    def _model_comparison_lock(self, *, cache_key: tuple[str, str]) -> Lock:
+        with self._shared_model_comparison_cache_lock:
+            lock = self._shared_model_comparison_compute_locks.get(cache_key)
+            if lock is None:
+                lock = Lock()
+                self._shared_model_comparison_compute_locks[cache_key] = lock
+            return lock
+
+    def _latest_model_comparison_uncached(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
+        validation = self.latest_validation(portfolio_slug=portfolio_slug)
+        if validation is None:
+            return None
+
+        summary = ValidationSummary.from_dict(dict(validation.get("summary") or validation))
+        snapshot = None
+        for source in self._preferred_snapshot_sources(portfolio_slug=portfolio_slug, source="auto"):
+            snapshot = self.latest_snapshot(source=source, portfolio_slug=portfolio_slug)
+            if snapshot is not None:
+                break
+        snapshot_payload = {} if snapshot is None else dict(snapshot.get("payload") or snapshot)
+
+        comparison = build_champion_challenger_summary(
+            summary,
+            current_var=dict(snapshot_payload.get("var") or {}),
+            current_es=dict(snapshot_payload.get("es") or {}),
+        ).to_dict()
+        comparison["snapshot_source"] = None if snapshot is None else str(snapshot.get("source") or snapshot_payload.get("source") or "")
+        comparison["snapshot_timestamp"] = None if snapshot is None else str(snapshot.get("created_at") or snapshot_payload.get("time_utc") or "")
+        return comparison
 
     @staticmethod
     def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -419,26 +482,23 @@ class DeskReadService:
         return build_worker_status(self.runtime.root, storage=self.runtime.storage)
 
     def latest_model_comparison(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
-        validation = self.latest_validation(portfolio_slug=portfolio_slug)
-        if validation is None:
-            return None
+        cache_key = self._model_comparison_cache_key(portfolio_slug=portfolio_slug)
+        cached, expired = self._cached_model_comparison(cache_key=cache_key)
+        if cached is not None and not expired:
+            return cached
 
-        summary = ValidationSummary.from_dict(dict(validation.get("summary") or validation))
-        snapshot = None
-        for source in self._preferred_snapshot_sources(portfolio_slug=portfolio_slug, source="auto"):
-            snapshot = self.latest_snapshot(source=source, portfolio_slug=portfolio_slug)
-            if snapshot is not None:
-                break
-        snapshot_payload = {} if snapshot is None else dict(snapshot.get("payload") or snapshot)
-
-        comparison = build_champion_challenger_summary(
-            summary,
-            current_var=dict(snapshot_payload.get("var") or {}),
-            current_es=dict(snapshot_payload.get("es") or {}),
-        ).to_dict()
-        comparison["snapshot_source"] = None if snapshot is None else str(snapshot.get("source") or snapshot_payload.get("source") or "")
-        comparison["snapshot_timestamp"] = None if snapshot is None else str(snapshot.get("created_at") or snapshot_payload.get("time_utc") or "")
-        return comparison
+        compute_lock = self._model_comparison_lock(cache_key=cache_key)
+        with compute_lock:
+            cached, expired = self._cached_model_comparison(cache_key=cache_key)
+            if cached is not None and not expired:
+                return cached
+            comparison = self._latest_model_comparison_uncached(portfolio_slug=portfolio_slug)
+            if comparison is None:
+                with self._shared_model_comparison_cache_lock:
+                    self._shared_model_comparison_cache.pop(cache_key, None)
+                return None
+            self._store_model_comparison(cache_key=cache_key, payload=comparison)
+            return dict(comparison)
 
     def latest_risk_attribution(
         self,

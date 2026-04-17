@@ -233,3 +233,8 @@ frontend/out/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Local issue automation artifacts
+.github/issues/
+scripts/ensure-labels.ps1
+scripts/create-issues.ps1

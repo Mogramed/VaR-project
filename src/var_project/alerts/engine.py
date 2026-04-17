@@ -8,7 +8,9 @@ from var_project.risk.decisioning import RiskDecisionResult
 from var_project.risk.budgeting import RiskBudgetSnapshot
 from var_project.validation.model_validation import ValidationSummary
 
-ES_ALERT_MIN_TAIL_OBSERVATIONS = 3
+# ES diagnostics are unstable on tiny samples; require both enough rows and enough tail events.
+ES_ALERT_MIN_TOTAL_OBSERVATIONS = 30
+ES_ALERT_MIN_TAIL_OBSERVATIONS = 5
 ES_SHORTFALL_WARN_THRESHOLD = 1.10
 ES_SHORTFALL_BREACH_THRESHOLD = 1.25
 ES_BREACH_RATE_WARN_THRESHOLD = 0.35
@@ -16,6 +18,8 @@ ES_BREACH_RATE_BREACH_THRESHOLD = 0.50
 ES_ACERBI_MIN_OBSERVATIONS = 60
 ES_ACERBI_WARN_PVALUE = 0.05
 ES_ACERBI_BREACH_PVALUE = 0.01
+VALIDATION_SURFACE_MIN_OBSERVATIONS = 60
+VALIDATION_SURFACE_MIN_EXPECTED_EXCEPTIONS = 5.0
 
 
 @dataclass(frozen=True)
@@ -47,6 +51,35 @@ def _float_or_none(value: Any) -> float | None:
     return parsed
 
 
+def _surface_min_required_observations(expected_rate: float) -> int:
+    rate = max(float(expected_rate), 1e-9)
+    expected_floor = int(math.ceil(float(VALIDATION_SURFACE_MIN_EXPECTED_EXCEPTIONS) / rate))
+    return int(max(int(VALIDATION_SURFACE_MIN_OBSERVATIONS), expected_floor))
+
+
+def _surface_point_has_sufficient_observations(point: Mapping[str, Any]) -> bool:
+    n = _int_or_zero(point.get("n"))
+    expected_rate = _float_or_none(point.get("expected_rate"))
+    if expected_rate is None:
+        return False
+    return int(n) >= _surface_min_required_observations(expected_rate)
+
+
+def _surface_horizon_sample_counts(points: list[Mapping[str, Any]]) -> dict[int, dict[str, int]]:
+    counts: dict[int, dict[str, int]] = {}
+    for point in points:
+        horizon_days = _int_or_zero(point.get("horizon_days"))
+        if horizon_days <= 0:
+            continue
+        bucket = counts.setdefault(horizon_days, {"total_points": 0, "insufficient_sample_count": 0, "effective_points": 0})
+        bucket["total_points"] = int(bucket.get("total_points", 0)) + 1
+        if _surface_point_has_sufficient_observations(point):
+            bucket["effective_points"] = int(bucket.get("effective_points", 0)) + 1
+        else:
+            bucket["insufficient_sample_count"] = int(bucket.get("insufficient_sample_count", 0)) + 1
+    return counts
+
+
 def _alerts_from_validation_surface(summary: ValidationSummary) -> List[AlertEvent]:
     surface = dict(summary.surface or {})
     governance = dict(surface.get("governance_summary") or {})
@@ -54,9 +87,21 @@ def _alerts_from_validation_surface(summary: ValidationSummary) -> List[AlertEve
     if not governance:
         return []
 
+    surface_points = [dict(item) for item in list(surface.get("points") or []) if isinstance(item, Mapping)]
+    horizon_sample_counts = _surface_horizon_sample_counts(surface_points)
+
     total_points = _int_or_zero(governance.get("total_points"))
+    if total_points <= 0 and surface_points:
+        total_points = int(len(surface_points))
     if total_points <= 0:
         return []
+    effective_points = _int_or_zero(governance.get("effective_points"))
+    insufficient_sample_count = _int_or_zero(governance.get("insufficient_sample_count"))
+    if insufficient_sample_count <= 0 and surface_points:
+        insufficient_sample_count = int(sum(1 for point in surface_points if not _surface_point_has_sufficient_observations(point)))
+    if effective_points <= 0 and insufficient_sample_count > 0:
+        effective_points = int(max(total_points - insufficient_sample_count, 0))
+    thin_only_surface = bool(insufficient_sample_count > 0 and effective_points <= 0)
 
     status_counts = {
         str(key).upper(): _int_or_zero(value)
@@ -65,6 +110,7 @@ def _alerts_from_validation_surface(summary: ValidationSummary) -> List[AlertEve
     pass_count = _int_or_zero(status_counts.get("PASS"))
     warn_count = _int_or_zero(status_counts.get("WARN"))
     fail_count = _int_or_zero(status_counts.get("FAIL"))
+    effective_warn_count = max(warn_count - insufficient_sample_count, 0)
 
     coverage_fail_count = _int_or_zero(governance.get("coverage_fail_count"))
     independence_fail_count = _int_or_zero(governance.get("independence_fail_count"))
@@ -73,9 +119,35 @@ def _alerts_from_validation_surface(summary: ValidationSummary) -> List[AlertEve
     pass_rate = _float_or_none(governance.get("pass_rate"))
     if pass_rate is None and total_points > 0:
         pass_rate = float(pass_count / total_points)
+    effective_pass_rate = _float_or_none(governance.get("effective_pass_rate"))
+    if effective_pass_rate is None and effective_points > 0:
+        effective_pass_rate = float(pass_count / effective_points)
 
     alerts: List[AlertEvent] = []
-    if fail_count > 0:
+    if thin_only_surface and effective_warn_count <= 0:
+        alerts.append(
+            AlertEvent(
+                source="validation_surface",
+                severity="WARN",
+                code="VALIDATION_SURFACE_SAMPLE_THIN",
+                message=(
+                    f"Validation governance surface has insufficient observations on "
+                    f"{insufficient_sample_count} points (effective points: {effective_points})."
+                ),
+                context={
+                    "total_points": total_points,
+                    "effective_points": effective_points,
+                    "insufficient_sample_count": insufficient_sample_count,
+                    "pass_count": pass_count,
+                    "warn_count": warn_count,
+                    "fail_count": fail_count,
+                    "pass_rate": pass_rate,
+                    "effective_pass_rate": effective_pass_rate,
+                    "pvalue_threshold": pvalue_threshold,
+                },
+            )
+        )
+    elif fail_count > 0:
         alerts.append(
             AlertEvent(
                 source="validation_surface",
@@ -91,6 +163,32 @@ def _alerts_from_validation_surface(summary: ValidationSummary) -> List[AlertEve
                     "warn_count": warn_count,
                     "fail_count": fail_count,
                     "pass_rate": pass_rate,
+                    "effective_points": effective_points,
+                    "effective_pass_rate": effective_pass_rate,
+                    "insufficient_sample_count": insufficient_sample_count,
+                    "pvalue_threshold": pvalue_threshold,
+                },
+            )
+        )
+    elif insufficient_sample_count > 0 and effective_warn_count <= 0:
+        alerts.append(
+            AlertEvent(
+                source="validation_surface",
+                severity="WARN",
+                code="VALIDATION_SURFACE_SAMPLE_THIN",
+                message=(
+                    f"Validation governance surface has insufficient observations on "
+                    f"{insufficient_sample_count} points (effective points: {effective_points})."
+                ),
+                context={
+                    "total_points": total_points,
+                    "effective_points": effective_points,
+                    "insufficient_sample_count": insufficient_sample_count,
+                    "pass_count": pass_count,
+                    "warn_count": warn_count,
+                    "fail_count": fail_count,
+                    "pass_rate": pass_rate,
+                    "effective_pass_rate": effective_pass_rate,
                     "pvalue_threshold": pvalue_threshold,
                 },
             )
@@ -111,12 +209,15 @@ def _alerts_from_validation_surface(summary: ValidationSummary) -> List[AlertEve
                     "warn_count": warn_count,
                     "fail_count": fail_count,
                     "pass_rate": pass_rate,
+                    "effective_points": effective_points,
+                    "effective_pass_rate": effective_pass_rate,
+                    "insufficient_sample_count": insufficient_sample_count,
                     "pvalue_threshold": pvalue_threshold,
                 },
             )
         )
 
-    if coverage_fail_count > 0:
+    if coverage_fail_count > 0 and not thin_only_surface:
         alerts.append(
             AlertEvent(
                 source="validation_surface",
@@ -133,7 +234,7 @@ def _alerts_from_validation_surface(summary: ValidationSummary) -> List[AlertEve
             )
         )
 
-    if conditional_fail_count > 0:
+    if conditional_fail_count > 0 and not thin_only_surface:
         alerts.append(
             AlertEvent(
                 source="validation_surface",
@@ -150,7 +251,7 @@ def _alerts_from_validation_surface(summary: ValidationSummary) -> List[AlertEve
             )
         )
 
-    if independence_fail_count > 0:
+    if independence_fail_count > 0 and not thin_only_surface:
         alerts.append(
             AlertEvent(
                 source="validation_surface",
@@ -202,52 +303,97 @@ def _alerts_from_validation_surface(summary: ValidationSummary) -> List[AlertEve
         pass_count = _int_or_zero(status_counts.get("PASS"))
         warn_count = _int_or_zero(status_counts.get("WARN"))
         fail_count = _int_or_zero(status_counts.get("FAIL"))
+        horizon_effective_points = _int_or_zero(payload.get("effective_points"))
+        horizon_insufficient_sample_count = _int_or_zero(payload.get("insufficient_sample_count"))
+        derived_horizon = dict(horizon_sample_counts.get(int(horizon_days)) or {})
+        if horizon_insufficient_sample_count <= 0:
+            horizon_insufficient_sample_count = _int_or_zero(derived_horizon.get("insufficient_sample_count"))
+        if horizon_effective_points <= 0:
+            horizon_effective_points = _int_or_zero(derived_horizon.get("effective_points"))
+        horizon_effective_warn_count = max(warn_count - horizon_insufficient_sample_count, 0)
+        thin_only_horizon = bool(horizon_insufficient_sample_count > 0 and horizon_effective_points <= 0)
         horizon_total_points = _int_or_zero(payload.get("total_points"))
+        if horizon_total_points <= 0:
+            horizon_total_points = _int_or_zero(derived_horizon.get("total_points"))
         if horizon_total_points <= 0:
             horizon_total_points = pass_count + warn_count + fail_count
         horizon_pass_rate = _float_or_none(payload.get("pass_rate"))
         if horizon_pass_rate is None and horizon_total_points > 0:
             horizon_pass_rate = float(pass_count / horizon_total_points)
+        horizon_effective_pass_rate = _float_or_none(payload.get("effective_pass_rate"))
+        if horizon_effective_pass_rate is None and horizon_effective_points > 0:
+            horizon_effective_pass_rate = float(pass_count / horizon_effective_points)
 
         horizon_verdict = str(payload.get("verdict") or "").upper()
         champion_model = str(payload.get("champion_model") or "").lower() or None
         context = {
             "horizon_days": int(horizon_days),
             "total_points": horizon_total_points,
+            "effective_points": horizon_effective_points,
+            "insufficient_sample_count": horizon_insufficient_sample_count,
             "pass_count": pass_count,
             "warn_count": warn_count,
             "fail_count": fail_count,
             "pass_rate": horizon_pass_rate,
+            "effective_pass_rate": horizon_effective_pass_rate,
             "verdict": horizon_verdict or None,
             "champion_model": champion_model,
             "pvalue_threshold": pvalue_threshold,
         }
         if horizon_verdict == "FAIL":
-            alerts.append(
-                AlertEvent(
-                    source="validation_surface",
-                    severity="BREACH",
-                    code="VALIDATION_HORIZON_FAIL",
-                    message=(
-                        f"Validation horizon {int(horizon_days)}d is FAIL with "
-                        f"{fail_count} failing points out of {horizon_total_points}."
-                    ),
-                    context=context,
+            if thin_only_horizon:
+                alerts.append(
+                    AlertEvent(
+                        source="validation_surface",
+                        severity="WARN",
+                        code="VALIDATION_HORIZON_SAMPLE_THIN",
+                        message=(
+                            f"Validation horizon {int(horizon_days)}d has insufficient observations "
+                            f"on {horizon_insufficient_sample_count} points."
+                        ),
+                        context=context,
+                    )
                 )
-            )
+            else:
+                alerts.append(
+                    AlertEvent(
+                        source="validation_surface",
+                        severity="BREACH",
+                        code="VALIDATION_HORIZON_FAIL",
+                        message=(
+                            f"Validation horizon {int(horizon_days)}d is FAIL with "
+                            f"{fail_count} failing points out of {horizon_total_points}."
+                        ),
+                        context=context,
+                    )
+                )
         elif horizon_verdict == "WARN":
-            alerts.append(
-                AlertEvent(
-                    source="validation_surface",
-                    severity="WARN",
-                    code="VALIDATION_HORIZON_WARN",
-                    message=(
-                        f"Validation horizon {int(horizon_days)}d is WARN "
-                        f"({warn_count} warning points out of {horizon_total_points})."
-                    ),
-                    context=context,
+            if horizon_insufficient_sample_count > 0 and horizon_effective_warn_count <= 0:
+                alerts.append(
+                    AlertEvent(
+                        source="validation_surface",
+                        severity="WARN",
+                        code="VALIDATION_HORIZON_SAMPLE_THIN",
+                        message=(
+                            f"Validation horizon {int(horizon_days)}d has insufficient observations "
+                            f"on {horizon_insufficient_sample_count} points."
+                        ),
+                        context=context,
+                    )
                 )
-            )
+            else:
+                alerts.append(
+                    AlertEvent(
+                        source="validation_surface",
+                        severity="WARN",
+                        code="VALIDATION_HORIZON_WARN",
+                        message=(
+                            f"Validation horizon {int(horizon_days)}d is WARN "
+                            f"({warn_count} warning points out of {horizon_total_points})."
+                        ),
+                        context=context,
+                    )
+                )
 
     return alerts
 
@@ -295,13 +441,17 @@ def alerts_from_validation_summary(summary: ValidationSummary) -> List[AlertEven
                     context={"model": model_name, "exceptions_last_250": result.exceptions_last_250},
                 )
             )
+        n_observations = _int_or_zero(result.n)
         es_tail_observations = _int_or_zero(result.es_tail_observations)
         es_shortfall_ratio = _float_or_none(result.es_shortfall_ratio)
         es_breach_rate = _float_or_none(result.es_breach_rate)
         es_acerbi_observations = _int_or_zero(getattr(result, "es_acerbi_observations", 0))
         es_acerbi_stat = _float_or_none(getattr(result, "es_acerbi_stat", None))
         es_acerbi_p_value = _float_or_none(getattr(result, "es_acerbi_p_value", None))
-        if es_tail_observations >= ES_ALERT_MIN_TAIL_OBSERVATIONS:
+        if (
+            n_observations >= ES_ALERT_MIN_TOTAL_OBSERVATIONS
+            and es_tail_observations >= ES_ALERT_MIN_TAIL_OBSERVATIONS
+        ):
             if es_shortfall_ratio is not None and es_shortfall_ratio >= ES_SHORTFALL_BREACH_THRESHOLD:
                 alerts.append(
                     AlertEvent(

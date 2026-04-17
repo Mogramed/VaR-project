@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -17,8 +18,19 @@ from var_project.validation.model_validation import ValidationSummary
 class AppStorage:
     def __init__(self, settings: StorageSettings):
         self.settings = settings
-        connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-        self.engine = create_engine(settings.database_url, future=True, connect_args=connect_args)
+        is_sqlite = settings.database_url.startswith("sqlite")
+        connect_args = {"check_same_thread": False} if is_sqlite else {}
+        engine_kwargs: dict[str, Any] = {
+            "future": True,
+            "connect_args": connect_args,
+            "pool_pre_ping": True,
+        }
+        if not is_sqlite:
+            engine_kwargs["pool_recycle"] = int(os.getenv("VAR_PROJECT_DB_POOL_RECYCLE_SECONDS", "300"))
+            engine_kwargs["pool_size"] = int(os.getenv("VAR_PROJECT_DB_POOL_SIZE", "8"))
+            engine_kwargs["max_overflow"] = int(os.getenv("VAR_PROJECT_DB_MAX_OVERFLOW", "8"))
+            engine_kwargs["pool_timeout"] = int(os.getenv("VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS", "15"))
+        self.engine = create_engine(settings.database_url, **engine_kwargs)
         self.session_factory = sessionmaker(bind=self.engine, expire_on_commit=False)
         self.reads = StorageReadRepository(self.session_factory)
         self.writes = StorageWriteRepository(self.session_factory, settings)

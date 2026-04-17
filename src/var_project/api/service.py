@@ -27,6 +27,7 @@ class DeskApiService:
     _shared_desk_overview_cache: dict[tuple[str, str], dict[str, Any]] = {}
     _shared_desk_overview_refresh_inflight: set[tuple[str, str]] = set()
     _shared_desk_overview_cache_lock = Lock()
+    _shared_desk_overview_compute_lock = Lock()
 
     def __init__(
         self,
@@ -60,6 +61,10 @@ class DeskApiService:
         self.desk = self.runtime.desk
         self.portfolio_ids = self.runtime.portfolio_ids
         self.portfolio_id = self.runtime.portfolio_id
+        self._live_read_executor = ThreadPoolExecutor(
+            max_workers=self._live_read_workers(),
+            thread_name_prefix="desk-live-read",
+        )
 
     @staticmethod
     def _bounded_timeout_ms(value: Any, *, default: int = 1200, min_value: int = 100, max_value: int = 15000) -> int:
@@ -80,6 +85,15 @@ class DeskApiService:
             min_value=100,
             max_value=15000,
         )
+
+    def _live_read_workers(self) -> int:
+        workers = self._bounded_timeout_ms(
+            os.getenv("VAR_PROJECT_API_LIVE_READ_WORKERS"),
+            default=2,
+            min_value=1,
+            max_value=8,
+        )
+        return int(workers)
 
     def _desk_overview_cache_ttl_seconds(self) -> float:
         configured = max(float(self.mt5_config.live_poll_seconds), 0.5)
@@ -116,6 +130,9 @@ class DeskApiService:
             try:
                 payload = self._compute_desk_overview_payload(desk_slug=desk_slug)
                 self._store_desk_overview_cache(cache_key=cache_key, payload=payload)
+            except Exception:
+                # Keep async refresh best-effort; stale cache remains available.
+                return
             finally:
                 with self._shared_desk_overview_cache_lock:
                     self._shared_desk_overview_refresh_inflight.discard(cache_key)
@@ -195,20 +212,27 @@ class DeskApiService:
             min_value=100,
             max_value=15000,
         )
-        executor: ThreadPoolExecutor | None = ThreadPoolExecutor(max_workers=1)
+        future = self._live_read_executor.submit(
+            self.mt5.live_state,
+            portfolio_slug=portfolio_slug,
+            detail_level="summary",
+            force_refresh=bool(force_refresh),
+        )
         try:
-            future = executor.submit(
-                self.mt5.live_state,
-                portfolio_slug=portfolio_slug,
-                detail_level="summary",
-                force_refresh=bool(force_refresh),
-            )
             return future.result(timeout=max(float(wait_ms) / 1000.0, 0.1))
+        except FuturesTimeoutError:
+            return None
         except Exception:
             return None
         finally:
-            if executor is not None:
-                executor.shutdown(wait=False, cancel_futures=True)
+            if not future.done():
+                future.cancel()
+
+    def close(self) -> None:
+        try:
+            self._live_read_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
 
     def health(self) -> dict[str, Any]:
         return self.reads.health()
@@ -243,14 +267,13 @@ class DeskApiService:
         if should_fetch_live:
             wait_ms = self._bounded_timeout_ms(max_wait_ms, default=1200, min_value=100, max_value=15000)
             timeout_seconds = max(float(wait_ms) / 1000.0, 0.1)
-            executor: ThreadPoolExecutor | None = ThreadPoolExecutor(max_workers=1)
+            future = self._live_read_executor.submit(
+                self.mt5.live_state,
+                portfolio_slug=portfolio["slug"],
+                detail_level="summary",
+                force_refresh=bool(refresh_live),
+            )
             try:
-                future = executor.submit(
-                    self.mt5.live_state,
-                    portfolio_slug=portfolio["slug"],
-                    detail_level="summary",
-                    force_refresh=bool(refresh_live),
-                )
                 live_state = future.result(timeout=timeout_seconds)
             except FuturesTimeoutError:
                 live_fetch_timed_out = True
@@ -260,8 +283,8 @@ class DeskApiService:
                 live_fetch_error = str(exc)
                 live_state = None
             finally:
-                if executor is not None:
-                    executor.shutdown(wait=False, cancel_futures=True)
+                if not future.done():
+                    future.cancel()
 
         live_connected = bool((live_state or {}).get("connected", False))
         live_degraded = bool((live_state or {}).get("degraded", False))
@@ -475,6 +498,8 @@ class DeskApiService:
                 "VALIDATION_GOVERNANCE_WARN" in normalized
                 or "VALIDATION_SURFACE_INDEPENDENCE_FAIL" in normalized
                 or "VALIDATION_HORIZON_WARN" in normalized
+                or "VALIDATION_SURFACE_SAMPLE_THIN" in normalized
+                or "VALIDATION_HORIZON_SAMPLE_THIN" in normalized
                 or "VALIDATION_ES_SHORTFALL_WARN" in normalized
                 or "VALIDATION_ES_BREACH_RATE_WARN" in normalized
                 or "WINDOW_EXPIRED" in normalized
@@ -581,9 +606,19 @@ class DeskApiService:
                 desk_slug=resolved_desk_slug,
             )
             return cached
-        payload = self._compute_desk_overview_payload(desk_slug=resolved_desk_slug)
-        self._store_desk_overview_cache(cache_key=cache_key, payload=payload)
-        return payload
+        with self._shared_desk_overview_compute_lock:
+            cached, is_stale = self._cached_desk_overview(cache_key=cache_key)
+            if cached is not None and not is_stale:
+                return cached
+            if cached is not None and is_stale:
+                self._refresh_desk_overview_cache_async(
+                    cache_key=cache_key,
+                    desk_slug=resolved_desk_slug,
+                )
+                return cached
+            payload = self._compute_desk_overview_payload(desk_slug=resolved_desk_slug)
+            self._store_desk_overview_cache(cache_key=cache_key, payload=payload)
+            return payload
 
     def latest_artifact(self, artifact_type: str) -> dict[str, Any] | None:
         return self.reads.latest_artifact(artifact_type)

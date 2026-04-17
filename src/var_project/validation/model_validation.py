@@ -18,6 +18,8 @@ VALIDATION_STATUS_FAIL = "FAIL"
 ES_ACERBI_MIN_OBSERVATIONS = 60
 ES_ACERBI_WARN_PVALUE = 0.05
 ES_ACERBI_BREACH_PVALUE = 0.01
+VALIDATION_SURFACE_MIN_OBSERVATIONS = 60
+VALIDATION_SURFACE_MIN_EXPECTED_EXCEPTIONS = 5.0
 
 
 @dataclass(frozen=True)
@@ -531,12 +533,29 @@ def _pvalue_pass(value: float) -> bool | None:
     return bool(float(numeric) >= P_VALUE_SIGNIFICANCE_LEVEL)
 
 
+def _surface_min_required_observations(expected_rate: float) -> int:
+    expected_rate_safe = max(float(expected_rate), 1e-9)
+    expected_exception_floor = int(
+        np.ceil(float(VALIDATION_SURFACE_MIN_EXPECTED_EXCEPTIONS) / expected_rate_safe)
+    )
+    return int(max(int(VALIDATION_SURFACE_MIN_OBSERVATIONS), expected_exception_floor))
+
+
+def _surface_has_sufficient_observations(n: int, expected_rate: float) -> bool:
+    required = _surface_min_required_observations(expected_rate)
+    return int(n) >= int(required)
+
+
 def _surface_statistical_status(
     *,
+    n: int,
+    expected_rate: float,
     coverage_pass: bool,
     independence_pass: bool | None,
     conditional_pass: bool | None,
 ) -> str:
+    if not _surface_has_sufficient_observations(n=n, expected_rate=expected_rate):
+        return VALIDATION_STATUS_WARN
     if not coverage_pass or conditional_pass is False:
         return VALIDATION_STATUS_FAIL
     if independence_pass is False:
@@ -566,9 +585,38 @@ def _surface_slice_validation_summary(points: list[ValidationSurfacePoint]) -> d
     for point in points:
         status_counts[point.statistical_status] = status_counts.get(point.statistical_status, 0) + 1
 
-    coverage_fail_count = int(sum(1 for point in points if point.coverage_pass is False))
-    independence_fail_count = int(sum(1 for point in points if point.independence_pass is False))
-    conditional_fail_count = int(sum(1 for point in points if point.conditional_pass is False))
+    insufficient_sample_count = int(
+        sum(
+            1
+            for point in points
+            if not _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+        )
+    )
+    effective_points = int(len(points) - insufficient_sample_count)
+    coverage_fail_count = int(
+        sum(
+            1
+            for point in points
+            if point.coverage_pass is False
+            and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+        )
+    )
+    independence_fail_count = int(
+        sum(
+            1
+            for point in points
+            if point.independence_pass is False
+            and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+        )
+    )
+    conditional_fail_count = int(
+        sum(
+            1
+            for point in points
+            if point.conditional_pass is False
+            and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+        )
+    )
 
     leader = ordered[0]
     total_points = int(len(points))
@@ -584,14 +632,20 @@ def _surface_slice_validation_summary(points: list[ValidationSurfacePoint]) -> d
         verdict = VALIDATION_STATUS_PASS
     return {
         "model_count": total_points,
+        "effective_points": effective_points,
+        "insufficient_sample_count": insufficient_sample_count,
         "champion_model": str(leader.model),
         "champion_score": float(leader.score),
         "status_counts": {key: int(value) for key, value in status_counts.items()},
         "total_points": total_points,
+        "effective_pass_rate": (None if effective_points <= 0 else float(pass_count / effective_points)),
+        "effective_non_fail_rate": (None if effective_points <= 0 else float(non_fail_count / effective_points)),
         "pass_rate": (None if total_points <= 0 else float(pass_count / total_points)),
         "non_fail_rate": (None if total_points <= 0 else float(non_fail_count / total_points)),
         "verdict": verdict,
         "pvalue_threshold": float(P_VALUE_SIGNIFICANCE_LEVEL),
+        "min_observations_floor": int(VALIDATION_SURFACE_MIN_OBSERVATIONS),
+        "min_expected_exceptions": float(VALIDATION_SURFACE_MIN_EXPECTED_EXCEPTIONS),
         "coverage_fail_count": coverage_fail_count,
         "independence_fail_count": independence_fail_count,
         "conditional_fail_count": conditional_fail_count,
@@ -614,9 +668,38 @@ def _surface_governance_summary(points: list[ValidationSurfacePoint]) -> dict[st
         traffic_lights[traffic] = traffic_lights.get(traffic, 0) + 1
 
     total_points = int(len(points))
-    coverage_fail_count = int(sum(1 for point in points if point.coverage_pass is False))
-    independence_fail_count = int(sum(1 for point in points if point.independence_pass is False))
-    conditional_fail_count = int(sum(1 for point in points if point.conditional_pass is False))
+    insufficient_sample_count = int(
+        sum(
+            1
+            for point in points
+            if not _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+        )
+    )
+    effective_points = int(total_points - insufficient_sample_count)
+    coverage_fail_count = int(
+        sum(
+            1
+            for point in points
+            if point.coverage_pass is False
+            and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+        )
+    )
+    independence_fail_count = int(
+        sum(
+            1
+            for point in points
+            if point.independence_pass is False
+            and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+        )
+    )
+    conditional_fail_count = int(
+        sum(
+            1
+            for point in points
+            if point.conditional_pass is False
+            and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+        )
+    )
 
     pass_count = int(status_counts.get(VALIDATION_STATUS_PASS, 0))
     warn_count = int(status_counts.get(VALIDATION_STATUS_WARN, 0))
@@ -633,14 +716,20 @@ def _surface_governance_summary(points: list[ValidationSurfacePoint]) -> dict[st
     return {
         "pvalue_threshold": float(P_VALUE_SIGNIFICANCE_LEVEL),
         "total_points": total_points,
+        "effective_points": effective_points,
+        "insufficient_sample_count": insufficient_sample_count,
         "status_counts": {key: int(value) for key, value in status_counts.items()},
         "coverage_fail_count": coverage_fail_count,
         "independence_fail_count": independence_fail_count,
         "conditional_fail_count": conditional_fail_count,
         "traffic_lights": traffic_lights,
         "verdict": verdict,
+        "effective_pass_rate": (None if effective_points <= 0 else float(pass_count / effective_points)),
+        "effective_non_fail_rate": (None if effective_points <= 0 else float(non_fail_count / effective_points)),
         "pass_rate": (None if total_points <= 0 else float(pass_count / total_points)),
         "non_fail_rate": (None if total_points <= 0 else float(non_fail_count / total_points)),
+        "min_observations_floor": int(VALIDATION_SURFACE_MIN_OBSERVATIONS),
+        "min_expected_exceptions": float(VALIDATION_SURFACE_MIN_EXPECTED_EXCEPTIONS),
     }
 
 
@@ -670,6 +759,14 @@ def _surface_horizon_governance_summary(
             traffic_lights[traffic] = traffic_lights.get(traffic, 0) + 1
 
         total_points = int(len(horizon_points))
+        insufficient_sample_count = int(
+            sum(
+                1
+                for point in horizon_points
+                if not _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+            )
+        )
+        effective_points = int(total_points - insufficient_sample_count)
         pass_count = int(status_counts.get(VALIDATION_STATUS_PASS, 0))
         warn_count = int(status_counts.get(VALIDATION_STATUS_WARN, 0))
         fail_count = int(status_counts.get(VALIDATION_STATUS_FAIL, 0))
@@ -702,21 +799,52 @@ def _surface_horizon_governance_summary(
         horizon_payload[f"h{int(horizon_days)}"] = {
             "horizon_days": int(horizon_days),
             "total_points": total_points,
+            "effective_points": effective_points,
+            "insufficient_sample_count": insufficient_sample_count,
             "status_counts": {key: int(value) for key, value in status_counts.items()},
-            "coverage_fail_count": int(sum(1 for point in horizon_points if point.coverage_pass is False)),
-            "independence_fail_count": int(sum(1 for point in horizon_points if point.independence_pass is False)),
-            "conditional_fail_count": int(sum(1 for point in horizon_points if point.conditional_pass is False)),
+            "coverage_fail_count": int(
+                sum(
+                    1
+                    for point in horizon_points
+                    if point.coverage_pass is False
+                    and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+                )
+            ),
+            "independence_fail_count": int(
+                sum(
+                    1
+                    for point in horizon_points
+                    if point.independence_pass is False
+                    and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+                )
+            ),
+            "conditional_fail_count": int(
+                sum(
+                    1
+                    for point in horizon_points
+                    if point.conditional_pass is False
+                    and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+                )
+            ),
             "traffic_lights": traffic_lights,
             "pass_rate": (None if total_points <= 0 else float(pass_count / total_points)),
+            "effective_pass_rate": (None if effective_points <= 0 else float(pass_count / effective_points)),
             "non_fail_rate": (
                 None
                 if total_points <= 0
                 else float((pass_count + warn_count) / total_points)
             ),
+            "effective_non_fail_rate": (
+                None
+                if effective_points <= 0
+                else float((pass_count + warn_count) / effective_points)
+            ),
             "verdict": verdict,
             "champion_model": champion_model,
             "alpha_priority": [float(item) for item in ordered_alphas],
             "pvalue_threshold": float(P_VALUE_SIGNIFICANCE_LEVEL),
+            "min_observations_floor": int(VALIDATION_SURFACE_MIN_OBSERVATIONS),
+            "min_expected_exceptions": float(VALIDATION_SURFACE_MIN_EXPECTED_EXCEPTIONS),
         }
 
     overall_verdict = VALIDATION_STATUS_PASS
@@ -776,6 +904,8 @@ def validate_compare_surface(
                 independence_pass = _pvalue_pass(ind["p_ind"])
                 conditional_pass = _pvalue_pass(cc["p_cc"])
                 statistical_status = _surface_statistical_status(
+                    n=int(uc["n"]),
+                    expected_rate=expected_rate,
                     coverage_pass=coverage_pass,
                     independence_pass=independence_pass,
                     conditional_pass=conditional_pass,
