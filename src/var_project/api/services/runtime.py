@@ -28,6 +28,19 @@ from var_project.execution.mt5_live import ExecutionGuardDecision, MT5LiveGatewa
 from var_project.storage import AppStorage
 
 
+class StorageSchemaError(RuntimeError):
+    def __init__(self, schema_report: Mapping[str, Any]):
+        report = dict(schema_report)
+        detail = str(report.get("detail") or "Database schema is invalid.")
+        super().__init__(detail)
+        self.schema_report = report
+        self.error_code = "schema_invalid"
+        self.hint = str(
+            report.get("hint")
+            or "Run `var-project db upgrade` (or `alembic upgrade head`) then retry."
+        )
+
+
 class DeskServiceRuntime:
     def __init__(
         self,
@@ -51,17 +64,10 @@ class DeskServiceRuntime:
         self.desk = DeskDefinition(**get_desk_context(self.raw_config))
         self.storage = AppStorage.from_root(root, self.raw_config)
         self.storage.initialize(create_schema=self.bootstrap_storage)
-        self.storage_ready = self.storage.schema_ready()
+        self.storage_schema = self.storage.schema_status(strict_revision=not self.bootstrap_storage)
+        self.storage_ready = bool(self.storage_schema.get("ready"))
         self.portfolio_ids: dict[str, int] = {}
-        if self.storage_ready:
-            for portfolio in self.portfolios:
-                self.portfolio_ids[portfolio["slug"]] = self.storage.upsert_portfolio(
-                    name=portfolio["name"],
-                    base_currency=portfolio["base_currency"],
-                    symbols=portfolio["symbols"],
-                    positions=portfolio["positions"],
-                    slug=portfolio["slug"],
-                )
+        self._refresh_portfolio_ids_if_ready()
         self.portfolio_id = self.portfolio_ids.get(self.portfolio["slug"])
 
         self.risk = PortfolioRiskCalculator(self)
@@ -69,6 +75,28 @@ class DeskServiceRuntime:
         self.execution = MT5ExecutionOrchestrator(self)
         self.governance = GovernanceRecorder(self)
         self.market_data = DeskMarketDataService(self)
+
+    def _refresh_portfolio_ids_if_ready(self) -> None:
+        if not self.storage_ready:
+            return
+        for portfolio in self.portfolios:
+            slug = str(portfolio["slug"])
+            if slug in self.portfolio_ids:
+                continue
+            self.portfolio_ids[slug] = self.storage.upsert_portfolio(
+                name=portfolio["name"],
+                base_currency=portfolio["base_currency"],
+                symbols=portfolio["symbols"],
+                positions=portfolio["positions"],
+                slug=slug,
+            )
+
+    def refresh_storage_schema_status(self) -> dict[str, Any]:
+        self.storage_schema = self.storage.schema_status(strict_revision=not self.bootstrap_storage)
+        self.storage_ready = bool(self.storage_schema.get("ready"))
+        self._refresh_portfolio_ids_if_ready()
+        self.portfolio_id = self.portfolio_ids.get(self.portfolio["slug"])
+        return dict(self.storage_schema)
 
     @staticmethod
     def _bool_env(value: str | None, *, default: bool) -> bool:
@@ -120,8 +148,9 @@ class DeskServiceRuntime:
         )
 
     def require_storage_ready(self) -> None:
-        if not self.storage_ready:
-            raise RuntimeError("Database schema is not initialized. Run `var-project db upgrade` first.")
+        schema_status = self.refresh_storage_schema_status()
+        if not bool(schema_status.get("ready")):
+            raise StorageSchemaError(schema_status)
 
     def _build_risk_model_config(
         self,

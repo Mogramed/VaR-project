@@ -6,6 +6,7 @@ from typing import Any
 import yaml
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 from var_project.storage.settings import StorageSettings
 
@@ -43,3 +44,14 @@ def upgrade_database(root: Path, *, revision: str = "head", database_url: str | 
         "revision": revision,
         "script_location": config.get_main_option("script_location"),
     }
+
+
+def expected_head_revision(root: Path) -> str | None:
+    config = build_alembic_config(root)
+    script = ScriptDirectory.from_config(config)
+    heads = sorted(str(item) for item in script.get_heads() if item)
+    if not heads:
+        return None
+    if len(heads) == 1:
+        return heads[0]
+    return ",".join(heads)

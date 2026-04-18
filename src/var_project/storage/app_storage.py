@@ -9,16 +9,18 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from var_project.alerts.engine import AlertEvent
+from var_project.storage.migrations import expected_head_revision
 from var_project.storage.models import Base
 from var_project.storage.repositories import StorageReadRepository, StorageWriteRepository
-from var_project.storage.schema_checks import validate_operator_runs_schema
+from var_project.storage.schema_checks import validate_storage_schema
 from var_project.storage.settings import StorageSettings
 from var_project.validation.model_validation import ValidationSummary
 
 
 class AppStorage:
-    def __init__(self, settings: StorageSettings):
+    def __init__(self, settings: StorageSettings, *, root: Path | None = None):
         self.settings = settings
+        self.root = (root or Path.cwd()).resolve()
         is_sqlite = settings.database_url.startswith("sqlite")
         connect_args = {"check_same_thread": False} if is_sqlite else {}
         engine_kwargs: dict[str, Any] = {
@@ -38,7 +40,7 @@ class AppStorage:
 
     @classmethod
     def from_root(cls, root: Path, raw_config: Mapping[str, Any] | None = None) -> "AppStorage":
-        return cls(StorageSettings.from_root(root, raw_config))
+        return cls(StorageSettings.from_root(root, raw_config), root=root)
 
     def initialize(self, *, create_schema: bool = False) -> None:
         if self.settings.database_path is not None:
@@ -58,13 +60,70 @@ class AppStorage:
         except Exception as exc:  # pragma: no cover - driver-specific failures
             return False, str(exc)
 
-    def schema_ready(self) -> bool:
+    def _current_alembic_revision(self) -> str | None:
         try:
             inspector = inspect(self.engine)
-            required_tables = ("portfolios", "artifacts", "operator_runs")
-            if not all(inspector.has_table(table_name) for table_name in required_tables):
-                return False
-            return len(validate_operator_runs_schema(self.engine)) == 0
+            if not inspector.has_table("alembic_version"):
+                return None
+            with self.engine.connect() as connection:
+                rows = connection.execute(text("SELECT version_num FROM alembic_version ORDER BY version_num")).scalars().all()
+        except Exception:
+            return None
+        revisions = [str(item) for item in rows if item not in {None, "", "null"}]
+        if not revisions:
+            return None
+        if len(revisions) == 1:
+            return revisions[0]
+        return ",".join(revisions)
+
+    def schema_status(self, *, strict_revision: bool = True) -> dict[str, Any]:
+        issues: list[str] = []
+        expected_revision: str | None = None
+        current_revision: str | None = None
+        try:
+            issues.extend(validate_storage_schema(self.engine))
+            current_revision = self._current_alembic_revision()
+            if strict_revision:
+                expected_revision_error = False
+                try:
+                    expected_revision = expected_head_revision(self.root)
+                except Exception as exc:
+                    expected_revision_error = True
+                    issues.append(f"Cannot determine expected Alembic head revision: {exc}")
+                if not expected_revision_error and expected_revision in {None, "", "null"}:
+                    issues.append("Cannot determine expected Alembic head revision.")
+                if current_revision is None:
+                    issues.append("Missing Alembic revision marker in table `alembic_version`.")
+                elif expected_revision and current_revision != expected_revision:
+                    issues.append(
+                        "Alembic revision mismatch: "
+                        f"current '{current_revision}' != expected '{expected_revision}'."
+                    )
+        except Exception as exc:
+            issues.append(f"Schema inspection failed: {exc}")
+
+        deduped_issues = list(dict.fromkeys(str(item) for item in issues if str(item).strip()))
+        ready = len(deduped_issues) == 0
+        hint = "Run `var-project db upgrade` (or `alembic upgrade head`) then retry."
+        detail = (
+            "Database schema is ready."
+            if ready
+            else f"Database schema is invalid. {deduped_issues[0]} {hint}"
+        )
+        return {
+            "ready": ready,
+            "strict_revision": bool(strict_revision),
+            "issues": deduped_issues,
+            "detail": detail,
+            "hint": hint,
+            "current_revision": current_revision,
+            "expected_revision": expected_revision,
+            "target": self.settings.database_url,
+        }
+
+    def schema_ready(self, *, strict_revision: bool = True) -> bool:
+        try:
+            return bool(self.schema_status(strict_revision=strict_revision).get("ready"))
         except Exception:
             return False
 

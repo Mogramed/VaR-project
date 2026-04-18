@@ -10,8 +10,16 @@ Validate that the platform remains the canonical risk, reconciliation, and incid
 
 - MT5 terminal is open on the demo account.
 - `var-project db upgrade` has already been applied.
+- `GET /health` returns `status=ok` and `dependencies.database.schema_ready=true`.
 - Backend, worker, frontend, and MT5 agent are running.
 - The portfolio is configured in `live_mt5` or `hybrid` mode.
+
+If `/health` returns `status=unhealthy`:
+
+```bash
+var-project db upgrade
+python scripts/check_storage_schema.py
+```
 
 ## Core Runtime Checks
 

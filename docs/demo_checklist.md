@@ -19,7 +19,8 @@ docker compose up -d --build api worker celery-worker frontend nginx
 
 ## T-10 min: sante rapide
 
-- `GET /health` repond
+- `GET /health` repond avec `status=ok`
+- `GET /health` expose `dependencies.database.schema_ready=true`
 - frontend accessible (`/desk`)
 - navigation entre pages desk fluide
 - dernieres donnees visibles (pas de page vide critique)
@@ -28,6 +29,16 @@ Commande de controle:
 
 ```bash
 var-project demo-smoke --base-url http://127.0.0.1:8000
+```
+
+Si `/health` retourne `status=unhealthy`:
+
+```bash
+var-project db upgrade
+python scripts/check_storage_schema.py
+# equivalent:
+alembic upgrade head
+python scripts/check_storage_schema.py
 ```
 
 Critere minimum:
@@ -84,4 +95,3 @@ Dans ce cas:
 - noter les points faibles observes
 - extraire 3 actions correctives max
 - prioriser stabilite et clarte produit avant ajout de features
-
