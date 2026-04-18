@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from var_project.alerts.engine import AlertEvent
 from var_project.storage.models import Base
 from var_project.storage.repositories import StorageReadRepository, StorageWriteRepository
+from var_project.storage.schema_checks import validate_operator_runs_schema
 from var_project.storage.settings import StorageSettings
 from var_project.validation.model_validation import ValidationSummary
 
@@ -61,7 +62,9 @@ class AppStorage:
         try:
             inspector = inspect(self.engine)
             required_tables = ("portfolios", "artifacts", "operator_runs")
-            return all(inspector.has_table(table_name) for table_name in required_tables)
+            if not all(inspector.has_table(table_name) for table_name in required_tables):
+                return False
+            return len(validate_operator_runs_schema(self.engine)) == 0
         except Exception:
             return False
 

@@ -82,6 +82,70 @@ def test_operator_action_refuses_when_operator_runs_table_is_missing(tmp_path: P
     assert body["detail"].get("error_code") == "runtime_error"
 
 
+def test_operator_action_refuses_when_operator_runs_queue_task_id_column_is_missing(tmp_path: Path) -> None:
+    root = tmp_path
+    write_settings(root)
+    write_processed_returns(root, "EURUSD")
+    write_processed_returns(root, "USDJPY")
+
+    db_path = root / "data" / "app" / "test_platform.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE portfolios (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT,
+                name TEXT,
+                base_currency TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE artifacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                artifact_type TEXT,
+                format TEXT,
+                path TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE operator_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                portfolio_id INTEGER NULL,
+                portfolio_slug TEXT NULL,
+                action TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                request_payload_json TEXT NULL,
+                artifact_refs_json TEXT NULL,
+                result_json TEXT NULL,
+                error_code TEXT NULL,
+                error_message TEXT NULL,
+                hint TEXT NULL,
+                reused_run_id INTEGER NULL,
+                started_at TEXT NULL,
+                finished_at TEXT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.commit()
+
+    client = TestClient(create_app(repo_root=root))
+    response = client.post("/operator/actions/backtest", json={"portfolio_slug": "fx_eur_20k"})
+
+    assert response.status_code == 503
+    body = response.json()
+    assert isinstance(body.get("detail"), dict)
+    assert body["detail"].get("error_code") == "runtime_error"
+
+
 def test_seed_demo_environment_populates_platform_state(tmp_path: Path) -> None:
     root = tmp_path
     write_settings(root)
