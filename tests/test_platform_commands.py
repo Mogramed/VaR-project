@@ -15,6 +15,16 @@ from var_project.storage import upgrade_database
 from support import write_processed_returns, write_settings
 
 
+def _assert_schema_invalid_error(response) -> dict:
+    assert response.status_code == 503
+    body = response.json()
+    assert isinstance(body.get("detail"), dict)
+    detail = body["detail"]
+    assert detail.get("error_code") == "schema_invalid"
+    assert "alembic upgrade head" in str(detail.get("hint") or "")
+    return detail
+
+
 def test_db_upgrade_enables_health_and_jobs_status(tmp_path: Path) -> None:
     root = tmp_path
     write_settings(root)
@@ -27,6 +37,7 @@ def test_db_upgrade_enables_health_and_jobs_status(tmp_path: Path) -> None:
 
     health = client.get("/health")
     assert health.status_code == 200
+    assert health.json()["status"] == "ok"
     assert health.json()["dependencies"]["database"]["schema_ready"] is True
     dependencies = client.get("/health/dependencies")
     assert dependencies.status_code == 200
@@ -74,12 +85,19 @@ def test_operator_action_refuses_when_operator_runs_table_is_missing(tmp_path: P
         connection.commit()
 
     client = TestClient(create_app(repo_root=root))
-    response = client.post("/operator/actions/backtest", json={"portfolio_slug": "fx_eur_20k"})
+    health = client.get("/health")
+    assert health.status_code == 200
+    health_body = health.json()
+    db_detail = health_body["dependencies"]["database"]
+    assert health_body["status"] == "unhealthy"
+    assert db_detail["schema_ready"] is False
+    assert "Missing table 'operator_runs'." in list(db_detail.get("issues") or [])
+    assert "alembic upgrade head" in str(db_detail["detail"])
+    assert "alembic upgrade head" in str(db_detail["hint"])
 
-    assert response.status_code == 503
-    body = response.json()
-    assert isinstance(body.get("detail"), dict)
-    assert body["detail"].get("error_code") == "runtime_error"
+    _assert_schema_invalid_error(client.post("/operator/actions/backtest", json={"portfolio_slug": "fx_eur_20k"}))
+    _assert_schema_invalid_error(client.get("/operator/runs"))
+    _assert_schema_invalid_error(client.get("/operator/runs/1"))
 
 
 def test_operator_action_refuses_when_operator_runs_queue_task_id_column_is_missing(tmp_path: Path) -> None:
@@ -138,12 +156,50 @@ def test_operator_action_refuses_when_operator_runs_queue_task_id_column_is_miss
         connection.commit()
 
     client = TestClient(create_app(repo_root=root))
-    response = client.post("/operator/actions/backtest", json={"portfolio_slug": "fx_eur_20k"})
+    health = client.get("/health")
+    assert health.status_code == 200
+    health_body = health.json()
+    db_detail = health_body["dependencies"]["database"]
+    assert health_body["status"] == "unhealthy"
+    assert db_detail["schema_ready"] is False
+    assert "Missing column 'operator_runs.queue_task_id'." in list(db_detail.get("issues") or [])
+    assert "alembic upgrade head" in str(db_detail["detail"])
+    assert "alembic upgrade head" in str(db_detail["hint"])
 
-    assert response.status_code == 503
-    body = response.json()
-    assert isinstance(body.get("detail"), dict)
-    assert body["detail"].get("error_code") == "runtime_error"
+    _assert_schema_invalid_error(client.post("/operator/actions/backtest", json={"portfolio_slug": "fx_eur_20k"}))
+
+
+def test_health_unhealthy_when_alembic_revision_is_obsolete(tmp_path: Path) -> None:
+    root = tmp_path
+    write_settings(root)
+    write_processed_returns(root, "EURUSD")
+    write_processed_returns(root, "USDJPY")
+    upgrade_database(root)
+
+    db_path = root / "data" / "app" / "test_platform.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("UPDATE alembic_version SET version_num = ?", ("20260405_0008",))
+        connection.commit()
+
+    client = TestClient(create_app(repo_root=root))
+    health = client.get("/health")
+    assert health.status_code == 200
+    body = health.json()
+    db_dependency = body["dependencies"]["database"]
+
+    assert body["status"] == "unhealthy"
+    assert db_dependency["schema_ready"] is False
+    assert db_dependency["current_revision"] == "20260405_0008"
+    assert db_dependency["expected_revision"] != "20260405_0008"
+    assert "Alembic revision mismatch" in str(db_dependency["detail"])
+    assert "alembic upgrade head" in str(db_dependency["hint"])
+
+    operator_error = _assert_schema_invalid_error(
+        client.post("/operator/actions/backtest", json={"portfolio_slug": "fx_eur_20k"})
+    )
+    assert operator_error["current_revision"] == "20260405_0008"
+    assert operator_error["expected_revision"] == db_dependency["expected_revision"]
+    _assert_schema_invalid_error(client.get("/operator/runs"))
 
 
 def test_seed_demo_environment_populates_platform_state(tmp_path: Path) -> None:

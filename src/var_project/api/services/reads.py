@@ -241,14 +241,14 @@ class DeskReadService:
         return frame
 
     def health(self) -> dict[str, Any]:
-        latest_artifacts = {
-            artifact_type: (
-                self.runtime.storage.latest_artifact(artifact_type)["path"]
-                if self.runtime.storage_ready and self.runtime.storage.latest_artifact(artifact_type) is not None
-                else None
-            )
-            for artifact_type in ("backtest_compare", "validation_summary", "daily_report", "live_snapshot")
-        }
+        database_dependency = self.runtime.database_dependency()
+        storage_ready = bool(database_dependency.get("schema_ready"))
+        db_reachable = bool(database_dependency.get("reachable"))
+        latest_artifacts: dict[str, str | None] = {}
+        for artifact_type in ("backtest_compare", "validation_summary", "daily_report", "live_snapshot"):
+            artifact = self.runtime.storage.latest_artifact(artifact_type) if storage_ready else None
+            path = None if artifact is None else artifact.get("path")
+            latest_artifacts[artifact_type] = None if path in {None, ""} else str(path)
         mt5_configured = bool(
             self.runtime._has_custom_mt5_factory
             or self.runtime.mt5_config.agent_base_url
@@ -257,7 +257,7 @@ class DeskReadService:
             or self.runtime.mt5_config.server
         )
         return {
-            "status": "ok",
+            "status": "ok" if (storage_ready and db_reachable) else "unhealthy",
             "repo_root": str(self.runtime.root.resolve()),
             "database_url": self.runtime.storage.settings.database_url,
             "portfolio_slug": self.runtime.portfolio["slug"],
@@ -279,18 +279,7 @@ class DeskReadService:
                 "garch": self.runtime.risk_defaults["garch"],
             },
             "dependencies": {
-                "database": {
-                    "mode": "database",
-                    "configured": True,
-                    "reachable": bool(self.runtime.storage_ready),
-                    "schema_ready": bool(self.runtime.storage_ready),
-                    "detail": (
-                        "Database schema is ready."
-                        if self.runtime.storage_ready
-                        else "Database schema is not ready. Run `var-project db upgrade`."
-                    ),
-                    "target": self.runtime.storage.settings.database_url,
-                },
+                "database": database_dependency,
                 "mt5": {
                     "mode": "configuration",
                     "configured": mt5_configured,
@@ -307,16 +296,19 @@ class DeskReadService:
         }
 
     def health_dependencies(self) -> dict[str, Any]:
+        database_dependency = self.runtime.database_dependency()
+        dependencies = {
+            "database": database_dependency,
+            "mt5": self.runtime.mt5_dependency(),
+            "mt5_live": self.runtime.mt5_live_dependency(self.runtime.portfolio["slug"]),
+            "market_data": self.runtime.market_data.market_data_status(portfolio_slug=self.runtime.portfolio["slug"]),
+        }
+        healthy = bool(database_dependency.get("reachable")) and bool(database_dependency.get("schema_ready"))
         return {
-            "status": "ok",
+            "status": "ok" if healthy else "unhealthy",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "portfolio_slug": self.runtime.portfolio["slug"],
-            "dependencies": {
-                "database": self.runtime.database_dependency(),
-                "mt5": self.runtime.mt5_dependency(),
-                "mt5_live": self.runtime.mt5_live_dependency(self.runtime.portfolio["slug"]),
-                "market_data": self.runtime.market_data.market_data_status(portfolio_slug=self.runtime.portfolio["slug"]),
-            },
+            "dependencies": dependencies,
         }
 
     def list_portfolios(self) -> list[dict[str, Any]]:
@@ -479,7 +471,11 @@ class DeskReadService:
         return self.runtime.storage.latest_artifact(artifact_type)
 
     def jobs_status(self) -> dict[str, Any]:
-        return build_worker_status(self.runtime.root, storage=self.runtime.storage)
+        return build_worker_status(
+            self.runtime.root,
+            storage=self.runtime.storage,
+            strict_schema_revision=not self.runtime.bootstrap_storage,
+        )
 
     def latest_model_comparison(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
         cache_key = self._model_comparison_cache_key(portfolio_slug=portfolio_slug)

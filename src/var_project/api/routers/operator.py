@@ -12,6 +12,7 @@ from var_project.api.schemas import (
     RunSnapshotRequest,
 )
 from var_project.api.service import DeskApiService
+from var_project.api.services.runtime import StorageSchemaError
 from var_project.jobs.operator_queue import dispatch_operator_run, load_operator_queue_settings
 from var_project.storage.serialization import utcnow
 
@@ -37,6 +38,7 @@ def _enqueue_operator_run(
     background_tasks: BackgroundTasks,
     service: DeskApiService,
 ) -> OperatorRunResponse:
+    _ensure_operator_schema_ready(service)
     queue_settings = load_operator_queue_settings()
     try:
         run = service.enqueue_operator_action(action=action, request_payload=payload)
@@ -49,6 +51,8 @@ def _enqueue_operator_run(
                 "hint": "Check portfolio_slug, timeframe and days fields before retrying.",
             },
         ) from exc
+    except StorageSchemaError as exc:
+        _raise_schema_invalid(exc)
     except RuntimeError as exc:
         raise HTTPException(
             status_code=503,
@@ -111,6 +115,28 @@ def _enqueue_operator_run(
         if dispatch is None:
             background_tasks.add_task(service.process_operator_run, int(run["id"]))
     return OperatorRunResponse.model_validate(run)
+
+
+def _raise_schema_invalid(exc: StorageSchemaError) -> None:
+    schema_report = dict(exc.schema_report or {})
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "detail": str(exc),
+            "error_code": str(exc.error_code),
+            "hint": str(exc.hint),
+            "issues": list(schema_report.get("issues") or []),
+            "current_revision": schema_report.get("current_revision"),
+            "expected_revision": schema_report.get("expected_revision"),
+        },
+    ) from exc
+
+
+def _ensure_operator_schema_ready(service: DeskApiService) -> None:
+    try:
+        service.runtime.require_storage_ready()
+    except StorageSchemaError as exc:
+        _raise_schema_invalid(exc)
 
 
 @router.post(
@@ -187,6 +213,7 @@ def enqueue_report(
 
 @router.get("/operator/runs/{run_id}", response_model=OperatorRunResponse)
 def operator_run(run_id: int, service: DeskApiService = Depends(get_service)) -> OperatorRunResponse:
+    _ensure_operator_schema_ready(service)
     try:
         run = service.operator_run(run_id)
     except (OperationalError, ProgrammingError) as exc:
@@ -211,6 +238,7 @@ def operator_runs(
     limit: int = Query(default=10, ge=1, le=100),
     service: DeskApiService = Depends(get_service),
 ) -> list[OperatorRunResponse]:
+    _ensure_operator_schema_ready(service)
     try:
         runs = service.operator_runs(
             portfolio_slug=portfolio_slug,

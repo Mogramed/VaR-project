@@ -619,12 +619,18 @@ def _coerce_age(timestamp: str | None, *, now: datetime) -> float | None:
     return max(0.0, (now - created_at.astimezone(timezone.utc)).total_seconds())
 
 
-def build_worker_status(root: Path, *, storage: AppStorage | None = None) -> dict[str, Any]:
+def build_worker_status(
+    root: Path,
+    *,
+    storage: AppStorage | None = None,
+    strict_schema_revision: bool = False,
+) -> dict[str, Any]:
     repo_root = root.resolve()
+    raw_config = load_settings(repo_root)
     settings = load_worker_settings(repo_root)
     worker_health = evaluate_worker_health(repo_root)
-    active_storage = storage or AppStorage.from_root(repo_root)
-    database_ready = active_storage.schema_ready()
+    active_storage = storage or AppStorage.from_root(repo_root, raw_config)
+    database_ready = active_storage.schema_ready(strict_revision=bool(strict_schema_revision))
     now = datetime.now(timezone.utc)
 
     latest_snapshot = active_storage.latest_snapshot() if database_ready else None

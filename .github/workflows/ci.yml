@@ -99,12 +99,12 @@ jobs:
           python -m pip install .
       - name: Run migrations
         run: var-project db upgrade
-      - name: Verify operator_runs schema post-migration
-        run: python scripts/check_operator_runs_schema.py
+      - name: Verify storage schema post-migration
+        run: python scripts/check_storage_schema.py
       - name: Verify migration idempotence
         run: |
           var-project db upgrade
-          python scripts/check_operator_runs_schema.py
+          python scripts/check_storage_schema.py
 
   docker-quality:
     runs-on: ubuntu-latest

@@ -892,14 +892,24 @@ class GovernanceRecorder:
         )
 
     def database_dependency(self) -> dict[str, Any]:
+        schema_status = self.runtime.refresh_storage_schema_status()
         reachable, detail = self.runtime.storage.ping()
+        normalized_detail = (
+            str(schema_status.get("detail"))
+            if not bool(schema_status.get("ready"))
+            else (str(detail) if detail else "Database connection is healthy and schema is valid.")
+        )
         return {
             "mode": "database",
             "configured": True,
             "reachable": bool(reachable),
-            "schema_ready": bool(self.runtime.storage_ready),
-            "detail": detail,
+            "schema_ready": bool(schema_status.get("ready")),
+            "detail": normalized_detail,
             "target": self.runtime.storage.settings.database_url,
+            "issues": list(schema_status.get("issues") or []),
+            "expected_revision": schema_status.get("expected_revision"),
+            "current_revision": schema_status.get("current_revision"),
+            "hint": schema_status.get("hint"),
         }
 
     def persist_live_bundle(

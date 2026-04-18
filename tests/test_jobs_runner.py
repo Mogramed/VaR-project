@@ -130,6 +130,7 @@ def test_job_runner_live_refresh_auto_generates_report(tmp_path: Path):
     assert Path(refreshed["report_markdown"]).exists()
 
     status = build_worker_status(root)
+    assert status["database_ready"] is True
     assert "live_refresh" in status["jobs"]
     assert status["jobs"]["live_refresh"]["enabled"] is True
     assert status["jobs"]["live_refresh"]["state"] in {"pending", "due", "ok"}

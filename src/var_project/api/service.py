@@ -250,7 +250,8 @@ class DeskApiService:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         generated_at = datetime.now(timezone.utc).isoformat()
         strict_live_required = bool(self.runtime.strict_live_required(portfolio))
-        storage_ready = bool(self.runtime.storage_ready)
+        schema_status = self.runtime.refresh_storage_schema_status()
+        storage_ready = bool(schema_status.get("ready"))
         mt5_configured = bool(
             self.runtime._has_custom_mt5_factory
             or self.runtime.mt5_config.agent_base_url
@@ -301,14 +302,13 @@ class DeskApiService:
             "database": {
                 "status": "ready" if storage_ready else "not_ready",
                 "required": True,
-                "detail": (
-                    "Database schema is ready."
-                    if storage_ready
-                    else "Database schema is not ready. Run `var-project db upgrade`."
-                ),
+                "detail": str(schema_status.get("detail") or "Database schema status unavailable."),
                 "value": {
                     "schema_ready": storage_ready,
                     "target": self.runtime.storage.settings.database_url,
+                    "issues": list(schema_status.get("issues") or []),
+                    "current_revision": schema_status.get("current_revision"),
+                    "expected_revision": schema_status.get("expected_revision"),
                 },
             },
             "mt5_config": {
@@ -393,7 +393,9 @@ class DeskApiService:
 
         recommendations: list[str] = []
         if not storage_ready:
-            recommendations.append("Run `var-project db upgrade` before starting the demo.")
+            recommendations.append(
+                "Run `var-project db upgrade` (or `alembic upgrade head`) and re-check `/health` before starting the demo."
+            )
         if strict_live_required and not mt5_configured:
             recommendations.append(
                 "Configure `VAR_PROJECT_MT5_AGENT_BASE_URL` (and API key if enabled) in the API process."

@@ -37,7 +37,8 @@ Direct Alembic workflow (equivalent schema result):
 
 ```bash
 alembic upgrade head
-python scripts/check_operator_runs_schema.py
+# validates critical tables/columns + Alembic head revision
+python scripts/check_storage_schema.py
 ```
 
 If you target a non-default database URL, export `VAR_PROJECT_DATABASE_URL` before running these commands.
@@ -98,6 +99,7 @@ Notes:
 
 - `db-migrate` is a one-shot service that runs `var-project db upgrade` before `api`, `worker`, and `celery-worker`.
 - `api` and `worker` no longer create the schema silently at startup.
+- `GET /health` is strict on DB schema integrity (critical tables/columns + Alembic head revision) and returns `status=unhealthy` when drift is detected.
 - `redis` + `celery-worker` provide asynchronous execution for operator actions triggered from the frontend.
 - `seed-demo` is the supported way to generate a demo-ready database state beyond the tracked fixtures.
 - `localhost:8080` is the operator-facing front door. `localhost:8000` remains the direct FastAPI debug surface.
