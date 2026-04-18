@@ -623,12 +623,13 @@ def build_worker_status(
     root: Path,
     *,
     storage: AppStorage | None = None,
-    strict_schema_revision: bool = True,
+    strict_schema_revision: bool = False,
 ) -> dict[str, Any]:
     repo_root = root.resolve()
+    raw_config = load_settings(repo_root)
     settings = load_worker_settings(repo_root)
     worker_health = evaluate_worker_health(repo_root)
-    active_storage = storage or AppStorage.from_root(repo_root)
+    active_storage = storage or AppStorage.from_root(repo_root, raw_config)
     database_ready = active_storage.schema_ready(strict_revision=bool(strict_schema_revision))
     now = datetime.now(timezone.utc)
 
