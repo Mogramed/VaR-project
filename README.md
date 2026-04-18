@@ -33,6 +33,15 @@ var-project db upgrade
 var-project api --host 127.0.0.1 --port 8000
 ```
 
+Direct Alembic workflow (equivalent schema result):
+
+```bash
+alembic upgrade head
+python scripts/check_operator_runs_schema.py
+```
+
+If you target a non-default database URL, export `VAR_PROJECT_DATABASE_URL` before running these commands.
+
 Worker:
 
 ```bash
