@@ -1457,19 +1457,19 @@ class DeskApiService:
             f"Operator run {int(run_id)} was interrupted while in status '{status}'. "
             f"{normalized_reason}"
         )
-        updated = self.storage.update_operator_run(
+        updated = self.storage.interrupt_operator_run(
             int(run_id),
-            status="failed",
-            stage="failed",
             error_code="operator_interrupted",
             error_message=message,
             hint="The run was interrupted by the operator. Re-enqueue the action if needed.",
+            stage="failed",
             finished_at=utcnow(),
         )
-        if updated is None:
-            refreshed = self.storage.operator_run_by_id(int(run_id))
-            return None if refreshed is None else self._decorate_operator_run(refreshed)
-        return self._decorate_operator_run(updated)
+        if updated is not None:
+            return self._decorate_operator_run(updated)
+
+        refreshed = self.storage.operator_run_by_id(int(run_id))
+        return None if refreshed is None else self._decorate_operator_run(refreshed)
 
     def _operator_interrupted_run_state(self, run_id: int) -> dict[str, Any] | None:
         latest_state = self.storage.operator_run_by_id(int(run_id))

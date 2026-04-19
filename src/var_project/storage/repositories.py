@@ -720,6 +720,41 @@ class StorageWriteRepository:
             session.refresh(record)
             return operator_run_to_dict(record)
 
+    def interrupt_operator_run(
+        self,
+        run_id: int,
+        *,
+        error_code: str,
+        error_message: str,
+        hint: str | None = None,
+        stage: str = "failed",
+        finished_at: Any | None = None,
+    ) -> dict[str, Any] | None:
+        normalized_finished_at = coerce_datetime(finished_at) or utcnow()
+        with self.session_factory() as session:
+            result = session.execute(
+                update(OperatorRunRecord)
+                .where(
+                    OperatorRunRecord.id == int(run_id),
+                    OperatorRunRecord.status.in_(("queued", "running")),
+                )
+                .values(
+                    status="failed",
+                    stage=str(stage),
+                    error_code=str(error_code),
+                    error_message=str(error_message),
+                    hint=None if hint is None else str(hint),
+                    finished_at=normalized_finished_at,
+                    updated_at=utcnow(),
+                )
+            )
+            if int(result.rowcount or 0) <= 0:
+                session.rollback()
+                return None
+            session.commit()
+            record = session.get(OperatorRunRecord, int(run_id))
+            return None if record is None else operator_run_to_dict(record)
+
     def claim_operator_run(
         self,
         run_id: int,
