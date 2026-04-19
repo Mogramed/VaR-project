@@ -194,6 +194,10 @@ class OperatorRunResponse(BaseModel):
     elapsed_seconds: float | None = None
     is_stale: bool = False
     poll_after_ms: int | None = None
+    queued_timeout_seconds: int | None = None
+    running_timeout_seconds: int | None = None
+    sla_seconds: int | None = None
+    interruptible: bool = False
     started_at: str | None = None
     finished_at: str | None = None
     created_at: str | None = None

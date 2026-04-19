@@ -55,6 +55,23 @@ Operator queue worker:
 var-project operator-worker
 ```
 
+## Operator Run Contract (VAR-003)
+
+Operator actions are enqueue-first and status-driven:
+
+- `POST /operator/actions/sync|snapshot|backtest|report` returns quickly with a run payload (`id`, `request_id`, `status`, `stage`).
+- `GET /operator/runs/{run_id}` is the source of truth for lifecycle tracking (`queued`, `running`, `succeeded`, `failed`).
+- `GET /operator/runs?...` lists recent/active runs for recovery after UI refresh or transient network errors.
+- `POST /operator/runs/{run_id}/interrupt` interrupts an active run and closes it as `failed` with `error_code=operator_interrupted` (idempotent if the run is already terminal).
+
+Each run response includes SLA hints for consistent polling/timeout behavior:
+
+- `poll_after_ms`
+- `queued_timeout_seconds`
+- `running_timeout_seconds`
+- `sla_seconds`
+- `interruptible`
+
 Frontend:
 
 ```bash

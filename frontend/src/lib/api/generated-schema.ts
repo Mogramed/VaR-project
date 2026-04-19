@@ -1076,6 +1076,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/operator/runs/{run_id}/interrupt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Interrupt Operator Run */
+        post: operations["operator_interrupt_operator_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/operator/runs": {
         parameters: {
             query?: never;
@@ -2524,6 +2541,17 @@ export interface components {
             is_stale: boolean;
             /** Poll After Ms */
             poll_after_ms?: number | null;
+            /** Queued Timeout Seconds */
+            queued_timeout_seconds?: number | null;
+            /** Running Timeout Seconds */
+            running_timeout_seconds?: number | null;
+            /** Sla Seconds */
+            sla_seconds?: number | null;
+            /**
+             * Interruptible
+             * @default false
+             */
+            interruptible: boolean;
             /** Started At */
             started_at?: string | null;
             /** Finished At */
@@ -5488,6 +5516,39 @@ export interface operations {
     operator_operator_run: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    operator_interrupt_operator_run: {
+        parameters: {
+            query?: {
+                reason?: string | null;
+            };
             header?: never;
             path: {
                 run_id: number;

@@ -29,9 +29,22 @@ function resolveUpstreamTimeoutMs(method: string, path: string[], isEventStreamR
 
   if (
     normalizedPath.startsWith("operator/actions/")
+  ) {
+    return 12_000;
+  }
+
+  if (
+    normalizedPath.startsWith("operator/runs/")
+    && normalizedPath.endsWith("/interrupt")
+  ) {
+    return 12_000;
+  }
+
+  if (
+    normalizedPath === "operator/runs"
     || normalizedPath.startsWith("operator/runs/")
   ) {
-    return 20_000;
+    return 10_000;
   }
 
   if (
@@ -95,9 +108,10 @@ async function fetchUpstreamWithRetry(
   init: RequestInit & { dispatcher?: Agent },
   timeoutMs: number | undefined,
   isEventStreamRequest: boolean,
+  allowRetryUnsafeMethod: boolean,
 ): Promise<Response> {
   const method = String(init.method ?? "GET").toUpperCase();
-  const retryableMethod = method === "GET" || method === "HEAD";
+  const retryableMethod = method === "GET" || method === "HEAD" || allowRetryUnsafeMethod;
   const maxAttempts = retryableMethod && !isEventStreamRequest ? 2 : 1;
 
   let lastError: unknown;
@@ -155,6 +169,13 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
     headers.set("X-Request-ID", requestId);
   }
   const isEventStreamRequest = (accept ?? "").includes("text/event-stream");
+  const normalizedPath = path.join("/").toLowerCase();
+  const allowRetryUnsafeMethod =
+    request.method.toUpperCase() === "POST"
+    && (
+      normalizedPath.startsWith("operator/actions/")
+      || (normalizedPath.startsWith("operator/runs/") && normalizedPath.endsWith("/interrupt"))
+    );
   const upstreamTimeoutMs = resolveUpstreamTimeoutMs(request.method, path, isEventStreamRequest);
 
   let response: Response;
@@ -170,6 +191,7 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
       } as RequestInit & { dispatcher?: Agent },
       upstreamTimeoutMs,
       isEventStreamRequest,
+      allowRetryUnsafeMethod,
     );
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Backend API is unreachable.";
@@ -182,13 +204,22 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
       || errorMessage.toLowerCase().includes("timed out")
       || errorMessage.toLowerCase().includes("aborted");
 
+    const operatorRoute = normalizedPath.startsWith("operator/");
     return NextResponse.json(
       {
         detail: errorMessage,
         error_code: isTimeout ? "backend_timeout" : "backend_unreachable",
         hint: isTimeout
-          ? "The upstream service took too long to respond. Please retry."
-          : "Verify backend health and network reachability from the frontend container.",
+          ? (
+            operatorRoute
+              ? "The operator request timed out. Check `/operator/runs` to see if a run is already queued."
+              : "The upstream service took too long to respond. Please retry."
+          )
+          : (
+            operatorRoute
+              ? "The operator request failed to reach backend. Retry and check `/operator/runs` for active runs."
+              : "Verify backend health and network reachability from the frontend container."
+          ),
       },
       { status: isTimeout ? 504 : 502 },
     );

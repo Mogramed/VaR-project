@@ -362,6 +362,11 @@ def test_operator_actions_enqueue_and_complete(tmp_path: Path):
     run_body = response.json()
     assert run_body["action"] == "backtest"
     assert run_body["request_id"]
+    assert int(run_body["queued_timeout_seconds"]) > 0
+    assert int(run_body["running_timeout_seconds"]) > 0
+    assert int(run_body["sla_seconds"]) == int(run_body["running_timeout_seconds"])
+    assert int(run_body["poll_after_ms"]) > 0
+    assert run_body["interruptible"] is True
 
     run_id = int(run_body["id"])
     latest = client.get(f"/operator/runs/{run_id}")
@@ -381,8 +386,82 @@ def test_operator_actions_enqueue_and_complete(tmp_path: Path):
 
     assert latest_body["status"] == "succeeded"
     assert latest_body["stage"] == "completed"
+    assert latest_body["interruptible"] is False
+    assert latest_body["poll_after_ms"] is None
     assert latest_body["artifact_refs"]["compare_artifact_id"] > 0
     assert latest_body["result"]["backtest"]["best_model"] in {"hist", "param", "mc", "ewma", "garch", "fhs"}
+
+
+def test_operator_run_can_be_interrupted(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    run = service.enqueue_operator_action(
+        action="backtest",
+        request_payload={"portfolio_slug": "fx_eur_20k"},
+    )
+    run_id = int(run["id"])
+
+    client = TestClient(create_app(repo_root=root, bootstrap_storage=True))
+    interrupt_response = client.post(
+        f"/operator/runs/{run_id}/interrupt",
+        params={"reason": "operator requested interruption"},
+    )
+    assert interrupt_response.status_code == 200
+    body = interrupt_response.json()
+    assert body["id"] == run_id
+    assert body["status"] == "failed"
+    assert body["error_code"] == "operator_interrupted"
+    assert "interrupted" in str(body["error_message"]).lower()
+    assert body["interruptible"] is False
+
+    second_interrupt = client.post(
+        f"/operator/runs/{run_id}/interrupt",
+        params={"reason": "second interruption should be idempotent"},
+    )
+    assert second_interrupt.status_code == 200
+    second_body = second_interrupt.json()
+    assert second_body["id"] == run_id
+    assert second_body["status"] == "failed"
+    assert second_body["error_code"] == "operator_interrupted"
+    assert second_body["interruptible"] is False
+
+    latest = client.get(f"/operator/runs/{run_id}")
+    assert latest.status_code == 200
+    assert latest.json()["status"] == "failed"
+    assert latest.json()["error_code"] == "operator_interrupted"
+
+
+def test_operator_interruption_is_not_overwritten_by_processing_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path
+    _write_settings(root)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    run = service.enqueue_operator_action(
+        action="backtest",
+        request_payload={"portfolio_slug": "fx_eur_20k"},
+    )
+    run_id = int(run["id"])
+
+    def _interrupt_then_fail(**_: object):
+        service.interrupt_operator_run(run_id, reason="manual interruption during processing")
+        raise RuntimeError("simulated failure after interruption")
+
+    monkeypatch.setattr(service.analytics, "run_backtest", _interrupt_then_fail)
+    processed = service.process_operator_run(run_id)
+
+    assert processed["status"] == "failed"
+    assert processed["error_code"] == "operator_interrupted"
+    assert "interrupted" in str(processed["error_message"]).lower()
+    assert processed["interruptible"] is False
 
 
 def test_operator_run_fails_fast_when_mt5_unavailable_for_strict_live(tmp_path: Path):

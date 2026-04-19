@@ -230,6 +230,29 @@ def operator_run(run_id: int, service: DeskApiService = Depends(get_service)) ->
     return OperatorRunResponse.model_validate(run)
 
 
+@router.post("/operator/runs/{run_id}/interrupt", response_model=OperatorRunResponse)
+def interrupt_operator_run(
+    run_id: int,
+    reason: str | None = Query(default=None, max_length=240),
+    service: DeskApiService = Depends(get_service),
+) -> OperatorRunResponse:
+    _ensure_operator_schema_ready(service)
+    try:
+        run = service.interrupt_operator_run(run_id, reason=reason)
+    except (OperationalError, ProgrammingError) as exc:
+        _raise_storage_not_ready(exc)
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "detail": f"Unknown operator run '{run_id}'.",
+                "error_code": "operator_run_not_found",
+                "run_id": run_id,
+            },
+        )
+    return OperatorRunResponse.model_validate(run)
+
+
 @router.get("/operator/runs", response_model=list[OperatorRunResponse])
 def operator_runs(
     portfolio_slug: str | None = Query(default=None),

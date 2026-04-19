@@ -263,6 +263,17 @@ async function request<T>(
 ) {
   const isServer = typeof window === "undefined";
   const method = options.method ?? "GET";
+  const normalizedPath = path.trim().toLowerCase();
+  const isOperatorEnqueueRequest =
+    method === "POST" && normalizedPath.startsWith("/operator/actions/");
+  const isOperatorRunStatusRequest =
+    method === "GET"
+    && (normalizedPath === "/operator/runs" || normalizedPath.startsWith("/operator/runs/"));
+  const isOperatorInterruptRequest =
+    method === "POST"
+    && normalizedPath.startsWith("/operator/runs/")
+    && normalizedPath.endsWith("/interrupt");
+  const retryableUnsafeMethod = isOperatorEnqueueRequest || isOperatorInterruptRequest;
   const url = buildUrl(path, options.query);
   const isCacheableServerGet =
     isServer
@@ -273,8 +284,16 @@ async function request<T>(
       ? resolveServerSummaryCacheTtlMs(path, options.query)
       : 0;
   const timeoutMs =
-    options.timeoutMs ?? (method === "GET" ? 12_000 : 20_000);
-  const maxAttempts = method === "GET" ? 2 : 1;
+    options.timeoutMs
+    ?? (isOperatorEnqueueRequest ? 12_000
+      : isOperatorInterruptRequest ? 12_000
+        : isOperatorRunStatusRequest ? 10_000
+          : method === "GET" ? 12_000 : 20_000);
+  const maxAttempts =
+    isOperatorRunStatusRequest ? 3 : (method === "GET" || retryableUnsafeMethod ? 2 : 1);
+
+  const nextRetryDelayMs = (attempt: number) =>
+    Math.min(1_200, Math.max(120, 180 * (2 ** Math.max(attempt - 1, 0))));
 
   const execute = async (): Promise<T> => {
     let response: Response | null = null;
@@ -293,8 +312,12 @@ async function request<T>(
       } catch (error) {
         const errorCode = extractNestedErrorCode(error);
         const timedOut = isTimeoutLikeError(error, errorCode);
-        if (attempt < maxAttempts && isRetryableNetworkError(error, errorCode)) {
-          await delay(150 * attempt);
+        if (
+          attempt < maxAttempts
+          && isRetryableNetworkError(error, errorCode)
+          && (method === "GET" || retryableUnsafeMethod)
+        ) {
+          await delay(nextRetryDelayMs(attempt));
           continue;
         }
         if (timedOut) {
@@ -321,10 +344,10 @@ async function request<T>(
       if (
         response
         && attempt < maxAttempts
-        && method === "GET"
+        && (method === "GET" || retryableUnsafeMethod)
         && RETRYABLE_STATUS_CODES.has(response.status)
       ) {
-        await delay(150 * attempt);
+        await delay(nextRetryDelayMs(attempt));
         continue;
       }
       if (response) {
@@ -505,6 +528,11 @@ export const api = {
     }),
   operatorRun: (runId: number) =>
     request<OperatorRunResponse>(`/operator/runs/${runId}`),
+  interruptOperatorRun: (runId: number, reason?: string | null) =>
+    request<OperatorRunResponse>(`/operator/runs/${runId}/interrupt`, {
+      method: "POST",
+      query: { reason: reason ?? undefined },
+    }),
   operatorRuns: (options?: {
     portfolioSlug?: string;
     action?: string;
