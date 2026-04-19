@@ -18,6 +18,7 @@ from var_project.storage.serialization import utcnow
 from test_mt5_execution_api import FakeMT5Connector, FailingMT5Connector
 
 
+
 def _write_settings(
     root: Path,
     *,
