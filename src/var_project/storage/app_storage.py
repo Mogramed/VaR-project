@@ -491,6 +491,25 @@ class AppStorage:
             started_at=started_at,
         )
 
+    def interrupt_operator_run(
+        self,
+        run_id: int,
+        *,
+        error_code: str,
+        error_message: str,
+        hint: str | None = None,
+        stage: str = "failed",
+        finished_at: Any | None = None,
+    ) -> dict[str, Any] | None:
+        return self.writes.interrupt_operator_run(
+            run_id,
+            error_code=error_code,
+            error_message=error_message,
+            hint=hint,
+            stage=stage,
+            finished_at=finished_at,
+        )
+
     def operator_run_by_id(self, run_id: int) -> dict[str, Any] | None:
         return self.reads.operator_run_by_id(run_id)
 

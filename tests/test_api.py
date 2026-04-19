@@ -435,6 +435,58 @@ def test_operator_run_can_be_interrupted(tmp_path: Path):
     assert latest.json()["error_code"] == "operator_interrupted"
 
 
+def test_interrupt_operator_run_does_not_override_succeeded_state_on_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path
+    _write_settings(root)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    run = service.enqueue_operator_action(
+        action="backtest",
+        request_payload={"portfolio_slug": "fx_eur_20k"},
+    )
+    run_id = int(run["id"])
+    original_operator_run_by_id = service.storage.operator_run_by_id
+    first_read = {"done": False}
+
+    def _operator_run_by_id_with_race(target_run_id: int):
+        current = original_operator_run_by_id(target_run_id)
+        if first_read["done"] or target_run_id != run_id or current is None:
+            return current
+        first_read["done"] = True
+        service.storage.update_operator_run(
+            run_id,
+            status="succeeded",
+            stage="completed",
+            result={"backtest": {"best_model": "hist"}},
+            artifact_refs={"compare_artifact_id": 1},
+            finished_at=utcnow(),
+        )
+        return current
+
+    monkeypatch.setattr(service.storage, "operator_run_by_id", _operator_run_by_id_with_race)
+    interrupted = service.interrupt_operator_run(
+        run_id,
+        reason="operator interrupt request collided with worker completion",
+    )
+
+    assert interrupted is not None
+    assert interrupted["id"] == run_id
+    assert interrupted["status"] == "succeeded"
+    assert interrupted["stage"] == "completed"
+    assert interrupted.get("error_code") in {None, ""}
+
+    latest = service.operator_run(run_id)
+    assert latest is not None
+    assert latest["status"] == "succeeded"
+    assert latest["stage"] == "completed"
+    assert latest.get("error_code") in {None, ""}
+
+
 def test_operator_interruption_is_not_overwritten_by_processing_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
