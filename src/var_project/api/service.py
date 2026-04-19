@@ -1298,6 +1298,18 @@ class DeskApiService:
         fallback = defaults.get(action_key, 1500)
         return max(400, self._operator_env_int(env_name, fallback))
 
+    def _operator_sla(self, action: str) -> dict[str, int]:
+        action_key = str(action or "").lower()
+        queued_timeout_seconds = int(self._operator_queued_ttl_seconds(action_key))
+        running_timeout_seconds = int(self._operator_running_ttl_seconds(action_key))
+        poll_after_ms = int(self._operator_poll_after_ms(action_key))
+        return {
+            "queued_timeout_seconds": queued_timeout_seconds,
+            "running_timeout_seconds": running_timeout_seconds,
+            "sla_seconds": running_timeout_seconds,
+            "poll_after_ms": poll_after_ms,
+        }
+
     @staticmethod
     def _operator_elapsed_seconds(run: Mapping[str, Any]) -> float | None:
         status = str(run.get("status") or "").lower()
@@ -1335,12 +1347,17 @@ class DeskApiService:
         elapsed_seconds = self._operator_elapsed_seconds(payload)
         status = str(payload.get("status") or "").lower()
         action = str(payload.get("action") or "").lower()
+        sla = self._operator_sla(action)
         payload["elapsed_seconds"] = None if elapsed_seconds is None else round(float(elapsed_seconds), 3)
         payload["is_stale"] = bool(self._operator_is_stale(payload))
+        payload["queued_timeout_seconds"] = int(sla["queued_timeout_seconds"])
+        payload["running_timeout_seconds"] = int(sla["running_timeout_seconds"])
+        payload["sla_seconds"] = int(sla["sla_seconds"])
+        payload["interruptible"] = status in {"queued", "running"}
         payload["poll_after_ms"] = (
             None
             if status in {"succeeded", "failed"}
-            else int(self._operator_poll_after_ms(action))
+            else int(sla["poll_after_ms"])
         )
         return payload
 
@@ -1418,6 +1435,51 @@ class DeskApiService:
                 return self._decorate_operator_run(failed)
             run = self.storage.operator_run_by_id(run_id) or run
         return self._decorate_operator_run(run)
+
+    def interrupt_operator_run(
+        self,
+        run_id: int,
+        *,
+        reason: str | None = None,
+    ) -> dict[str, Any] | None:
+        self.runtime.require_storage_ready()
+        run = self.storage.operator_run_by_id(run_id)
+        if run is None:
+            return None
+        status = str(run.get("status") or "").lower()
+        if status in {"succeeded", "failed"}:
+            return self._decorate_operator_run(run)
+
+        normalized_reason = str(reason or "").strip()
+        if not normalized_reason:
+            normalized_reason = "Interrupted by operator."
+        message = (
+            f"Operator run {int(run_id)} was interrupted while in status '{status}'. "
+            f"{normalized_reason}"
+        )
+        updated = self.storage.update_operator_run(
+            int(run_id),
+            status="failed",
+            stage="failed",
+            error_code="operator_interrupted",
+            error_message=message,
+            hint="The run was interrupted by the operator. Re-enqueue the action if needed.",
+            finished_at=utcnow(),
+        )
+        if updated is None:
+            refreshed = self.storage.operator_run_by_id(int(run_id))
+            return None if refreshed is None else self._decorate_operator_run(refreshed)
+        return self._decorate_operator_run(updated)
+
+    def _operator_interrupted_run_state(self, run_id: int) -> dict[str, Any] | None:
+        latest_state = self.storage.operator_run_by_id(int(run_id))
+        if latest_state is None:
+            return None
+        if str(latest_state.get("status") or "").lower() != "failed":
+            return None
+        if str(latest_state.get("error_code") or "") != "operator_interrupted":
+            return None
+        return latest_state
 
     def operator_runs(
         self,
@@ -1570,6 +1632,9 @@ class DeskApiService:
         try:
             if action == "sync":
                 self.storage.update_operator_run(run_id, stage="syncing_market_data")
+                interrupted = self._operator_interrupted_run_state(run_id)
+                if interrupted is not None:
+                    return self._decorate_operator_run(interrupted)
                 sync_result = self.market.sync_market_data(
                     portfolio_slug=portfolio_slug,
                     days=payload.get("days"),
@@ -1596,6 +1661,9 @@ class DeskApiService:
                 result_payload = {"sync": sync_result}
             elif action == "snapshot":
                 self.storage.update_operator_run(run_id, stage="syncing_market_data")
+                interrupted = self._operator_interrupted_run_state(run_id)
+                if interrupted is not None:
+                    return self._decorate_operator_run(interrupted)
                 sync_result = self._refresh_market_data_for_operator(payload)
                 if requires_live_mt5 and self._operator_sync_result_looks_offline(sync_result):
                     error_payload = self._operator_mt5_not_configured_payload(
@@ -1616,11 +1684,17 @@ class DeskApiService:
                         raise RuntimeError(f"Operator run '{run_id}' disappeared during MT5 sync failure.")
                     return self._decorate_operator_run(updated)
                 self.storage.update_operator_run(run_id, stage="running_snapshot")
+                interrupted = self._operator_interrupted_run_state(run_id)
+                if interrupted is not None:
+                    return self._decorate_operator_run(interrupted)
                 snapshot_result = self.analytics.run_snapshot(**payload)
                 artifact_refs.update(self._operator_artifact_refs(snapshot_result))
                 result_payload = {"sync": sync_result, "snapshot": snapshot_result}
             elif action == "backtest":
                 self.storage.update_operator_run(run_id, stage="syncing_market_data")
+                interrupted = self._operator_interrupted_run_state(run_id)
+                if interrupted is not None:
+                    return self._decorate_operator_run(interrupted)
                 sync_result = self._refresh_market_data_for_operator(payload)
                 if requires_live_mt5 and self._operator_sync_result_looks_offline(sync_result):
                     error_payload = self._operator_mt5_not_configured_payload(
@@ -1641,6 +1715,9 @@ class DeskApiService:
                         raise RuntimeError(f"Operator run '{run_id}' disappeared during MT5 sync failure.")
                     return self._decorate_operator_run(updated)
                 self.storage.update_operator_run(run_id, stage="running_backtest")
+                interrupted = self._operator_interrupted_run_state(run_id)
+                if interrupted is not None:
+                    return self._decorate_operator_run(interrupted)
                 backtest_result = self.analytics.run_backtest(**payload)
                 artifact_refs.update(self._operator_artifact_refs(backtest_result))
                 result_payload = {"sync": sync_result, "backtest": backtest_result}
@@ -1648,6 +1725,9 @@ class DeskApiService:
                 compare_path = payload.get("compare_path")
                 if compare_path is None and self.latest_backtest(portfolio_slug=portfolio_slug) is None:
                     self.storage.update_operator_run(run_id, stage="warming_backtest")
+                    interrupted = self._operator_interrupted_run_state(run_id)
+                    if interrupted is not None:
+                        return self._decorate_operator_run(interrupted)
                     sync_result = self._refresh_market_data_for_operator(
                         {
                             "portfolio_slug": portfolio_slug,
@@ -1673,6 +1753,9 @@ class DeskApiService:
                         if updated is None:
                             raise RuntimeError(f"Operator run '{run_id}' disappeared during MT5 sync failure.")
                         return self._decorate_operator_run(updated)
+                    interrupted = self._operator_interrupted_run_state(run_id)
+                    if interrupted is not None:
+                        return self._decorate_operator_run(interrupted)
                     backtest_result = self.analytics.run_backtest(
                         portfolio_slug=portfolio_slug,
                         days=self.runtime._default_days(),
@@ -1683,11 +1766,18 @@ class DeskApiService:
                     result_payload["backtest"] = backtest_result
                     compare_path = backtest_result.get("compare_csv")
                 self.storage.update_operator_run(run_id, stage="running_report")
+                interrupted = self._operator_interrupted_run_state(run_id)
+                if interrupted is not None:
+                    return self._decorate_operator_run(interrupted)
                 report_result = self.analytics.run_report(compare_path=compare_path, portfolio_slug=portfolio_slug)
                 artifact_refs.update(self._operator_artifact_refs(report_result))
                 result_payload["report"] = report_result
             else:
                 raise ValueError(f"Unsupported operator action '{action}'.")
+
+            interrupted = self._operator_interrupted_run_state(run_id)
+            if interrupted is not None:
+                return self._decorate_operator_run(interrupted)
 
             updated = self.storage.update_operator_run(
                 run_id,
@@ -1701,6 +1791,9 @@ class DeskApiService:
                 raise RuntimeError(f"Operator run '{run_id}' disappeared during completion.")
             return self._decorate_operator_run(updated)
         except Exception as exc:
+            interrupted = self._operator_interrupted_run_state(run_id)
+            if interrupted is not None:
+                return self._decorate_operator_run(interrupted)
             error_payload = self._operator_error_payload(exc)
             updated = self.storage.update_operator_run(
                 run_id,

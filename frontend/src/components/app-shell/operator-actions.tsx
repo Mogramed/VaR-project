@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, FileText, Radar, RefreshCw } from "lucide-react";
+import { Activity, FileText, Radar, RefreshCw, Square } from "lucide-react";
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { api } from "@/lib/api/client";
 import { useOperatorRunAction } from "@/lib/use-operator-run";
@@ -76,15 +76,16 @@ export function OperatorActions({ portfolioSlug }: { portfolioSlug: string }) {
     },
   });
 
-  const activeRun = sync.run?.status === "running" || sync.run?.status === "queued"
-    ? sync.run
-    : snapshot.run?.status === "running" || snapshot.run?.status === "queued"
-      ? snapshot.run
-      : backtest.run?.status === "running" || backtest.run?.status === "queued"
-        ? backtest.run
-        : report.run?.status === "running" || report.run?.status === "queued"
-          ? report.run
+  const activeContext = sync.canInterrupt
+    ? { hook: sync, run: sync.run }
+    : snapshot.canInterrupt
+      ? { hook: snapshot, run: snapshot.run }
+      : backtest.canInterrupt
+        ? { hook: backtest, run: backtest.run }
+        : report.canInterrupt
+          ? { hook: report, run: report.run }
           : null;
+  const activeRun = activeContext?.run ?? null;
   const busy = sync.pending || snapshot.pending || backtest.pending || report.pending;
   const error = sync.error ?? snapshot.error ?? backtest.error ?? report.error ?? null;
   const stage = activeRun?.stage?.replaceAll("_", " ") ?? null;
@@ -104,6 +105,15 @@ export function OperatorActions({ portfolioSlug }: { portfolioSlug: string }) {
       <ActionButton icon={Activity} label="Snap" pending={snapshot.pending} disabled={busy} onClick={() => snapshot.execute({ portfolio_slug: portfolioSlug })} />
       <ActionButton icon={Radar} label="Backtest" pending={backtest.pending} disabled={busy} onClick={() => backtest.execute({ portfolio_slug: portfolioSlug })} />
       <ActionButton icon={FileText} label="Report" pending={report.pending} disabled={busy} accent onClick={() => report.execute({ portfolio_slug: portfolioSlug })} />
+      {activeContext ? (
+        <ActionButton
+          icon={Square}
+          label="Stop"
+          pending={activeContext.hook.interrupting}
+          disabled={activeContext.hook.interrupting}
+          onClick={() => activeContext.hook.interrupt("Interrupted from operator panel.")}
+        />
+      ) : null}
       {stage ? (
         <span className="hidden text-[10px] uppercase tracking-[0.18em] text-[var(--color-text-muted)] lg:inline">
           {stage}
