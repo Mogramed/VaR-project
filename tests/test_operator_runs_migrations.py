@@ -143,6 +143,7 @@ def test_operator_runs_migration_upgrade_is_idempotent_on_fresh_database(tmp_pat
     run = storage.operator_run_by_id(run_id)
     assert run is not None
     assert run["queue_task_id"] == "celery-task-1"
+    assert run.get("status_reason") in {None, ""}
 
 
 def test_operator_runs_migration_repairs_existing_drifted_database(tmp_path: Path) -> None:
@@ -170,10 +171,12 @@ def test_operator_runs_migration_repairs_existing_drifted_database(tmp_path: Pat
     run = storage.operator_run_by_id(run_id)
     assert run is not None
     assert run["queue_task_id"] == "celery-task-drift-1"
+    assert run.get("status_reason") in {None, ""}
 
     with sqlite3.connect(db_path) as connection:
         index_rows = connection.execute("PRAGMA index_list('operator_runs')").fetchall()
     index_by_name = {row[1]: row for row in index_rows}
+    assert "ix_operator_runs_status_reason" in index_by_name
     assert "ux_operator_runs_request_id" in index_by_name
     assert int(index_by_name["ux_operator_runs_request_id"][2]) == 1
 

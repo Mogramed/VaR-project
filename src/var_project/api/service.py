@@ -1350,11 +1350,54 @@ class DeskApiService:
             return (now - running_anchor).total_seconds() > float(self._operator_running_ttl_seconds(action))
         return False
 
+    def _operator_stale_context(self, run: Mapping[str, Any]) -> dict[str, Any]:
+        status = str(run.get("status") or "").lower()
+        action = str(run.get("action") or "").lower()
+        now = utcnow()
+        if status == "queued":
+            anchor = coerce_datetime(run.get("created_at")) or coerce_datetime(run.get("updated_at"))
+            ttl_seconds = int(self._operator_queued_ttl_seconds(action))
+            status_reason = "abandoned"
+            error_code = "abandoned_stale_run"
+        else:
+            anchor = (
+                coerce_datetime(run.get("started_at"))
+                or coerce_datetime(run.get("updated_at"))
+                or coerce_datetime(run.get("created_at"))
+            )
+            ttl_seconds = int(self._operator_running_ttl_seconds(action))
+            status_reason = "timeout"
+            error_code = "timeout_stale_run"
+        age_seconds = None if anchor is None else max(0.0, (now - anchor).total_seconds())
+        return {
+            "status": status or "running",
+            "status_reason": status_reason,
+            "error_code": error_code,
+            "ttl_seconds": ttl_seconds,
+            "age_seconds": age_seconds,
+        }
+
+    @staticmethod
+    def _legacy_operator_status_reason(error_code: str | None) -> str | None:
+        normalized_error_code = str(error_code or "").strip().lower()
+        if normalized_error_code == "timeout_stale_run":
+            return "timeout"
+        if normalized_error_code == "abandoned_stale_run":
+            return "abandoned"
+        if normalized_error_code == "operator_interrupted":
+            return "interrupted"
+        return None
+
     def _decorate_operator_run(self, run: Mapping[str, Any]) -> dict[str, Any]:
         payload = dict(run)
         elapsed_seconds = self._operator_elapsed_seconds(payload)
         status = str(payload.get("status") or "").lower()
         action = str(payload.get("action") or "").lower()
+        status_reason = str(payload.get("status_reason") or "").strip().lower()
+        if not status_reason:
+            legacy_reason = self._legacy_operator_status_reason(payload.get("error_code"))
+            if legacy_reason is not None:
+                payload["status_reason"] = legacy_reason
         sla = self._operator_sla(action)
         payload["elapsed_seconds"] = None if elapsed_seconds is None else round(float(elapsed_seconds), 3)
         payload["is_stale"] = bool(self._operator_is_stale(payload))
@@ -1393,19 +1436,32 @@ class DeskApiService:
     def _fail_stale_operator_run(self, run: Mapping[str, Any]) -> dict[str, Any] | None:
         run_id = int(run["id"])
         action = str(run.get("action") or "operator")
-        status = str(run.get("status") or "running")
+        stale_context = self._operator_stale_context(run)
+        status = str(stale_context.get("status") or "running")
+        status_reason = str(stale_context.get("status_reason") or "timeout")
+        error_code = str(stale_context.get("error_code") or "timeout_stale_run")
+        ttl_seconds = int(stale_context.get("ttl_seconds") or 0)
+        age_seconds = stale_context.get("age_seconds")
+        age_fragment = (
+            "unknown age"
+            if age_seconds is None
+            else f"age {round(float(age_seconds), 3)}s"
+        )
         stale_hint = (
-            f"Previous {action} run timed out in '{status}'. A fresh run has been enqueued."
+            f"Previous {action} run was auto-closed as '{status_reason}' from '{status}'. "
+            f"Observed {age_fragment} for TTL {ttl_seconds}s."
         )
         stale_message = (
-            f"Operator run {run_id} became stale while {status}. "
+            f"Operator run {run_id} became stale while {status} "
+            f"({age_fragment}, ttl={ttl_seconds}s, reason={status_reason}). "
             "The run was closed automatically to avoid an infinite pending state."
         )
         return self.storage.update_operator_run(
             run_id,
             status="failed",
             stage="failed",
-            error_code="timeout_stale_run",
+            status_reason=status_reason,
+            error_code=error_code,
             error_message=stale_message,
             hint=stale_hint,
             finished_at=utcnow(),
@@ -1469,6 +1525,7 @@ class DeskApiService:
             int(run_id),
             error_code="operator_interrupted",
             error_message=message,
+            status_reason="interrupted",
             hint="The run was interrupted by the operator. Re-enqueue the action if needed.",
             stage="failed",
             finished_at=utcnow(),
@@ -1496,6 +1553,7 @@ class DeskApiService:
         limit: int = 25,
         action: str | None = None,
         statuses: list[str] | None = None,
+        status_reasons: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         candidate_statuses = [str(item).lower() for item in (statuses or []) if str(item).strip()]
         if (not candidate_statuses) or any(item in {"queued", "running"} for item in candidate_statuses):
@@ -1505,6 +1563,7 @@ class DeskApiService:
             limit=limit,
             action=action,
             statuses=statuses,
+            status_reasons=status_reasons,
         )
         return [self._decorate_operator_run(run) for run in runs]
 
@@ -1629,6 +1688,7 @@ class DeskApiService:
                 run_id,
                 status="failed",
                 stage="failed",
+                status_reason="mt5_unavailable",
                 error_code=error_payload["error_code"],
                 error_message=error_payload["error_message"],
                 hint=error_payload["hint"],
@@ -1657,6 +1717,7 @@ class DeskApiService:
                         run_id,
                         status="failed",
                         stage="failed",
+                        status_reason="mt5_unavailable",
                         result={"sync": sync_result},
                         error_code=error_payload["error_code"],
                         error_message=error_payload["error_message"],
@@ -1682,6 +1743,7 @@ class DeskApiService:
                         run_id,
                         status="failed",
                         stage="failed",
+                        status_reason="mt5_unavailable",
                         result={"sync": sync_result},
                         error_code=error_payload["error_code"],
                         error_message=error_payload["error_message"],
@@ -1713,6 +1775,7 @@ class DeskApiService:
                         run_id,
                         status="failed",
                         stage="failed",
+                        status_reason="mt5_unavailable",
                         result={"sync": sync_result},
                         error_code=error_payload["error_code"],
                         error_message=error_payload["error_message"],
@@ -1752,6 +1815,7 @@ class DeskApiService:
                             run_id,
                             status="failed",
                             stage="failed",
+                            status_reason="mt5_unavailable",
                             result={"sync": sync_result},
                             error_code=error_payload["error_code"],
                             error_message=error_payload["error_message"],
@@ -1807,6 +1871,7 @@ class DeskApiService:
                 run_id,
                 status="failed",
                 stage="failed",
+                status_reason="execution_error",
                 artifact_refs=artifact_refs,
                 result=result_payload if result_payload else None,
                 error_code=error_payload["error_code"],

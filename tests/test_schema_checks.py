@@ -64,6 +64,7 @@ def test_validate_storage_schema_reports_missing_operator_run_indexes() -> None:
                         request_id TEXT NOT NULL,
                         status TEXT NOT NULL,
                         stage TEXT NOT NULL,
+                        status_reason TEXT NULL,
                         request_payload_json TEXT NULL,
                         artifact_refs_json TEXT NULL,
                         result_json TEXT NULL,

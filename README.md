@@ -62,7 +62,11 @@ Operator actions are enqueue-first and status-driven:
 - `POST /operator/actions/sync|snapshot|backtest|report` returns quickly with a run payload (`id`, `request_id`, `status`, `stage`).
 - `GET /operator/runs/{run_id}` is the source of truth for lifecycle tracking (`queued`, `running`, `succeeded`, `failed`).
 - `GET /operator/runs?...` lists recent/active runs for recovery after UI refresh or transient network errors.
+  - supports `status_reason=timeout|abandoned|interrupted|...` for targeted diagnostics.
 - `POST /operator/runs/{run_id}/interrupt` interrupts an active run and closes it as `failed` with `error_code=operator_interrupted` (idempotent if the run is already terminal).
+- stale runs are auto-closed by the worker/API sweep with an explicit `status_reason`:
+  - `timeout` for `running` runs exceeding action TTL.
+  - `abandoned` for `queued` runs exceeding queue TTL.
 
 Each run response includes SLA hints for consistent polling/timeout behavior:
 
@@ -71,6 +75,14 @@ Each run response includes SLA hints for consistent polling/timeout behavior:
 - `running_timeout_seconds`
 - `sla_seconds`
 - `interruptible`
+- `status_reason` (for failed terminal diagnostics such as `timeout`, `abandoned`, `interrupted`)
+
+Operator stale TTLs are configurable per action:
+
+- `VAR_PROJECT_OPERATOR_STALE_QUEUED_SYNC|SNAPSHOT|BACKTEST|REPORT`
+- `VAR_PROJECT_OPERATOR_STALE_RUNNING_SYNC|SNAPSHOT|BACKTEST|REPORT`
+
+Worker monitoring (`GET /jobs/status`) now includes `operator_runs` counters (`status_counts`, `stale_closed_total`, `stale_reason_counts`, `recent_stale`) for stale-cleanup observability.
 
 Frontend:
 

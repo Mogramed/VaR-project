@@ -139,6 +139,7 @@ def test_operator_action_refuses_when_operator_runs_queue_task_id_column_is_miss
                 request_id TEXT NOT NULL,
                 status TEXT NOT NULL,
                 stage TEXT NOT NULL,
+                status_reason TEXT NULL,
                 request_payload_json TEXT NULL,
                 artifact_refs_json TEXT NULL,
                 result_json TEXT NULL,

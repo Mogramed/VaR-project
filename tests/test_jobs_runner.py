@@ -8,6 +8,7 @@ import yaml
 
 from test_mt5_execution_api import FakeMT5Connector
 
+from var_project.api.service import DeskApiService
 from var_project.core.exceptions import MT5ConnectionError
 from var_project.jobs import JobRunner, build_worker_status
 
@@ -134,6 +135,54 @@ def test_job_runner_live_refresh_auto_generates_report(tmp_path: Path):
     assert "live_refresh" in status["jobs"]
     assert status["jobs"]["live_refresh"]["enabled"] is True
     assert status["jobs"]["live_refresh"]["state"] in {"pending", "due", "ok"}
+
+
+def test_build_worker_status_reports_stale_operator_run_metrics(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, report_enabled=False)
+    service = DeskApiService(root, bootstrap_storage=True)
+    portfolio_id = service.runtime._resolve_portfolio_id("fx_eur_20k")
+
+    service.storage.create_operator_run(
+        portfolio_id=portfolio_id,
+        portfolio_slug="fx_eur_20k",
+        action="sync",
+        request_id="worker-status-stale-timeout",
+        status="failed",
+        stage="failed",
+        status_reason="timeout",
+        error_code="timeout_stale_run",
+    )
+    service.storage.create_operator_run(
+        portfolio_id=portfolio_id,
+        portfolio_slug="fx_eur_20k",
+        action="snapshot",
+        request_id="worker-status-stale-abandoned",
+        status="failed",
+        stage="failed",
+        status_reason="abandoned",
+        error_code="abandoned_stale_run",
+    )
+    service.storage.create_operator_run(
+        portfolio_id=portfolio_id,
+        portfolio_slug="fx_eur_20k",
+        action="backtest",
+        request_id="worker-status-running",
+        status="running",
+        stage="running_backtest",
+    )
+
+    status = build_worker_status(root, storage=service.storage)
+    operator_runs = dict(status.get("operator_runs") or {})
+    stale_reason_counts = dict(operator_runs.get("stale_reason_counts") or {})
+    status_counts = dict(operator_runs.get("status_counts") or {})
+
+    assert operator_runs["window_size"] >= 3
+    assert operator_runs["stale_closed_total"] >= 2
+    assert stale_reason_counts.get("timeout") == 1
+    assert stale_reason_counts.get("abandoned") == 1
+    assert status_counts.get("running", 0) >= 1
+    assert len(list(operator_runs.get("recent_stale") or [])) >= 2
 
 
 def test_job_runner_skips_snapshot_and_backtest_when_mt5_is_unreachable(tmp_path: Path, monkeypatch):

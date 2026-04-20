@@ -282,6 +282,7 @@ def operator_run_to_dict(record: OperatorRunRecord) -> dict[str, Any]:
         "request_id": record.request_id,
         "status": record.status,
         "stage": record.stage,
+        "status_reason": record.status_reason,
         "request_payload": record.request_payload_json or {},
         "artifact_refs": record.artifact_refs_json or {},
         "result": record.result_json or {},

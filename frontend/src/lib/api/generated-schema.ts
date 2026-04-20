@@ -2505,6 +2505,8 @@ export interface components {
             status: string;
             /** Stage */
             stage: string;
+            /** Status Reason */
+            status_reason?: string | null;
             /** Request Payload */
             request_payload?: {
                 [key: string]: unknown;
@@ -3557,6 +3559,10 @@ export interface components {
             health?: {
                 [key: string]: unknown;
             } | null;
+            /** Operator Runs */
+            operator_runs?: {
+                [key: string]: unknown;
+            };
             /** Jobs */
             jobs: {
                 [key: string]: components["schemas"]["WorkerJobStatusResponse"];
@@ -5583,6 +5589,7 @@ export interface operations {
                 portfolio_slug?: string | null;
                 action?: string | null;
                 status?: string[] | null;
+                status_reason?: string[] | null;
                 limit?: number;
             };
             header?: never;

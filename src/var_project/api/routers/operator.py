@@ -89,6 +89,7 @@ def _enqueue_operator_run(
                 int(run["id"]),
                 status="failed",
                 stage="failed",
+                status_reason="dispatch_failed",
                 error_code="queue_dispatch_failed",
                 error_message=(
                     str(dispatch_error)
@@ -258,6 +259,7 @@ def operator_runs(
     portfolio_slug: str | None = Query(default=None),
     action: str | None = Query(default=None),
     status_filter: list[str] | None = Query(default=None, alias="status"),
+    status_reason_filter: list[str] | None = Query(default=None, alias="status_reason"),
     limit: int = Query(default=10, ge=1, le=100),
     service: DeskApiService = Depends(get_service),
 ) -> list[OperatorRunResponse]:
@@ -267,6 +269,7 @@ def operator_runs(
             portfolio_slug=portfolio_slug,
             action=action,
             statuses=status_filter,
+            status_reasons=status_reason_filter,
             limit=limit,
         )
     except (OperationalError, ProgrammingError) as exc:
