@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import dynamic from "next/dynamic";
 import type { ChartMode } from "@/lib/chart-options";
 import { cn } from "@/lib/utils";
+import { countRenderablePoints } from "@/components/charts/chart-data-utils";
 
 function ChartSkeleton({ height }: { height: number }) {
   return (
@@ -87,9 +88,16 @@ export function ChartSurface({
   showDescription?: boolean;
   className?: string;
 }) {
-  const resolvedHeight = height ?? resolveHeight(mode, dataCount);
-  const sparseMode = mode === "sparse" || (mode === "comparison" && dataCount <= 4);
-  const hasData = dataCount > 0;
+  const renderablePoints = countRenderablePoints(option);
+  const resolvedCount = Math.max(dataCount, renderablePoints);
+  const resolvedHeight = height ?? resolveHeight(mode, resolvedCount);
+  const sparseMode = mode === "sparse" || (mode === "comparison" && resolvedCount <= 4);
+  const hasData = renderablePoints > 0;
+  const resolvedEmptyState = emptyState ?? (
+    <p className="text-xs text-[var(--color-text-muted)]">
+      No data available for this chart.
+    </p>
+  );
   const insightGridClass =
     insightLayout === "stack"
       ? "grid-cols-1"
@@ -144,8 +152,8 @@ export function ChartSurface({
       {/* Chart body */}
       {loading ? (
         <ChartSkeleton height={resolvedHeight} />
-      ) : !hasData && emptyState ? (
-        <div className="px-4 py-6">{emptyState}</div>
+      ) : !hasData ? (
+        <div className="px-4 py-6">{resolvedEmptyState}</div>
       ) : sparseMode && insight ? (
         <div className={cn("grid gap-4 p-4", insightGridClass)}>
           <div className="mx-auto w-full max-w-[380px]">

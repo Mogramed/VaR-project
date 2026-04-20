@@ -163,6 +163,277 @@ function roundValue(value: number | null | undefined) {
   return Number(numeric.toFixed(3));
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  if (value == null || typeof value === "boolean") {
+    return null;
+  }
+  if (typeof value === "string" && value.trim() === "") {
+    return null;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+  return numeric;
+}
+
+function normalizeEpochLikeMillis(value: number): number | null {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  const abs = Math.abs(value);
+  const millis =
+    abs < 1e11
+      ? value * 1000
+      : abs < 1e14
+        ? value
+        : abs < 1e17
+          ? value / 1000
+          : value / 1_000_000;
+  if (!Number.isFinite(millis)) {
+    return null;
+  }
+  return millis;
+}
+
+function timestampFromLabel(label: string): number | null {
+  const trimmed = label.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) {
+    return normalizeEpochLikeMillis(Number(trimmed));
+  }
+  const parsed = Date.parse(trimmed);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return parsed;
+}
+
+function normalizeLabel(raw: unknown, index: number): string {
+  const text = String(raw ?? "").trim();
+  if (!text) {
+    return String(index + 1);
+  }
+  return text;
+}
+
+function resolveTimeOrder<T extends { sortKey: number | null; sourceIndex: number }>(rows: T[]): T[] {
+  if (rows.length <= 1) {
+    return rows;
+  }
+
+  const withSortKey = rows.filter((row): row is T & { sortKey: number } => row.sortKey != null);
+  const withoutSortKey = rows.filter((row) => row.sortKey == null);
+  const sorted = withSortKey.slice().sort((left, right) => {
+    if (left.sortKey === right.sortKey) {
+      return left.sourceIndex - right.sourceIndex;
+    }
+    return left.sortKey - right.sortKey;
+  });
+  return [...sorted, ...withoutSortKey];
+}
+
+function computeAxisDomain(
+  values: Array<number | null | undefined>,
+  options?: { includeZero?: boolean },
+) {
+  const finiteValues = values.filter((value): value is number => Number.isFinite(value));
+  if (finiteValues.length === 0) {
+    return { min: 0, max: 1 };
+  }
+  const allNonNegative = finiteValues.every((value) => value >= 0);
+  const allNonPositive = finiteValues.every((value) => value <= 0);
+  const finite = finiteValues.slice();
+  if (options?.includeZero) {
+    finite.push(0);
+  }
+
+  let min = Math.min(...finite);
+  let max = Math.max(...finite);
+
+  if (min === max) {
+    if (options?.includeZero && min === 0) {
+      return { min: 0, max: 1 };
+    }
+    const pad = Math.max(Math.abs(min) * 0.12, 1);
+    min -= pad;
+    max += pad;
+  } else {
+    const range = max - min;
+    const pad = Math.max(range * 0.08, 0.5);
+    min -= pad;
+    max += pad;
+  }
+
+  if (options?.includeZero) {
+    if (allNonNegative) {
+      min = 0;
+    }
+    if (allNonPositive) {
+      max = 0;
+    }
+  }
+
+  return { min, max };
+}
+
+function yAxisForValues(
+  values: Array<number | null | undefined>,
+  options?: { includeZero?: boolean },
+) {
+  const domain = computeAxisDomain(values, options);
+  return {
+    ...yAxisBase(),
+    min: domain.min,
+    max: domain.max,
+  };
+}
+
+type NormalizedSeriesPoint = {
+  label: string;
+  value: number;
+};
+
+function normalizeSeriesPoints(
+  points: TimeSeriesPoint[],
+  options?: { sortByTime?: boolean },
+): NormalizedSeriesPoint[] {
+  const normalized = points
+    .map((point, index) => {
+      const value = toFiniteNumber(point?.value);
+      if (value == null) {
+        return null;
+      }
+      const rawLabel = normalizeLabel(point?.label, index);
+      const parsedLabelTs = options?.sortByTime ? timestampFromLabel(rawLabel) : null;
+      const label =
+        options?.sortByTime && parsedLabelTs == null ? String(index + 1) : rawLabel;
+      return {
+        label,
+        value,
+        sortKey: parsedLabelTs,
+        sourceIndex: index,
+      };
+    })
+    .filter(
+      (
+        point,
+      ): point is { label: string; value: number; sortKey: number | null; sourceIndex: number } =>
+        point != null,
+    );
+
+  const ordered = options?.sortByTime ? resolveTimeOrder(normalized) : normalized;
+  return ordered.map(({ label, value }) => ({ label, value }));
+}
+
+type NormalizedBacktestPoint = {
+  label: string;
+  pnl: number;
+  var_hist: number | null;
+  var_garch: number | null;
+  var_fhs: number | null;
+};
+
+function normalizeBacktestPoints(points: BacktestSeriesPoint[]): NormalizedBacktestPoint[] {
+  const normalized = points
+    .map((point, index) => {
+      const pnl = toFiniteNumber(point?.pnl);
+      if (pnl == null) {
+        return null;
+      }
+      const rawLabel = normalizeLabel(point?.label, index);
+      const parsedLabelTs = timestampFromLabel(rawLabel);
+      const label = parsedLabelTs == null ? String(index + 1) : rawLabel;
+      return {
+        label,
+        pnl,
+        var_hist: toFiniteNumber(point?.var_hist),
+        var_garch: toFiniteNumber(point?.var_garch),
+        var_fhs: toFiniteNumber(point?.var_fhs),
+        sortKey: parsedLabelTs,
+        sourceIndex: index,
+      };
+    })
+    .filter(
+      (
+        point,
+      ): point is {
+        label: string;
+        pnl: number;
+        var_hist: number | null;
+        var_garch: number | null;
+        var_fhs: number | null;
+        sortKey: number | null;
+        sourceIndex: number;
+      } => point != null,
+    );
+
+  const ordered = resolveTimeOrder(normalized);
+  return ordered.map(({ label, pnl, var_hist, var_garch, var_fhs }) => ({
+    label,
+    pnl,
+    var_hist,
+    var_garch,
+    var_fhs,
+  }));
+}
+
+type GroupedSeriesInput = {
+  name: string;
+  data: Array<number | null | undefined>;
+  color: string;
+};
+
+type NormalizedGroupedSeries = {
+  name: string;
+  data: Array<number | null>;
+  color: string;
+};
+
+function normalizeGroupedSeries(
+  labels: string[],
+  series: GroupedSeriesInput[],
+): {
+  labels: string[];
+  series: NormalizedGroupedSeries[];
+  values: number[];
+} {
+  const maxDataLength = series.reduce((max, item) => Math.max(max, item.data.length), 0);
+  const length = Math.max(labels.length, maxDataLength);
+  if (length === 0) {
+    return { labels: [], series: [], values: [] };
+  }
+
+  const normalizedLabels = Array.from({ length }, (_, index) => normalizeLabel(labels[index], index));
+  const normalizedSeries = series.map((item) => ({
+    name: item.name,
+    color: item.color,
+    data: Array.from({ length }, (_, index) => toFiniteNumber(item.data[index])),
+  }));
+
+  const validIndexes = normalizedLabels
+    .map((_, index) => index)
+    .filter((index) => normalizedSeries.some((item) => item.data[index] != null));
+
+  const filteredLabels = validIndexes.map((index) => normalizedLabels[index]);
+  const filteredSeries = normalizedSeries.map((item) => ({
+    name: item.name,
+    color: item.color,
+    data: validIndexes.map((index) => item.data[index]),
+  }));
+  const values = filteredSeries.flatMap((item) =>
+    item.data.filter((value): value is number => value != null),
+  );
+
+  return {
+    labels: filteredLabels,
+    series: filteredSeries,
+    values,
+  };
+}
+
 function resolveMode(count: number, preferred?: ChartMode): ChartMode {
   if (preferred) {
     return preferred;
@@ -364,14 +635,19 @@ export function makeBarOption(
   colorOrConfig?: string | BarChartConfig,
   maybeConfig?: BarChartConfig,
 ) {
-  const count = points.length;
+  const normalizedPoints = normalizeSeriesPoints(points);
+  const count = normalizedPoints.length;
   const config = resolveBarConfig(colorOrConfig, maybeConfig);
   const mode = resolveMode(count, config.mode);
-  const labels = points.map((point) => formatCategoryLabel(point.label, mode));
+  const labels = normalizedPoints.map((point) => formatCategoryLabel(point.label, mode));
   const palette = {
     positive: config.color,
     negative: config.negativeColor ?? CHART_PALETTE.red,
   };
+  const yAxis = yAxisForValues(
+    normalizedPoints.map((point) => point.value),
+    { includeZero: true },
+  );
 
   return {
     animationDuration: 600,
@@ -380,12 +656,12 @@ export function makeBarOption(
     grid: gridForMode(mode),
     tooltip: sharedTooltip(),
     xAxis: xAxisForMode(count, mode, labels),
-    yAxis: yAxisBase(),
+    yAxis,
     dataZoom: zoomForMode(count, mode),
     series: [
       {
         type: "bar",
-        data: points.map((point) => ({
+        data: normalizedPoints.map((point) => ({
           value: roundValue(point.value),
           itemStyle: {
             color: point.value < 0 ? barGradient(palette.negative) : barGradient(palette.positive),
@@ -430,9 +706,19 @@ export function makeBarOption(
 }
 
 export function makeBacktestOption(points: BacktestSeriesPoint[]) {
-  const count = points.length;
+  const normalizedPoints = normalizeBacktestPoints(points);
+  const count = normalizedPoints.length;
   const mode = resolveMode(count, "trace");
-  const labels = points.map((point) => formatCategoryLabel(point.label, mode));
+  const labels = normalizedPoints.map((point) => formatCategoryLabel(point.label, mode));
+  const yAxis = yAxisForValues(
+    normalizedPoints.flatMap((point) => [
+      point.pnl,
+      point.var_hist,
+      point.var_garch,
+      point.var_fhs,
+    ]),
+    { includeZero: true },
+  );
 
   return {
     animationDuration: 800,
@@ -442,7 +728,7 @@ export function makeBacktestOption(points: BacktestSeriesPoint[]) {
     tooltip: sharedTooltip(),
     legend: legendStyle("bottom"),
     xAxis: xAxisForMode(count, mode, labels),
-    yAxis: yAxisBase(),
+    yAxis,
     dataZoom: zoomForMode(count, mode),
     series: [
       {
@@ -452,7 +738,7 @@ export function makeBacktestOption(points: BacktestSeriesPoint[]) {
         symbol: "none",
         lineStyle: { width: 2, color: CHART_PALETTE.blue, ...lineGlow(CHART_PALETTE.blue, 0.25) },
         areaStyle: { color: areaGradient(CHART_PALETTE.blue) },
-        data: points.map((point) => roundValue(point.pnl)),
+        data: normalizedPoints.map((point) => roundValue(point.pnl)),
         z: 4,
         markLine: {
           silent: true,
@@ -468,7 +754,7 @@ export function makeBacktestOption(points: BacktestSeriesPoint[]) {
         smooth: 0.3,
         symbol: "none",
         lineStyle: { width: 1.5, color: CHART_PALETTE.gold, ...lineGlow(CHART_PALETTE.gold, 0.2) },
-        data: points.map((point) =>
+        data: normalizedPoints.map((point) =>
           point.var_hist == null ? null : roundValue(point.var_hist),
         ),
         z: 3,
@@ -479,7 +765,7 @@ export function makeBacktestOption(points: BacktestSeriesPoint[]) {
         smooth: 0.3,
         symbol: "none",
         lineStyle: { width: 1.5, color: CHART_PALETTE.green, ...lineGlow(CHART_PALETTE.green, 0.2) },
-        data: points.map((point) =>
+        data: normalizedPoints.map((point) =>
           point.var_garch == null ? null : roundValue(point.var_garch),
         ),
         z: 2,
@@ -490,7 +776,7 @@ export function makeBacktestOption(points: BacktestSeriesPoint[]) {
         smooth: 0.3,
         symbol: "none",
         lineStyle: { width: 1.5, color: CHART_PALETTE.red, ...lineGlow(CHART_PALETTE.red, 0.2) },
-        data: points.map((point) =>
+        data: normalizedPoints.map((point) =>
           point.var_fhs == null ? null : roundValue(point.var_fhs),
         ),
         z: 1,
@@ -504,9 +790,11 @@ export function makeLineOption(
   color: string = CHART_PALETTE.gold,
   config?: ChartConfig,
 ) {
-  const count = points.length;
+  const normalizedPoints = normalizeSeriesPoints(points, { sortByTime: true });
+  const count = normalizedPoints.length;
   const mode = resolveMode(count, config?.mode);
-  const labels = points.map((point) => formatCategoryLabel(point.label, mode));
+  const labels = normalizedPoints.map((point) => formatCategoryLabel(point.label, mode));
+  const yAxis = yAxisForValues(normalizedPoints.map((point) => point.value));
 
   return {
     animationDuration: 700,
@@ -515,7 +803,7 @@ export function makeLineOption(
     grid: gridForMode(mode),
     tooltip: sharedTooltip(),
     xAxis: xAxisForMode(count, mode, labels),
-    yAxis: yAxisBase(),
+    yAxis,
     dataZoom: zoomForMode(count, mode),
     series: [
       {
@@ -529,7 +817,7 @@ export function makeLineOption(
           ...lineGlow(color, 0.3),
         },
         areaStyle: { color: areaGradient(color) },
-        data: points.map((point) => roundValue(point.value)),
+        data: normalizedPoints.map((point) => roundValue(point.value)),
         markLine: {
           silent: true,
           symbol: "none",
@@ -549,12 +837,14 @@ export function makeLineOption(
 
 export function makeGroupedBarOption(
   labels: string[],
-  series: Array<{ name: string; data: number[]; color: string }>,
+  series: Array<{ name: string; data: Array<number | null | undefined>; color: string }>,
   config?: GroupedBarConfig,
 ) {
-  const count = labels.length;
+  const normalized = normalizeGroupedSeries(labels, series);
+  const count = normalized.labels.length;
   const mode = resolveMode(count, config?.mode ?? "comparison");
-  const formattedLabels = labels.map((label) => formatCategoryLabel(label, mode));
+  const formattedLabels = normalized.labels.map((label) => formatCategoryLabel(label, mode));
+  const yAxis = yAxisForValues(normalized.values, { includeZero: true });
 
   return {
     animationDuration: 650,
@@ -564,12 +854,12 @@ export function makeGroupedBarOption(
     tooltip: sharedTooltip(),
     legend: legendStyle("top"),
     xAxis: xAxisForMode(count, mode, formattedLabels),
-    yAxis: yAxisBase(),
+    yAxis,
     dataZoom: zoomForMode(count, mode),
-    series: series.map((item) => ({
+    series: normalized.series.map((item) => ({
       name: item.name,
       type: "bar",
-      data: item.data.map((value) => roundValue(value)),
+      data: item.data.map((value) => (value == null ? null : roundValue(value))),
       barMaxWidth: mode === "sparse" ? 44 : 30,
       barCategoryGap: mode === "sparse" ? "38%" : "32%",
       emphasis: {
