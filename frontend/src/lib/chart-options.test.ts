@@ -120,4 +120,19 @@ describe("chart option resilience", () => {
     expect(readSeriesData(option, 0)).toEqual([3, 2, 1]);
     expect(option).toMatchSnapshot();
   });
+
+  it("treats numeric placeholder labels as undated during time sorting", () => {
+    const option = makeLineOption(
+      [
+        { label: "2026-01-02T00:00:00Z", value: 20 },
+        { label: "1", value: 10 },
+        { label: "2026-01-01T00:00:00Z", value: 30 },
+      ],
+      CHART_PALETTE.blue,
+      { mode: "standard" },
+    );
+
+    expect(readXAxisLabels(option)).toEqual(["2026 01 01T00:00:00Z", "2026 01 02T00:00:00Z", "2"]);
+    expect(readSeriesData(option, 0)).toEqual([30, 20, 10]);
+  });
 });

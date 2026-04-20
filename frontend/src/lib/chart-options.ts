@@ -196,16 +196,28 @@ function normalizeEpochLikeMillis(value: number): number | null {
   return millis;
 }
 
+function isValidTimestampMillis(millis: number): boolean {
+  if (!Number.isFinite(millis)) {
+    return false;
+  }
+  const date = new Date(millis);
+  if (Number.isNaN(date.getTime())) {
+    return false;
+  }
+  return date.getUTCFullYear() >= 2000;
+}
+
 function timestampFromLabel(label: string): number | null {
   const trimmed = label.trim();
   if (!trimmed) {
     return null;
   }
   if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) {
-    return normalizeEpochLikeMillis(Number(trimmed));
+    const normalized = normalizeEpochLikeMillis(Number(trimmed));
+    return normalized != null && isValidTimestampMillis(normalized) ? normalized : null;
   }
   const parsed = Date.parse(trimmed);
-  if (!Number.isFinite(parsed)) {
+  if (!Number.isFinite(parsed) || !isValidTimestampMillis(parsed)) {
     return null;
   }
   return parsed;
