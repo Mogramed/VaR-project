@@ -1832,6 +1832,7 @@ class DeskApiService:
         *,
         exposure_change: float | None = None,
         delta_position_eur: float | None = None,
+        strict: bool = True,
     ) -> float:
         raw = exposure_change if exposure_change is not None else delta_position_eur
         try:
@@ -1840,6 +1841,8 @@ class DeskApiService:
             raise ValueError(TRADE_EXPOSURE_RULE_MESSAGE) from exc
         if not math.isfinite(parsed):
             raise ValueError(TRADE_EXPOSURE_RULE_MESSAGE)
+        if not strict:
+            return parsed
 
         magnitude = abs(parsed)
         if magnitude < TRADE_EXPOSURE_MIN_EUR:
@@ -1858,10 +1861,12 @@ class DeskApiService:
         delta_position_eur: float | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
+        strict_trade_exposure_validation: bool = True,
     ) -> dict[str, Any]:
         normalized_exposure_change = self._normalize_trade_exposure_change(
             exposure_change=exposure_change,
             delta_position_eur=delta_position_eur,
+            strict=strict_trade_exposure_validation,
         )
         return self.mt5.preview_execution(
             symbol=symbol,
@@ -1879,10 +1884,12 @@ class DeskApiService:
         delta_position_eur: float | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
+        strict_trade_exposure_validation: bool = True,
     ) -> dict[str, Any]:
         normalized_exposure_change = self._normalize_trade_exposure_change(
             exposure_change=exposure_change,
             delta_position_eur=delta_position_eur,
+            strict=strict_trade_exposure_validation,
         )
         return self.mt5.submit_execution(
             symbol=symbol,
@@ -1900,10 +1907,12 @@ class DeskApiService:
         delta_position_eur: float | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
+        strict_trade_exposure_validation: bool = True,
     ) -> dict[str, Any]:
         normalized_exposure_change = self._normalize_trade_exposure_change(
             exposure_change=exposure_change,
             delta_position_eur=delta_position_eur,
+            strict=strict_trade_exposure_validation,
         )
         return self.trading.evaluate_trade_decision(
             symbol=symbol,
