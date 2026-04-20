@@ -53,6 +53,13 @@ from var_project.storage.settings import StorageSettings
 from var_project.validation.model_validation import ValidationSummary
 
 
+LEGACY_STATUS_REASON_ERROR_CODES: dict[str, tuple[str, ...]] = {
+    "timeout": ("timeout_stale_run",),
+    "abandoned": ("abandoned_stale_run",),
+    "interrupted": ("operator_interrupted",),
+}
+
+
 class StorageWriteRepository:
     def __init__(self, session_factory: Any, settings: StorageSettings):
         self.session_factory = session_factory
@@ -1131,7 +1138,22 @@ class StorageReadRepository:
                 stmt = stmt.where(OperatorRunRecord.status.in_(normalized_statuses))
             normalized_reasons = [str(item) for item in (status_reasons or []) if str(item).strip()]
             if normalized_reasons:
-                stmt = stmt.where(OperatorRunRecord.status_reason.in_(normalized_reasons))
+                reason_match = OperatorRunRecord.status_reason.in_(normalized_reasons)
+                legacy_error_codes = sorted(
+                    {
+                        error_code
+                        for reason in normalized_reasons
+                        for error_code in LEGACY_STATUS_REASON_ERROR_CODES.get(str(reason).lower(), ())
+                    }
+                )
+                if legacy_error_codes:
+                    legacy_reason_match = (
+                        OperatorRunRecord.status_reason.is_(None)
+                        & OperatorRunRecord.error_code.in_(legacy_error_codes)
+                    )
+                    stmt = stmt.where(or_(reason_match, legacy_reason_match))
+                else:
+                    stmt = stmt.where(reason_match)
             stmt = stmt.order_by(OperatorRunRecord.created_at.desc(), OperatorRunRecord.id.desc()).limit(int(limit))
             records = session.scalars(stmt).all()
             return [operator_run_to_dict(record) for record in records]

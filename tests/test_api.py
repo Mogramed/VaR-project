@@ -690,6 +690,15 @@ def test_operator_runs_supports_status_reason_filter(tmp_path: Path):
         status_reason="timeout",
         error_code="timeout_stale_run",
     )
+    legacy_timeout_run_id = service.storage.create_operator_run(
+        portfolio_id=portfolio_id,
+        portfolio_slug="fx_eur_20k",
+        action="snapshot",
+        request_id="status-reason-timeout-legacy-1",
+        status="failed",
+        stage="failed",
+        error_code="timeout_stale_run",
+    )
     service.storage.create_operator_run(
         portfolio_id=portfolio_id,
         portfolio_slug="fx_eur_20k",
@@ -711,6 +720,7 @@ def test_operator_runs_supports_status_reason_filter(tmp_path: Path):
     assert body
     assert {item["status_reason"] for item in body} == {"timeout"}
     assert any(int(item["id"]) == timeout_run_id for item in body)
+    assert any(int(item["id"]) == legacy_timeout_run_id for item in body)
 
 
 def test_operator_run_claim_is_single_owner(tmp_path: Path):

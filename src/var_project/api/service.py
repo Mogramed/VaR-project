@@ -1377,11 +1377,27 @@ class DeskApiService:
             "age_seconds": age_seconds,
         }
 
+    @staticmethod
+    def _legacy_operator_status_reason(error_code: str | None) -> str | None:
+        normalized_error_code = str(error_code or "").strip().lower()
+        if normalized_error_code == "timeout_stale_run":
+            return "timeout"
+        if normalized_error_code == "abandoned_stale_run":
+            return "abandoned"
+        if normalized_error_code == "operator_interrupted":
+            return "interrupted"
+        return None
+
     def _decorate_operator_run(self, run: Mapping[str, Any]) -> dict[str, Any]:
         payload = dict(run)
         elapsed_seconds = self._operator_elapsed_seconds(payload)
         status = str(payload.get("status") or "").lower()
         action = str(payload.get("action") or "").lower()
+        status_reason = str(payload.get("status_reason") or "").strip().lower()
+        if not status_reason:
+            legacy_reason = self._legacy_operator_status_reason(payload.get("error_code"))
+            if legacy_reason is not None:
+                payload["status_reason"] = legacy_reason
         sla = self._operator_sla(action)
         payload["elapsed_seconds"] = None if elapsed_seconds is None else round(float(elapsed_seconds), 3)
         payload["is_stale"] = bool(self._operator_is_stale(payload))
