@@ -151,6 +151,7 @@ def test_api_runs_snapshot_backtest_and_report(tmp_path: Path):
     jobs_status = client.get("/jobs/status")
     assert jobs_status.status_code == 200
     assert jobs_status.json()["database_ready"] is True
+    assert "operator_runs" in jobs_status.json()
 
     portfolios = client.get("/portfolios")
     assert portfolios.status_code == 200
@@ -458,6 +459,7 @@ def test_operator_run_can_be_interrupted(tmp_path: Path):
     body = interrupt_response.json()
     assert body["id"] == run_id
     assert body["status"] == "failed"
+    assert body["status_reason"] == "interrupted"
     assert body["error_code"] == "operator_interrupted"
     assert "interrupted" in str(body["error_message"]).lower()
     assert body["interruptible"] is False
@@ -470,12 +472,14 @@ def test_operator_run_can_be_interrupted(tmp_path: Path):
     second_body = second_interrupt.json()
     assert second_body["id"] == run_id
     assert second_body["status"] == "failed"
+    assert second_body["status_reason"] == "interrupted"
     assert second_body["error_code"] == "operator_interrupted"
     assert second_body["interruptible"] is False
 
     latest = client.get(f"/operator/runs/{run_id}")
     assert latest.status_code == 200
     assert latest.json()["status"] == "failed"
+    assert latest.json()["status_reason"] == "interrupted"
     assert latest.json()["error_code"] == "operator_interrupted"
 
 
@@ -555,6 +559,7 @@ def test_operator_interruption_is_not_overwritten_by_processing_failure(
     processed = service.process_operator_run(run_id)
 
     assert processed["status"] == "failed"
+    assert processed["status_reason"] == "interrupted"
     assert processed["error_code"] == "operator_interrupted"
     assert "interrupted" in str(processed["error_message"]).lower()
     assert processed["interruptible"] is False
@@ -575,6 +580,7 @@ def test_operator_run_fails_fast_when_mt5_unavailable_for_strict_live(tmp_path: 
     processed = service.process_operator_run(int(run["id"]))
 
     assert processed["status"] == "failed"
+    assert processed["status_reason"] == "mt5_unavailable"
     assert processed["error_code"] == "mt5_live_unavailable"
     assert "VAR_PROJECT_MT5_AGENT_BASE_URL" in str(processed.get("hint") or "")
 
@@ -606,10 +612,105 @@ def test_operator_enqueue_reaps_stale_run_and_creates_new_one(tmp_path: Path):
 
     assert stale_run is not None
     assert stale_run["status"] == "failed"
+    assert stale_run["status_reason"] == "timeout"
     assert stale_run["error_code"] == "timeout_stale_run"
     assert stale_run.get("elapsed_seconds") is not None
     assert fresh_run["id"] != stale_run_id
     assert fresh_run["status"] in {"queued", "running"}
+
+
+def test_operator_reap_marks_stale_queued_run_as_abandoned(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    payload = {"portfolio_slug": "fx_eur_20k"}
+    normalized_payload = service._normalize_operator_payload(action="sync", request_payload=payload)
+    portfolio_id = service.runtime._resolve_portfolio_id("fx_eur_20k")
+    stale_run_id = service.storage.create_operator_run(
+        portfolio_id=portfolio_id,
+        portfolio_slug="fx_eur_20k",
+        action="sync",
+        request_id="stale_run_test_queued_1",
+        status="queued",
+        stage="accepted",
+        request_payload=normalized_payload,
+    )
+    stale_timeout = service._operator_queued_ttl_seconds("sync")
+    stale_anchor = (utcnow() - timedelta(seconds=stale_timeout + 30)).isoformat()
+    with service.storage.engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE operator_runs
+                SET created_at = :created_at,
+                    updated_at = :updated_at
+                WHERE id = :run_id
+                """
+            ),
+            {
+                "created_at": stale_anchor,
+                "updated_at": stale_anchor,
+                "run_id": stale_run_id,
+            },
+        )
+
+    stale_updates = service.reap_stale_operator_runs(
+        portfolio_slug="fx_eur_20k",
+        action="sync",
+        limit=20,
+    )
+    stale_run = service.operator_run(stale_run_id)
+
+    assert any(int(item["id"]) == stale_run_id for item in stale_updates)
+    assert stale_run is not None
+    assert stale_run["status"] == "failed"
+    assert stale_run["status_reason"] == "abandoned"
+    assert stale_run["error_code"] == "abandoned_stale_run"
+    assert "ttl=" in str(stale_run.get("error_message") or "")
+
+
+def test_operator_runs_supports_status_reason_filter(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+    service = DeskApiService(root, bootstrap_storage=True)
+    portfolio_id = service.runtime._resolve_portfolio_id("fx_eur_20k")
+
+    timeout_run_id = service.storage.create_operator_run(
+        portfolio_id=portfolio_id,
+        portfolio_slug="fx_eur_20k",
+        action="backtest",
+        request_id="status-reason-timeout-1",
+        status="failed",
+        stage="failed",
+        status_reason="timeout",
+        error_code="timeout_stale_run",
+    )
+    service.storage.create_operator_run(
+        portfolio_id=portfolio_id,
+        portfolio_slug="fx_eur_20k",
+        action="sync",
+        request_id="status-reason-abandoned-1",
+        status="failed",
+        stage="failed",
+        status_reason="abandoned",
+        error_code="abandoned_stale_run",
+    )
+
+    client = TestClient(create_app(repo_root=root, bootstrap_storage=True))
+    response = client.get(
+        "/operator/runs",
+        params={"portfolio_slug": "fx_eur_20k", "status_reason": "timeout", "limit": 10},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body
+    assert {item["status_reason"] for item in body} == {"timeout"}
+    assert any(int(item["id"]) == timeout_run_id for item in body)
 
 
 def test_operator_run_claim_is_single_owner(tmp_path: Path):

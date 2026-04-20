@@ -262,6 +262,7 @@ class OperatorRunRecord(Base):
     request_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     stage: Mapped[str] = mapped_column(String(64), index=True)
+    status_reason: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     request_payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     artifact_refs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

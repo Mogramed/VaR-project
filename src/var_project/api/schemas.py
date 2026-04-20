@@ -140,6 +140,7 @@ class WorkerStatusResponse(BaseModel):
     loop_sleep_seconds: int
     database_ready: bool
     health: dict[str, Any] | None = None
+    operator_runs: dict[str, Any] = Field(default_factory=dict)
     jobs: dict[str, WorkerJobStatusResponse]
 
 
@@ -182,6 +183,7 @@ class OperatorRunResponse(BaseModel):
     request_id: str
     status: str
     stage: str
+    status_reason: str | None = None
     request_payload: dict[str, Any] = Field(default_factory=dict)
     artifact_refs: dict[str, Any] = Field(default_factory=dict)
     result: dict[str, Any] = Field(default_factory=dict)

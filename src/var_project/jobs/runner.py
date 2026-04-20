@@ -251,7 +251,7 @@ class JobRunner:
                     "action": stale.get("action"),
                     "status": stale.get("status"),
                     "stage": stale.get("stage"),
-                    "reason": stale.get("error_code") or "stale",
+                    "reason": stale.get("status_reason") or stale.get("error_code") or "stale",
                 }
             )
         for run in runs:
@@ -619,6 +619,61 @@ def _coerce_age(timestamp: str | None, *, now: datetime) -> float | None:
     return max(0.0, (now - created_at.astimezone(timezone.utc)).total_seconds())
 
 
+def _build_operator_runs_metrics(*, recent_runs: list[dict[str, Any]]) -> dict[str, Any]:
+    status_counts: dict[str, int] = {
+        "queued": 0,
+        "running": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "other": 0,
+    }
+    stale_reason_counts: dict[str, int] = {
+        "timeout": 0,
+        "abandoned": 0,
+    }
+    stale_recent: list[dict[str, Any]] = []
+    for run in recent_runs:
+        status = str(run.get("status") or "").strip().lower()
+        if status in status_counts:
+            status_counts[status] += 1
+        else:
+            status_counts["other"] += 1
+
+        status_reason = str(run.get("status_reason") or "").strip().lower()
+        error_code = str(run.get("error_code") or "").strip().lower()
+        stale_reason: str | None = None
+        if status_reason in {"timeout", "abandoned"}:
+            stale_reason = status_reason
+        elif error_code == "timeout_stale_run":
+            stale_reason = "timeout"
+        elif error_code == "abandoned_stale_run":
+            stale_reason = "abandoned"
+
+        if stale_reason is None:
+            continue
+
+        stale_reason_counts[stale_reason] += 1
+        stale_recent.append(
+            {
+                "id": run.get("id"),
+                "action": run.get("action"),
+                "status": run.get("status"),
+                "status_reason": stale_reason,
+                "error_code": run.get("error_code"),
+                "updated_at": run.get("updated_at"),
+                "finished_at": run.get("finished_at"),
+            }
+        )
+
+    return {
+        "window_size": len(recent_runs),
+        "status_counts": status_counts,
+        "stale_closed_total": int(sum(stale_reason_counts.values())),
+        "stale_reason_counts": stale_reason_counts,
+        "recent_stale": stale_recent[:10],
+    }
+
+
 def build_worker_status(
     root: Path,
     *,
@@ -637,6 +692,8 @@ def build_worker_status(
     latest_backtest = active_storage.latest_backtest_run() if database_ready else None
     latest_live_refresh = active_storage.latest_snapshot(source="mt5_live_bridge") if database_ready else None
     latest_report = active_storage.latest_artifact("daily_report") if database_ready else None
+    recent_operator_runs = active_storage.list_operator_runs(limit=25) if database_ready else []
+    operator_runs_metrics = _build_operator_runs_metrics(recent_runs=recent_operator_runs)
 
     jobs: dict[str, dict[str, Any]] = {}
     for job_name, latest in {
@@ -681,5 +738,6 @@ def build_worker_status(
         "loop_sleep_seconds": int(settings.loop_sleep_seconds),
         "database_ready": database_ready,
         "health": worker_health,
+        "operator_runs": operator_runs_metrics,
         "jobs": jobs,
     }

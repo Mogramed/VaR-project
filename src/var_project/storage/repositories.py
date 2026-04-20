@@ -634,6 +634,7 @@ class StorageWriteRepository:
         request_id: str,
         status: str,
         stage: str,
+        status_reason: str | None = None,
         request_payload: Mapping[str, Any] | None = None,
         artifact_refs: Mapping[str, Any] | None = None,
         result: Mapping[str, Any] | None = None,
@@ -653,6 +654,7 @@ class StorageWriteRepository:
                 request_id=str(request_id),
                 status=str(status),
                 stage=str(stage),
+                status_reason=None if status_reason is None else str(status_reason),
                 request_payload_json=jsonable(dict(request_payload or {})),
                 artifact_refs_json=jsonable(dict(artifact_refs or {})),
                 result_json=jsonable(dict(result or {})) if result is not None else None,
@@ -675,6 +677,7 @@ class StorageWriteRepository:
         *,
         status: str | None = None,
         stage: str | None = None,
+        status_reason: str | None = None,
         artifact_refs: Mapping[str, Any] | None = None,
         result: Mapping[str, Any] | None = None,
         error_code: str | None = None,
@@ -693,6 +696,8 @@ class StorageWriteRepository:
                 record.status = str(status)
             if stage is not None:
                 record.stage = str(stage)
+            if status_reason is not None:
+                record.status_reason = str(status_reason)
             if artifact_refs is not None:
                 merged_artifacts = dict(record.artifact_refs_json or {})
                 merged_artifacts.update(dict(artifact_refs))
@@ -726,6 +731,7 @@ class StorageWriteRepository:
         *,
         error_code: str,
         error_message: str,
+        status_reason: str = "interrupted",
         hint: str | None = None,
         stage: str = "failed",
         finished_at: Any | None = None,
@@ -743,6 +749,7 @@ class StorageWriteRepository:
                     stage=str(stage),
                     error_code=str(error_code),
                     error_message=str(error_message),
+                    status_reason=str(status_reason),
                     hint=None if hint is None else str(hint),
                     finished_at=normalized_finished_at,
                     updated_at=utcnow(),
@@ -1110,6 +1117,7 @@ class StorageReadRepository:
         portfolio_slug: str | None = None,
         action: str | None = None,
         statuses: Iterable[str] | None = None,
+        status_reasons: Iterable[str] | None = None,
         limit: int = 25,
     ) -> list[dict[str, Any]]:
         with self.session_factory() as session:
@@ -1121,6 +1129,9 @@ class StorageReadRepository:
             normalized_statuses = [str(item) for item in (statuses or []) if str(item).strip()]
             if normalized_statuses:
                 stmt = stmt.where(OperatorRunRecord.status.in_(normalized_statuses))
+            normalized_reasons = [str(item) for item in (status_reasons or []) if str(item).strip()]
+            if normalized_reasons:
+                stmt = stmt.where(OperatorRunRecord.status_reason.in_(normalized_reasons))
             stmt = stmt.order_by(OperatorRunRecord.created_at.desc(), OperatorRunRecord.id.desc()).limit(int(limit))
             records = session.scalars(stmt).all()
             return [operator_run_to_dict(record) for record in records]
