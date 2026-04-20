@@ -81,6 +81,11 @@ def _configured_holdings_from_portfolio_config(
     return [holding.to_dict() for holding in configured]
 
 
+def _is_live_portfolio_mode(mode: str | None) -> bool:
+    normalized = str(mode or "").strip().lower()
+    return normalized == "live_mt5"
+
+
 def get_configured_exposure(
     raw_cfg: Mapping[str, Any],
     symbols: list[str],
@@ -268,17 +273,22 @@ def _build_portfolio_context(
         (portfolio_cfg or {}).get("mode")
         or (portfolio_cfg or {}).get("portfolio_mode")
         or (
-            "hybrid"
+            "live_mt5"
             if any(mt5_cfg.get(key) for key in ("agent_base_url", "path", "login", "server"))
             else "offline_fixture"
         )
     ).strip().lower()
-    configured = _configured_holdings_from_portfolio_config(
-        portfolio_cfg,
-        symbols=portfolio_symbols,
-        base_currency=base_currency,
-    )
-    positions = aggregate_exposure_by_symbol(configured, symbols=portfolio_symbols, base_currency=base_currency)
+    if _is_live_portfolio_mode(portfolio_mode):
+        # Live portfolios are broker-backed only: do not seed synthetic configured holdings.
+        configured: list[dict[str, Any]] = []
+        positions: dict[str, float] = {}
+    else:
+        configured = _configured_holdings_from_portfolio_config(
+            portfolio_cfg,
+            symbols=portfolio_symbols,
+            base_currency=base_currency,
+        )
+        positions = aggregate_exposure_by_symbol(configured, symbols=portfolio_symbols, base_currency=base_currency)
     return {
         "name": portfolio_name,
         "slug": slugify_label(portfolio_name),

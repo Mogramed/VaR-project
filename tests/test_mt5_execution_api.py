@@ -856,7 +856,15 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
 
     recent = client.get("/execution/recent", params={"limit": 5})
     assert recent.status_code == 200
-    assert recent.json()
+    recent_payload = recent.json()
+    assert recent_payload
+    statuses = [str(item.get("status") or "") for item in recent_payload]
+    assert "PREVIEW" in statuses
+    assert any(status in {"EXECUTED", "PLACED"} for status in statuses)
+    preview_entry = next(item for item in recent_payload if str(item.get("status") or "") == "PREVIEW")
+    assert preview_entry["broker_status"] in {"preview_ready", "preview_blocked"}
+    assert preview_entry["reconciliation_status"] == "preview_only"
+    assert preview_entry["fills"] == []
 
     recent_fills = client.get("/execution/fills/recent", params={"limit": 5})
     assert recent_fills.status_code == 200

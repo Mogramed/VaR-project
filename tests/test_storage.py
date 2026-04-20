@@ -35,6 +35,72 @@ def _compare_frame() -> pd.DataFrame:
     )
 
 
+def test_upsert_portfolio_renames_single_matching_slug_without_losing_identity(tmp_path: Path):
+    root = tmp_path
+    storage = AppStorage.from_root(root, {"storage": {"database_path": "data/app/test.db"}})
+    storage.initialize(create_schema=True)
+
+    initial_id = storage.upsert_portfolio(
+        name="FX_EUR_20k",
+        base_currency="EUR",
+        symbols=["EURUSD", "USDJPY"],
+        positions={"EURUSD": 10_000.0, "USDJPY": 10_000.0},
+        slug="fx_eur_20k",
+    )
+    storage.record_audit_event(
+        actor="api",
+        action_type="portfolio.bootstrap",
+        object_type="portfolio",
+        object_id=initial_id,
+        payload={"portfolio_slug": "fx_eur_20k"},
+        portfolio_id=initial_id,
+    )
+
+    renamed_id = storage.upsert_portfolio(
+        name="MT5_Live_Portfolio",
+        base_currency="EUR",
+        symbols=["EURUSD", "USDJPY"],
+        positions={},
+        slug="mt5_live_portfolio",
+    )
+
+    portfolios = storage.list_portfolios()
+
+    assert renamed_id == initial_id
+    assert len(portfolios) == 1
+    assert portfolios[0]["id"] == initial_id
+    assert portfolios[0]["slug"] == "mt5_live_portfolio"
+    assert portfolios[0]["name"] == "MT5_Live_Portfolio"
+
+
+def test_upsert_portfolio_renames_legacy_default_slug_without_history(tmp_path: Path):
+    root = tmp_path
+    storage = AppStorage.from_root(root, {"storage": {"database_path": "data/app/test.db"}})
+    storage.initialize(create_schema=True)
+
+    initial_id = storage.upsert_portfolio(
+        name="FX_EUR_20k",
+        base_currency="EUR",
+        symbols=["EURUSD", "USDJPY"],
+        positions={"EURUSD": 10_000.0, "USDJPY": 10_000.0},
+        slug="fx_eur_20k",
+    )
+
+    renamed_id = storage.upsert_portfolio(
+        name="MT5_Live_Portfolio",
+        base_currency="EUR",
+        symbols=["EURUSD", "USDJPY"],
+        positions={},
+        slug="mt5_live_portfolio",
+    )
+
+    portfolios = storage.list_portfolios()
+
+    assert renamed_id == initial_id
+    assert len(portfolios) == 1
+    assert portfolios[0]["slug"] == "mt5_live_portfolio"
+
+
 def test_app_storage_persists_and_reads_platform_records(tmp_path: Path):
     root = tmp_path
     storage = AppStorage.from_root(root, {"storage": {"database_path": "data/app/test.db"}})

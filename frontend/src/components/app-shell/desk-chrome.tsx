@@ -16,8 +16,8 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import type {
   AlertSummary,
   AuditEventResponse,
@@ -90,6 +90,41 @@ function isAlertScopedToPortfolio(
   return alertPortfolioId === activePortfolioId;
 }
 
+function canonicalPortfolioSlug(
+  requestedSlug: string | null,
+  healthSlug: string | null | undefined,
+  portfolios: PortfolioSummary[],
+): string {
+  const fallbackSlug = String(healthSlug ?? portfolios[0]?.slug ?? requestedSlug ?? "default").trim();
+  if (!requestedSlug || !requestedSlug.trim()) {
+    return fallbackSlug;
+  }
+
+  const trimmed = requestedSlug.trim();
+  const normalized = trimmed.toLowerCase();
+  if (["default", "main", "primary"].includes(normalized)) {
+    return fallbackSlug;
+  }
+
+  const exact = portfolios.find((portfolio) => String(portfolio.slug) === trimmed);
+  if (exact) {
+    return String(exact.slug);
+  }
+
+  const caseInsensitive = portfolios.find(
+    (portfolio) => String(portfolio.slug).toLowerCase() === normalized,
+  );
+  if (caseInsensitive) {
+    return String(caseInsensitive.slug);
+  }
+
+  if (normalized.replace(/-/g, "_") === "fx_eur_20k") {
+    return fallbackSlug;
+  }
+
+  return fallbackSlug;
+}
+
 export function DeskChrome({
   children,
   health,
@@ -107,9 +142,32 @@ export function DeskChrome({
   audit: AuditEventResponse[];
   jobsStatus: WorkerStatusResponse | null;
 }) {
+  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const portfolioSlug = searchParams.get("portfolio") ?? health.portfolio_slug;
+  const searchParamsText = searchParams.toString();
+  const requestedPortfolioSlug = searchParams.get("portfolio");
+  const portfolioSlug = useMemo(
+    () =>
+      canonicalPortfolioSlug(
+        requestedPortfolioSlug,
+        health.portfolio_slug,
+        portfolios,
+      ),
+    [requestedPortfolioSlug, health.portfolio_slug, portfolios],
+  );
+
+  useEffect(() => {
+    const current = String(requestedPortfolioSlug ?? "").trim();
+    if (!portfolioSlug || current === portfolioSlug) {
+      return;
+    }
+    const params = new URLSearchParams(searchParamsText);
+    params.set("portfolio", portfolioSlug);
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [pathname, portfolioSlug, requestedPortfolioSlug, router, searchParamsText]);
+
   return (
     <DeskLiveProvider portfolioSlug={portfolioSlug ?? undefined}>
       <DeskChromeFrame

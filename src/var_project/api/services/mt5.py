@@ -2520,6 +2520,66 @@ class DeskMt5Service:
                 allow_auto_sync=True,
             )
 
+    def _preview_execution_result_payload(
+        self,
+        *,
+        requested_exposure_change: float,
+        portfolio_slug: str,
+        symbol: str,
+        timestamp_utc: str,
+        terminal_status: MT5TerminalStatus,
+        account: Any,
+        live_positions: list[Any],
+        guard: Any,
+        decision: Mapping[str, Any],
+        order_request: Mapping[str, Any],
+        order_check: Mapping[str, Any],
+        post_capital: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        requested_volume_raw = order_request.get("volume")
+        requested_volume_lots = None if requested_volume_raw is None else float(requested_volume_raw)
+        approved_volume_lots = float(getattr(guard, "volume_lots", 0.0) or 0.0)
+        broker_status = "preview_ready" if bool(getattr(guard, "submit_allowed", False)) else "preview_blocked"
+        payload = ExecutionResult(
+            time_utc=timestamp_utc,
+            portfolio_slug=portfolio_slug,
+            symbol=symbol,
+            status="PREVIEW",
+            requested_exposure_change=float(requested_exposure_change),
+            approved_exposure_change=float(decision.get("approved_exposure_change", 0.0)),
+            executed_exposure_change=0.0,
+            terminal_status=terminal_status,
+            account_before=account,
+            account_after=None,
+            guard=guard,
+            risk_decision=dict(decision),
+            order_request=dict(order_request),
+            order_check=dict(order_check),
+            mt5_result={},
+            positions_after=list(live_positions),
+            post_capital=dict(post_capital),
+        ).to_dict()
+        payload.update(
+            {
+                "requested_volume_lots": requested_volume_lots,
+                "approved_volume_lots": approved_volume_lots,
+                "submitted_volume_lots": 0.0,
+                "filled_volume_lots": 0.0,
+                "remaining_volume_lots": approved_volume_lots,
+                "fill_ratio": 0.0,
+                "broker_status": broker_status,
+                "position_id": None,
+                "slippage_points": None,
+                "reconciliation_status": "preview_only",
+                "mt5_order_ticket": None,
+                "mt5_deal_ticket": None,
+                "fills": [],
+                "preview_only": True,
+                "created_at": timestamp_utc,
+            }
+        )
+        return payload
+
     def preview_execution(
         self,
         *,
@@ -2531,6 +2591,7 @@ class DeskMt5Service:
     ) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        portfolio_id = self.runtime._resolve_portfolio_id(portfolio["slug"])
         normalized_exposure_change = (
             float(exposure_change) if exposure_change is not None else float(delta_position_eur or 0.0)
         )
@@ -2641,8 +2702,9 @@ class DeskMt5Service:
                         expected_slippage_points = float(live_spread) * multiplier
                 except (TypeError, ValueError, ZeroDivisionError):
                     expected_slippage_points = None
+            preview_timestamp = datetime.now(timezone.utc).isoformat()
             preview = ExecutionPreview(
-                time_utc=datetime.now(timezone.utc).isoformat(),
+                time_utc=preview_timestamp,
                 portfolio_slug=portfolio["slug"],
                 symbol=str(symbol).upper(),
                 terminal_status=terminal_status,
@@ -2665,17 +2727,38 @@ class DeskMt5Service:
                 estimated_spread_cost=estimated_spread_cost,
                 expected_slippage_points=expected_slippage_points,
             ).to_dict()
+            preview_result_payload = self._preview_execution_result_payload(
+                requested_exposure_change=normalized_exposure_change,
+                portfolio_slug=portfolio["slug"],
+                symbol=str(symbol).upper(),
+                timestamp_utc=preview_timestamp,
+                terminal_status=terminal_status,
+                account=account,
+                live_positions=live_positions,
+                guard=guard,
+                decision=decision,
+                order_request=order_request,
+                order_check=order_check,
+                post_capital=post_capital,
+            )
+            preview_execution_id = self.runtime.storage.record_execution_result(
+                preview_result_payload,
+                portfolio_id=portfolio_id,
+                decision_id=decision.get("id"),
+            )
             self.runtime.storage.record_audit_event(
                 actor="api",
                 action_type="execution.preview",
-                object_type="execution_preview",
+                object_type="execution_result",
+                object_id=preview_execution_id,
                 payload={
                     "portfolio_slug": portfolio["slug"],
                     "symbol": str(symbol).upper(),
                     "decision": guard.decision,
                     "risk_decision": decision.get("decision"),
+                    "execution_result_id": preview_execution_id,
                 },
-                portfolio_id=self.runtime._resolve_portfolio_id(portfolio["slug"]),
+                portfolio_id=portfolio_id,
             )
             return preview
 

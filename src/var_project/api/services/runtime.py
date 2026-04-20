@@ -109,7 +109,7 @@ class DeskServiceRuntime:
         return str(portfolio.get("mode") or "offline_fixture").strip().lower()
 
     def is_live_portfolio(self, portfolio: Mapping[str, Any]) -> bool:
-        return self._portfolio_mode(portfolio) in {"live_mt5", "hybrid"}
+        return self._portfolio_mode(portfolio) == "live_mt5"
 
     def strict_live_enabled(self, portfolio: Mapping[str, Any]) -> bool:
         # Live portfolios are always strict: risk/capital must come from MT5 broker state.
@@ -143,6 +143,7 @@ class DeskServiceRuntime:
             "mt5_live_unavailable: strict_live is enabled for "
             f"portfolio '{portfolio.get('slug')}' ({portfolio.get('mode')}). "
             "The live MT5 book cannot be loaded in this process. "
+            "Live portfolios do not fall back to configured holdings/exposure. "
             "Configure VAR_PROJECT_MT5_AGENT_BASE_URL / VAR_PROJECT_MT5_AGENT_API_KEY on API and workers."
             f"{detail}"
         )
@@ -432,6 +433,17 @@ class DeskServiceRuntime:
                 if str(slug).strip().lower() == lowered:
                     portfolio = candidate
                     break
+        if portfolio is None:
+            # Backward-compatibility alias: upgraded environments can still carry
+            # stale query params like "fx_eur_20k" after the singleton live
+            # portfolio was renamed to "mt5_live_portfolio".
+            normalized_alias = normalized_slug.lower().replace("-", "_")
+            if (
+                len(self.portfolio_by_slug) == 1
+                and self.is_live_portfolio(self.portfolio)
+                and normalized_alias == "fx_eur_20k"
+            ):
+                return dict(self.portfolio)
         if portfolio is None:
             available = ", ".join(sorted(str(slug) for slug in self.portfolio_by_slug.keys()))
             raise ValueError(f"Unknown portfolio '{portfolio_slug}'. Available portfolios: {available}.")

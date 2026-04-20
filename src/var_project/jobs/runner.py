@@ -121,7 +121,7 @@ def load_worker_settings(root: Path) -> WorkerSettings:
     )
     live_refresh_default_enabled = bool(
         mt5_config.live_enabled
-        and any(str(portfolio.get("mode") or "").lower() in {"live_mt5", "hybrid"} for portfolio in portfolios)
+        and any(str(portfolio.get("mode") or "").lower() == "live_mt5" for portfolio in portfolios)
         and any(
             [
                 mt5_config.agent_base_url,
@@ -158,7 +158,7 @@ def evaluate_worker_health(root: Path) -> dict[str, Any]:
     live_portfolios = [
         str(portfolio.get("slug") or "")
         for portfolio in portfolios
-        if str(portfolio.get("mode") or "").lower() in {"live_mt5", "hybrid"}
+        if str(portfolio.get("mode") or "").lower() == "live_mt5"
     ]
     mt5_configured = bool(
         mt5_config.agent_base_url
@@ -171,7 +171,7 @@ def evaluate_worker_health(root: Path) -> dict[str, Any]:
             "status": "degraded",
             "code": "mt5_not_configured",
             "message": (
-                "Worker is running for live/hybrid portfolios but MT5 is not configured in this process."
+                "Worker is running for live MT5 portfolios but MT5 is not configured in this process."
             ),
             "hint": (
                 "Set VAR_PROJECT_MT5_AGENT_BASE_URL (and VAR_PROJECT_MT5_AGENT_API_KEY if needed) "
@@ -382,7 +382,7 @@ class JobRunner:
             portfolio_slug = str(portfolio.get("slug") or "")
             try:
                 if (
-                    str(portfolio.get("mode") or "").lower() in {"live_mt5", "hybrid"}
+                    str(portfolio.get("mode") or "").lower() == "live_mt5"
                     and service.runtime.market_data.should_use_mt5_market_data(portfolio)
                 ):
                     service.runtime.market_data.sync_market_data_if_stale(
@@ -424,7 +424,7 @@ class JobRunner:
             portfolio_slug = str(portfolio.get("slug") or "")
             try:
                 if (
-                    str(portfolio.get("mode") or "").lower() in {"live_mt5", "hybrid"}
+                    str(portfolio.get("mode") or "").lower() == "live_mt5"
                     and service.runtime.market_data.should_use_mt5_market_data(portfolio)
                 ):
                     service.runtime.market_data.sync_market_data_if_stale(
@@ -476,7 +476,7 @@ class JobRunner:
             for portfolio in service.portfolios:
                 slug = str(portfolio["slug"])
                 mode = str(portfolio.get("mode") or "").lower()
-                if mode not in {"live_mt5", "hybrid"}:
+                if mode != "live_mt5":
                     skipped_portfolios.append({"portfolio_slug": slug, "reason": f"Portfolio mode '{mode or 'unknown'}' is not live."})
                     continue
 

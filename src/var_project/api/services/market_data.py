@@ -130,7 +130,7 @@ class DeskMarketDataService:
         mode = str(portfolio.get("mode") or "offline_fixture").lower()
         if mode == "offline_fixture":
             return False
-        if mode in {"live_mt5", "hybrid"}:
+        if mode == "live_mt5":
             return self.mt5_configured()
         return False
 
@@ -720,7 +720,7 @@ class DeskMarketDataService:
         sync_run_id = self.runtime.storage.record_market_data_sync(
             portfolio_id=portfolio_id,
             portfolio_slug=portfolio["slug"],
-            mode=str(portfolio.get("mode") or "hybrid"),
+            mode=str(portfolio.get("mode") or "live_mt5"),
             status="running",
             details={
                 "symbols": self._portfolio_symbols_from_details(portfolio),
@@ -1013,7 +1013,7 @@ class DeskMarketDataService:
             self.runtime.storage.record_market_data_sync(
                 portfolio_id=portfolio_id,
                 portfolio_slug=portfolio["slug"],
-                mode=str(portfolio.get("mode") or "hybrid"),
+                mode=str(portfolio.get("mode") or "live_mt5"),
                 status=completed_status,
                 details=final_details,
         )

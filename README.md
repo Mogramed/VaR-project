@@ -197,6 +197,9 @@ Notes:
 
 - The browser never talks directly to MT5.
 - MT5 execution remains demo-only and risk-guarded.
+- Portfolios in `live_mt5` are MT5-only: configured holdings/exposure are not used as a fallback for live risk/capital compute.
+- If MT5 is unavailable or returns an empty live book, live compute endpoints fail fast with actionable `mt5_live_unavailable` guidance.
+- `/execution/recent` now keeps both pre-trade dry runs (`PREVIEW`) and executed attempts for a single end-to-end history.
 - Rebuild `api` and `worker` after changing `config/` or tracked fixture data.
 - Rebuild `frontend` after changing code under `frontend/`.
 
