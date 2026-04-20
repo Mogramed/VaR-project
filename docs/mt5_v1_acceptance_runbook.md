@@ -12,7 +12,7 @@ Validate that the platform remains the canonical risk, reconciliation, and incid
 - `var-project db upgrade` has already been applied.
 - `GET /health` returns `status=ok` and `dependencies.database.schema_ready=true`.
 - Backend, worker, frontend, and MT5 agent are running.
-- The portfolio is configured in `live_mt5` or `hybrid` mode.
+- The portfolio is configured in `live_mt5` mode.
 
 If `/health` returns `status=unhealthy`:
 

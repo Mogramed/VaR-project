@@ -856,7 +856,15 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
 
     recent = client.get("/execution/recent", params={"limit": 5})
     assert recent.status_code == 200
-    assert recent.json()
+    recent_payload = recent.json()
+    assert recent_payload
+    statuses = [str(item.get("status") or "") for item in recent_payload]
+    assert "PREVIEW" in statuses
+    assert any(status in {"EXECUTED", "PLACED"} for status in statuses)
+    preview_entry = next(item for item in recent_payload if str(item.get("status") or "") == "PREVIEW")
+    assert preview_entry["broker_status"] in {"preview_ready", "preview_blocked"}
+    assert preview_entry["reconciliation_status"] == "preview_only"
+    assert preview_entry["fills"] == []
 
     recent_fills = client.get("/execution/fills/recent", params={"limit": 5})
     assert recent_fills.status_code == 200
@@ -874,6 +882,48 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     latest_capital = client.get("/capital/latest")
     assert latest_capital.status_code == 200
     assert latest_capital.json()["portfolio_slug"] == "fx_eur_20k"
+
+
+def test_mt5_preview_rows_are_excluded_from_reconciliation_accounting(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+    FakeMT5Connector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+    portfolio_slug = service.runtime.portfolio["slug"]
+    before_reconciliation = service.runtime.market_data.reconciliation_summary(portfolio_slug=portfolio_slug)
+    before_unmatched = int(before_reconciliation.get("unmatched_execution_count") or 0)
+    before_history_expired = int(before_reconciliation.get("history_window_expired_execution_count") or 0)
+
+    preview = service.preview_execution(
+        symbol="EURUSD",
+        exposure_change=1_000.0,
+        note="preview only",
+        portfolio_slug=portfolio_slug,
+    )
+    assert preview["guard"]["decision"] in {"ACCEPT", "REDUCE", "REJECT"}
+
+    reconciliation = service.runtime.market_data.reconciliation_summary(portfolio_slug=portfolio_slug)
+    execution_status_counts = {
+        str(key).lower(): int(value)
+        for key, value in dict(reconciliation.get("execution_status_counts") or {}).items()
+    }
+
+    assert int(reconciliation.get("unmatched_execution_count") or 0) == before_unmatched
+    assert int(reconciliation.get("history_window_expired_execution_count") or 0) == before_history_expired
+    assert "preview_only" not in execution_status_counts
+    recent_entries = service.recent_execution_results(limit=5, portfolio_slug=portfolio_slug)
+    preview_entry = next(
+        (item for item in recent_entries if str(item.get("status") or "").upper() == "PREVIEW"),
+        None,
+    )
+    assert preview_entry is not None
+    assert str(preview_entry.get("reconciliation_status") or "").lower() == "preview_only"
+    live_state = service.mt5_live_state(portfolio_slug=portfolio_slug, detail_level="full")
+    codes = {item["code"] for item in list(live_state.get("operator_alerts") or [])}
+    assert "EXECUTION_UNMATCHED" not in codes
 
 
 def test_health_readiness_reports_live_fallback_mode(tmp_path: Path):

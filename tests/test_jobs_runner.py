@@ -189,7 +189,7 @@ def test_job_runner_skips_snapshot_and_backtest_when_mt5_is_unreachable(tmp_path
     root = tmp_path
     _write_settings(
         root,
-        portfolio_mode="hybrid",
+        portfolio_mode="live_mt5",
         report_enabled=False,
     )
 
@@ -208,7 +208,7 @@ def test_job_runner_skips_snapshot_and_backtest_when_mt5_is_unreachable(tmp_path
 
         @staticmethod
         def _resolve_portfolio_context(_slug):
-            return {"slug": "fx_eur_20k", "mode": "hybrid"}
+            return {"slug": "fx_eur_20k", "mode": "live_mt5"}
 
     class _UnavailableDeskApiService:
         def __init__(self, *_args, **_kwargs):

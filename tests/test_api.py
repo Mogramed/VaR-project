@@ -585,6 +585,83 @@ def test_operator_run_fails_fast_when_mt5_unavailable_for_strict_live(tmp_path: 
     assert "VAR_PROJECT_MT5_AGENT_BASE_URL" in str(processed.get("hint") or "")
 
 
+def test_live_portfolio_context_drops_configured_fallback_positions(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    service = DeskApiService(root, bootstrap_storage=True)
+
+    portfolio = service.runtime._resolve_portfolio_context("fx_eur_20k")
+    assert portfolio["configured_holdings"] == []
+    assert portfolio["configured_exposure"] == {}
+    assert portfolio["positions"] == {}
+
+    listed = next(item for item in service.list_portfolios() if item["slug"] == "fx_eur_20k")
+    assert dict(listed.get("positions") or {}) == {}
+
+
+def test_live_portfolio_context_accepts_legacy_slug_alias_after_rename(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    settings_path = root / "config" / "settings.yaml"
+    settings = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+    settings["portfolio"]["name"] = "MT5_Live_Portfolio"
+    settings_path.write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    portfolio = service.runtime._resolve_portfolio_context("fx_eur_20k")
+
+    assert portfolio["slug"] == "mt5_live_portfolio"
+    assert portfolio["mode"] == "live_mt5"
+
+
+def test_list_portfolios_prefers_runtime_slug_over_legacy_singleton_row(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    settings_path = root / "config" / "settings.yaml"
+    settings = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+    settings["portfolio"]["name"] = "MT5_Live_Portfolio"
+    settings_path.write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    with service.runtime.storage.session_factory() as session:
+        session.execute(
+            text("UPDATE portfolios SET slug = :slug, name = :name"),
+            {"slug": "fx_eur_20k", "name": "FX_EUR_20k"},
+        )
+        session.commit()
+
+    listed = service.list_portfolios()
+
+    assert [item["slug"] for item in listed] == ["mt5_live_portfolio"]
+    assert listed[0]["mode"] == "live_mt5"
+
+
+def test_live_snapshot_fails_when_mt5_returns_empty_holdings(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    FakeMT5Connector.reset()
+    FakeMT5Connector.positions_lots = {}
+
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True))
+    snapshot = client.post("/snapshots/run", json={})
+
+    assert snapshot.status_code == 503
+    detail = str(snapshot.json().get("detail") or "")
+    assert "mt5_live_unavailable" in detail
+    assert "MT5-only" in detail
+
+
+def test_offline_portfolio_live_holdings_still_use_configured_fallback(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="offline_fixture")
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=FailingMT5Connector, bootstrap_storage=True))
+
+    live_holdings = client.get("/portfolio/live-holdings")
+    assert live_holdings.status_code == 200
+    holdings_payload = live_holdings.json()
+    assert {item["symbol"] for item in holdings_payload} == {"EURUSD", "USDJPY"}
+
+
 def test_operator_enqueue_reaps_stale_run_and_creates_new_one(tmp_path: Path):
     root = tmp_path
     _write_settings(root)

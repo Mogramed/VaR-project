@@ -360,7 +360,11 @@ class DeskApiService:
                 live_detail = str(
                     live_health.get("message")
                     or live_fetch_error
-                    or "Live MT5 evidence is unavailable."
+                    or (
+                        "Live MT5 evidence is unavailable. Live portfolios are MT5-only and do not use configured fallback exposure."
+                        if live_required
+                        else "Live MT5 evidence is unavailable."
+                    )
                 )
         if live_fetch_timed_out:
             live_detail = (f"{live_detail} " if live_detail else "") + "Request timed out before MT5 returned."
@@ -413,7 +417,10 @@ class DeskApiService:
         if fallback_snapshot_used:
             recommendations.append("MT5 is disconnected; demo currently uses the last known broker snapshot.")
         if live_state is None and strict_live_required:
-            recommendations.append("Start the MT5 agent and verify `/health` and `/live/state` endpoints.")
+            recommendations.append(
+                "Start the MT5 agent and verify `/health` and `/live/state` endpoints. "
+                "Live compute remains blocked while broker evidence is unavailable."
+            )
 
         return {
             "status": status,
@@ -430,7 +437,38 @@ class DeskApiService:
         return self.reads.jobs_status()
 
     def list_portfolios(self) -> list[dict[str, Any]]:
-        return self.reads.list_portfolios()
+        runtime_portfolios = [dict(item) for item in self.portfolios]
+        if not runtime_portfolios:
+            return self.reads.list_portfolios()
+
+        database_portfolios = self.reads.list_portfolios()
+        if not database_portfolios:
+            return runtime_portfolios
+
+        by_slug = {str(item.get("slug") or ""): dict(item) for item in database_portfolios}
+        by_slug_lower = {slug.lower(): payload for slug, payload in by_slug.items() if slug}
+
+        legacy_singleton_record: dict[str, Any] | None = None
+        if len(runtime_portfolios) == 1 and len(database_portfolios) == 1:
+            runtime_slug = str(runtime_portfolios[0].get("slug") or "").strip().lower().replace("-", "_")
+            database_slug = str(database_portfolios[0].get("slug") or "").strip().lower().replace("-", "_")
+            runtime_mode = str(runtime_portfolios[0].get("mode") or "").strip().lower()
+            if runtime_mode == "live_mt5" and runtime_slug == "mt5_live_portfolio" and database_slug == "fx_eur_20k":
+                legacy_singleton_record = dict(database_portfolios[0])
+
+        normalized: list[dict[str, Any]] = []
+        for runtime_portfolio in runtime_portfolios:
+            slug = str(runtime_portfolio.get("slug") or "")
+            database_record = by_slug.get(slug) or by_slug_lower.get(slug.lower())
+            if database_record is None and legacy_singleton_record is not None:
+                database_record = legacy_singleton_record
+            merged = dict(runtime_portfolio)
+            if database_record is not None:
+                merged["id"] = database_record.get("id")
+                merged["created_at"] = database_record.get("created_at")
+                merged["updated_at"] = database_record.get("updated_at")
+            normalized.append(merged)
+        return normalized
 
     def list_desks(self) -> list[dict[str, Any]]:
         return self.reads.list_desks()
@@ -548,7 +586,7 @@ class DeskApiService:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         normalized_source = str(source or "auto").strip().lower()
         live_source_requested = normalized_source in {"", "auto", "mt5_live_bridge", "mt5_live"}
-        # Only live/hybrid portfolios should consume MT5 live-state fast paths for capital.
+        # Only live MT5 portfolios should consume MT5 live-state fast paths for capital.
         # Offline portfolios must remain deterministic and use the historical read path.
         live_state = self._safe_live_state_summary(portfolio_slug=portfolio["slug"])
         if (
@@ -1208,7 +1246,7 @@ class DeskApiService:
     @staticmethod
     def _operator_requires_live_mt5(*, action: str, portfolio: Mapping[str, Any]) -> bool:
         mode = str(portfolio.get("mode") or "").lower()
-        if mode not in {"live_mt5", "hybrid"}:
+        if mode != "live_mt5":
             return False
         return str(action or "").lower() in {"sync", "snapshot", "backtest", "report"}
 

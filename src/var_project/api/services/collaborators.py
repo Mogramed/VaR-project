@@ -101,17 +101,12 @@ class PortfolioRiskCalculator:
                     snapshot_timestamp=datetime.now(timezone.utc).isoformat(),
                 )
             if live_portfolio:
-                return self.compute_portfolio_state_for_holdings(
+                raise self.runtime.strict_live_unavailable_error(
                     portfolio=portfolio,
-                    holdings=[],
-                    timeframe=timeframe,
-                    days=days,
-                    min_coverage=min_coverage,
-                    config=config,
-                    window=window,
-                    allow_auto_sync=allow_auto_sync,
-                    snapshot_source="mt5_live_bridge",
-                    snapshot_timestamp=datetime.now(timezone.utc).isoformat(),
+                    reason=(
+                        "MT5 returned no live holdings. Live portfolios are MT5-only and "
+                        "cannot compute risk/capital from configured fallback exposure."
+                    ),
                 )
         if live_portfolio:
             raise self.runtime.strict_live_unavailable_error(portfolio=portfolio)

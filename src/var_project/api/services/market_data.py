@@ -130,7 +130,7 @@ class DeskMarketDataService:
         mode = str(portfolio.get("mode") or "offline_fixture").lower()
         if mode == "offline_fixture":
             return False
-        if mode in {"live_mt5", "hybrid"}:
+        if mode == "live_mt5":
             return self.mt5_configured()
         return False
 
@@ -187,6 +187,14 @@ class DeskMarketDataService:
     @staticmethod
     def _market_status_cache_ttl_seconds() -> float:
         return 1.5
+
+    @staticmethod
+    def _is_preview_execution_result(execution: Mapping[str, Any]) -> bool:
+        if bool(execution.get("preview_only")):
+            return True
+        if str(execution.get("status") or "").strip().upper() == "PREVIEW":
+            return True
+        return str(execution.get("reconciliation_status") or "").strip().lower() == "preview_only"
 
     def _cached_market_status(self, *, cache_key: tuple[str, str]) -> tuple[dict[str, Any] | None, bool]:
         with self._shared_market_status_cache_lock:
@@ -306,6 +314,8 @@ class DeskMarketDataService:
             base_days = max(base_days, 3)
         oldest_unresolved: datetime | None = None
         for execution in self.runtime.storage.recent_execution_results(limit=500, portfolio_slug=portfolio_slug):
+            if self._is_preview_execution_result(execution):
+                continue
             status = str(execution.get("reconciliation_status") or "").strip().lower()
             if status == "match":
                 continue
@@ -720,7 +730,7 @@ class DeskMarketDataService:
         sync_run_id = self.runtime.storage.record_market_data_sync(
             portfolio_id=portfolio_id,
             portfolio_slug=portfolio["slug"],
-            mode=str(portfolio.get("mode") or "hybrid"),
+            mode=str(portfolio.get("mode") or "live_mt5"),
             status="running",
             details={
                 "symbols": self._portfolio_symbols_from_details(portfolio),
@@ -1013,7 +1023,7 @@ class DeskMarketDataService:
             self.runtime.storage.record_market_data_sync(
                 portfolio_id=portfolio_id,
                 portfolio_slug=portfolio["slug"],
-                mode=str(portfolio.get("mode") or "hybrid"),
+                mode=str(portfolio.get("mode") or "live_mt5"),
                 status=completed_status,
                 details=final_details,
         )
@@ -1305,6 +1315,9 @@ class DeskMarketDataService:
         history_window_expired_execution_count = 0
         execution_status_counts: dict[str, int] = {}
         for execution in executions:
+            if self._is_preview_execution_result(execution):
+                execution["reconciliation_status"] = "preview_only"
+                continue
             order_ticket = execution.get("mt5_result", {}).get("order") or execution.get("mt5_order_ticket")
             deal_ticket = execution.get("mt5_result", {}).get("deal") or execution.get("mt5_deal_ticket")
             execution_timestamp = pd.to_datetime(
@@ -1315,7 +1328,7 @@ class DeskMarketDataService:
             within_history_window = True
             if not pd.isna(execution_timestamp):
                 within_history_window = execution_timestamp.to_pydatetime() >= history_window_start
-            reconciliation_status = str(execution.get("reconciliation_status") or "")
+            reconciliation_status = str(execution.get("reconciliation_status") or "").strip().lower()
             if not reconciliation_status:
                 if order_ticket is None and deal_ticket is None:
                     reconciliation_status = "pending_broker" if within_history_window else "history_window_expired"

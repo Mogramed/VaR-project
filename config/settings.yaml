@@ -5,11 +5,8 @@ symbols:
   - "USDJPY"
 
 portfolio:
-  name: "FX_EUR_20k"
-  mode: "hybrid"
-  configured_exposure:
-    EURUSD: 10000
-    USDJPY: 10000
+  name: "MT5_Live_Portfolio"
+  mode: "live_mt5"
 
 data:
   timeframes: ["H1"]

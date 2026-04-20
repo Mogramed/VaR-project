@@ -17,7 +17,8 @@ Montrer en 10 a 15 minutes que la plateforme est:
 ## Preparation avant entree en salle
 
 - Stack demarree (API, worker, frontend, MT5 agent, terminal MT5)
-- Portfolio actif configure en mode `live_mt5` ou `hybrid`
+- Portfolio actif configure en mode `live_mt5`
+- En mode live, aucun fallback portefeuille config n est applique: sans donnees MT5 exploitables, le calcul live est bloque (fail-fast).
 - Etat de base propre: pas d'incident bloquant non traite
 - Commande de verification rapide executee:
 
@@ -127,6 +128,8 @@ Si MT5 live devient instable:
 Formulation pro:
 
 "Le live broker est momentanement degrade, la plateforme garde une continuite operationnelle grace aux snapshots et a la couche de controle risque."
+
+Note: en mode live strict, les nouveaux calculs live restent bloques tant que le broker MT5 ne fournit pas de book exploitable.
 
 ## Cloture (30 sec)
 

@@ -75,8 +75,55 @@ class StorageWriteRepository:
         slug: str | None = None,
     ) -> int:
         portfolio_slug = slug or slugify_label(name)
+        normalized_portfolio_slug = str(portfolio_slug or "").strip().lower()
+        normalized_symbols = {
+            str(symbol).upper()
+            for symbol in list(symbols)
+            if str(symbol).strip()
+        }
         with self.session_factory() as session:
             record = session.scalar(select(PortfolioRecord).where(PortfolioRecord.slug == portfolio_slug))
+            if record is None:
+                # Preserve history when renaming the single configured portfolio slug
+                # (e.g. FX_EUR_20k -> MT5_Live_Portfolio).
+                existing = session.scalars(select(PortfolioRecord).order_by(PortfolioRecord.id.asc())).all()
+                if len(existing) == 1:
+                    candidate = existing[0]
+                    candidate_symbols = {
+                        str(symbol).upper()
+                        for symbol in list(candidate.symbols_json or [])
+                        if str(symbol).strip()
+                    }
+                    same_base_currency = str(candidate.base_currency or "").upper() == str(base_currency).upper()
+                    normalized_candidate_slug = str(candidate.slug or "").strip().lower()
+                    is_default_legacy_slug_rename = (
+                        normalized_candidate_slug == "fx_eur_20k"
+                        and normalized_portfolio_slug == "mt5_live_portfolio"
+                    )
+                    has_history = any(
+                        session.scalar(select(model.id).where(model.portfolio_id == int(candidate.id)).limit(1)) is not None
+                        for model in (
+                            SnapshotRecord,
+                            BacktestRunRecord,
+                            ValidationRunRecord,
+                            AlertRecord,
+                            DecisionRecord,
+                            CapitalSnapshotRecord,
+                            ExecutionRecord,
+                            ExecutionFillRecord,
+                            ReconciliationAcknowledgementRecord,
+                            AuditRecord,
+                            OperatorRunRecord,
+                            MarketDataSyncRecord,
+                            MT5OrderHistoryRecord,
+                            MT5DealHistoryRecord,
+                        )
+                    )
+                    if same_base_currency and candidate_symbols == normalized_symbols and (
+                        has_history or is_default_legacy_slug_rename
+                    ):
+                        record = candidate
+                        record.slug = portfolio_slug
             if record is None:
                 record = PortfolioRecord(
                     slug=portfolio_slug,
