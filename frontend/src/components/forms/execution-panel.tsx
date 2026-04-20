@@ -10,6 +10,11 @@ import type {
   ExecutionResultResponse,
   MT5TerminalStatusResponse,
 } from "@/lib/api/types";
+import {
+  EXPOSURE_MIN_EUR,
+  EXPOSURE_STEP_EUR,
+  validateExposureMagnitude,
+} from "@/lib/forms/exposure-validation";
 import { preferredHeadlineRisk } from "@/lib/risk-surface";
 import { formatCurrency, formatPercent, formatSignedCurrency } from "@/lib/utils";
 import { StatusBadge } from "@/components/ui/primitives";
@@ -49,7 +54,7 @@ export function ExecutionPanel({
     initialSide ?? ((initialExposureChange ?? 0) < 0 ? "sell" : "buy"),
   );
   const [exposureChange, setExposureChange] = useState(
-    String(Math.max(Math.abs(initialExposureChange ?? 500000), 1)),
+    String(Math.max(Math.abs(initialExposureChange ?? 500000), EXPOSURE_MIN_EUR)),
   );
   const [note, setNote] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -61,9 +66,9 @@ export function ExecutionPanel({
       setValidationError("Symbol is required");
       return false;
     }
-    const numericExposure = Number(exposureChange);
-    if (!Number.isFinite(numericExposure) || numericExposure <= 0) {
-      setValidationError("Exposure must be a positive number");
+    const exposureValidation = validateExposureMagnitude(exposureChange);
+    if (!exposureValidation.ok) {
+      setValidationError(exposureValidation.error);
       return false;
     }
     setValidationError(null);
@@ -145,7 +150,15 @@ export function ExecutionPanel({
 
         <FormSection title="Sizing">
           <FieldLabel htmlFor="exec-exposure">Target exposure change</FieldLabel>
-          <FieldInputWithIcon icon={DollarSign} id="exec-exposure" type="number" min="1" step="1000" value={exposureChange} onChange={(e) => setExposureChange(e.target.value)} />
+          <FieldInputWithIcon
+            icon={DollarSign}
+            id="exec-exposure"
+            type="number"
+            min={String(EXPOSURE_MIN_EUR)}
+            step={String(EXPOSURE_STEP_EUR)}
+            value={exposureChange}
+            onChange={(e) => setExposureChange(e.target.value)}
+          />
           <div className="mt-2 flex flex-wrap gap-1.5">
             {executionPresets.map((p) => (
               <PresetPill key={p} active={p === exposureChange} onClick={() => setExposureChange(p)}>

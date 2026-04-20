@@ -263,7 +263,7 @@ def test_api_runs_snapshot_backtest_and_report(tmp_path: Path):
 
     decision = client.post(
         "/decisions/evaluate",
-        json={"symbol": "EURUSD", "exposure_change": 2_500.0, "note": "post-validation"},
+        json={"symbol": "EURUSD", "exposure_change": 3_000.0, "note": "post-validation"},
     )
     assert decision.status_code == 200
     decision_body = decision.json()
@@ -348,6 +348,49 @@ def test_api_backtest_rejects_incompatible_fixture_window_early(tmp_path: Path):
 
     assert response.status_code == 400
     assert "tracked history" in response.json()["detail"]
+
+
+def test_trade_exposure_validation_boundaries(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+
+    client = TestClient(
+        create_app(
+            repo_root=root,
+            mt5_connector_factory=FakeMT5Connector,
+            bootstrap_storage=True,
+        )
+    )
+
+    for invalid in (0.0, 1.0, 999.0, 1001.0):
+        decision = client.post(
+            "/decisions/evaluate",
+            json={"symbol": "EURUSD", "exposure_change": invalid, "note": f"decision invalid {invalid}"},
+        )
+        assert decision.status_code == 400
+        assert "1,000 EUR" in str(decision.json().get("detail"))
+
+        preview = client.post(
+            "/execution/preview",
+            json={"symbol": "EURUSD", "exposure_change": invalid, "note": f"preview invalid {invalid}"},
+        )
+        assert preview.status_code == 400
+        assert "1,000 EUR" in str(preview.json().get("detail"))
+
+    for valid in (1000.0, -1000.0):
+        decision = client.post(
+            "/decisions/evaluate",
+            json={"symbol": "EURUSD", "exposure_change": valid, "note": f"decision valid {valid}"},
+        )
+        assert decision.status_code == 200
+
+        preview = client.post(
+            "/execution/preview",
+            json={"symbol": "EURUSD", "exposure_change": valid, "note": f"preview valid {valid}"},
+        )
+        assert preview.status_code == 200
 
 
 def test_operator_actions_enqueue_and_complete(tmp_path: Path):

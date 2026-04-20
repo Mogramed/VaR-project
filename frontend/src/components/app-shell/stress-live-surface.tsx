@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/app-shell/page-header";
-import { FormMetaTile, FieldInput, FieldLabel } from "@/components/forms/shared";
+import { FormMetaTile, FieldInput, FieldLabel, FormError } from "@/components/forms/shared";
 import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
 import type {
@@ -50,6 +50,7 @@ export function StressLiveSurface({ portfolioSlug }: { portfolioSlug: string }) 
   const [name, setName] = useState("Custom");
   const [vol, setVol] = useState("2.0");
   const [shock, setShock] = useState("0");
+  const [scenarioError, setScenarioError] = useState<string | null>(null);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -83,7 +84,7 @@ export function StressLiveSurface({ portfolioSlug }: { portfolioSlug: string }) 
                     className="text-[var(--color-text-muted)] hover:text-[var(--color-red)]"
                     onClick={() => setScenarios((prev) => prev.filter((_, j) => j !== i))}
                   >
-                    ×
+                    x
                   </button>
                 </div>
               </div>
@@ -111,10 +112,30 @@ export function StressLiveSurface({ portfolioSlug }: { portfolioSlug: string }) 
                 type="button"
                 className="h-7 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-3 text-[11px] font-medium text-[var(--color-text)] transition hover:bg-[var(--color-surface-hover)]"
                 onClick={() => {
-                  if (!name.trim()) return;
+                  const trimmedName = name.trim();
+                  if (!trimmedName) {
+                    setScenarioError("Scenario name is required.");
+                    return;
+                  }
+                  const volValue = Number(vol);
+                  if (!Number.isFinite(volValue) || volValue < 0.1) {
+                    setScenarioError("Vol multiplier must be at least 0.1.");
+                    return;
+                  }
+                  const shockValue = Number(shock);
+                  if (!Number.isFinite(shockValue)) {
+                    setScenarioError("Shock must be a valid number.");
+                    return;
+                  }
+                  const shockSteps = shockValue / 100;
+                  if (Math.abs(shockSteps - Math.round(shockSteps)) > 1e-6) {
+                    setScenarioError("Shock must use 100 EUR increments.");
+                    return;
+                  }
+                  setScenarioError(null);
                   setScenarios((prev) => [
                     ...prev,
-                    { name: name.trim(), vol_multiplier: Number(vol) || 1, shock_pnl: Number(shock) || 0 },
+                    { name: trimmedName, vol_multiplier: volValue, shock_pnl: shockValue },
                   ]);
                   setName("Custom");
                   setVol("2.0");
@@ -126,10 +147,16 @@ export function StressLiveSurface({ portfolioSlug }: { portfolioSlug: string }) 
               <button
                 type="button"
                 className="h-7 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-3 text-[11px] text-[var(--color-text-muted)] transition hover:bg-[var(--color-surface-hover)]"
-                onClick={() => setScenarios(defaults)}
+                onClick={() => {
+                  setScenarios(defaults);
+                  setScenarioError(null);
+                }}
               >
                 Reset
               </button>
+            </div>
+            <div className="mt-2">
+              <FormError message={scenarioError} />
             </div>
           </div>
 

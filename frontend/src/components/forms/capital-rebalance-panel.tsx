@@ -77,7 +77,15 @@ export function CapitalRebalancePanel({
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <FieldLabel htmlFor="cap-budget">Budget EUR</FieldLabel>
-              <FieldInputWithIcon icon={DollarSign} id="cap-budget" type="number" min="1" step="100000" value={budget} onChange={(e) => setBudget(e.target.value)} />
+              <FieldInputWithIcon
+                icon={DollarSign}
+                id="cap-budget"
+                type="number"
+                min="1"
+                step="1"
+                value={budget}
+                onChange={(e) => setBudget(e.target.value)}
+              />
             </div>
             <div>
               <FieldLabel htmlFor="cap-reserve">Reserve ratio</FieldLabel>
@@ -113,7 +121,7 @@ export function CapitalRebalancePanel({
               {(mutation.data.recommendations ?? []).slice(0, 4).map((rec) => (
                 <div key={`${rec.symbol_from}-${rec.symbol_to}`} className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg)] p-2.5">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-[var(--color-text)]">{rec.symbol_from} → {rec.symbol_to}</span>
+                    <span className="font-semibold text-[var(--color-text)]">{rec.symbol_from} {"->"} {rec.symbol_to}</span>
                     <span className="mono text-[var(--color-accent)]">{formatCurrency(rec.amount_eur)}</span>
                   </div>
                   <p className="mt-1 text-[11px] text-[var(--color-text-muted)]">{rec.reason}</p>
