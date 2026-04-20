@@ -223,6 +223,32 @@ def test_seed_demo_environment_populates_platform_state(tmp_path: Path) -> None:
     assert service.recent_decisions(portfolio_slug=seeded["portfolio_slug"])
 
 
+def test_seed_demo_environment_allows_substep_demo_decision_delta(tmp_path: Path) -> None:
+    root = tmp_path
+    write_settings(
+        root,
+        portfolios=[
+            {
+                "name": "FX_MICRO",
+                "configured_exposure": {"EURUSD": 5_000.0, "USDJPY": 7_500.0},
+            }
+        ],
+    )
+    write_processed_returns(root, "EURUSD")
+    write_processed_returns(root, "USDJPY")
+
+    result = seed_demo_environment(root)
+
+    assert result["portfolio_count"] == 1
+    seeded = result["seeded"][0]
+    assert seeded["decision_id"] is not None
+
+    service = DeskApiService(root)
+    decisions = service.recent_decisions(portfolio_slug=seeded["portfolio_slug"])
+    assert decisions
+    assert float(decisions[0]["requested_exposure_change"]) == pytest.approx(500.0)
+
+
 def test_seed_demo_environment_fails_fast_on_incompatible_backtest_config(tmp_path: Path) -> None:
     root = tmp_path
     write_settings(root)

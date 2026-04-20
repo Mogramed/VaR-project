@@ -6,6 +6,11 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api/client";
 import type { RiskDecisionResponse } from "@/lib/api/types";
+import {
+  EXPOSURE_MIN_EUR,
+  EXPOSURE_STEP_EUR,
+  validateExposureMagnitude,
+} from "@/lib/forms/exposure-validation";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import { ButtonLink, StatusBadge } from "@/components/ui/primitives";
 import {
@@ -44,9 +49,9 @@ export function TradeDecisionPanel({
       setValidationError("Symbol is required");
       return false;
     }
-    const numericExposure = Number(exposureChange);
-    if (!Number.isFinite(numericExposure) || numericExposure <= 0) {
-      setValidationError("Exposure must be a positive number");
+    const exposureValidation = validateExposureMagnitude(exposureChange);
+    if (!exposureValidation.ok) {
+      setValidationError(exposureValidation.error);
       return false;
     }
     setValidationError(null);
@@ -109,7 +114,15 @@ export function TradeDecisionPanel({
 
         <FormSection title="Sizing">
           <FieldLabel htmlFor="dec-exposure">Target exposure change</FieldLabel>
-          <FieldInputWithIcon icon={DollarSign} id="dec-exposure" type="number" min="1" step="1000" value={exposureChange} onChange={(e) => setExposureChange(e.target.value)} />
+          <FieldInputWithIcon
+            icon={DollarSign}
+            id="dec-exposure"
+            type="number"
+            min={String(EXPOSURE_MIN_EUR)}
+            step={String(EXPOSURE_STEP_EUR)}
+            value={exposureChange}
+            onChange={(e) => setExposureChange(e.target.value)}
+          />
           <div className="mt-2 flex flex-wrap gap-1.5">
             {decisionPresets.map((p) => (
               <PresetPill key={p} active={p === exposureChange} onClick={() => setExposureChange(p)}>{formatCurrency(Number(p))}</PresetPill>

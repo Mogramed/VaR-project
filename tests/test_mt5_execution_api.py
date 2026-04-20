@@ -1481,7 +1481,7 @@ def test_mt5_execution_preview_recovers_with_fill_mode_fallback(tmp_path: Path):
 
     preview = client.post(
         "/execution/preview",
-        json={"symbol": "EURUSD", "exposure_change": -5_001.0, "note": "fill fallback"},
+        json={"symbol": "EURUSD", "exposure_change": -5_000.0, "note": "fill fallback"},
     )
     assert preview.status_code == 200
     payload = preview.json()
