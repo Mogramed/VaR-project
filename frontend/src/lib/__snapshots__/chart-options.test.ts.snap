@@ -1,0 +1,1190 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`chart option resilience > anchors bar axis to zero when all values are positive 1`] = `
+{
+  "animationDuration": 600,
+  "animationDurationUpdate": 400,
+  "animationEasing": "cubicOut",
+  "dataZoom": [],
+  "grid": {
+    "bottom": 20,
+    "containLabel": true,
+    "left": 12,
+    "right": 12,
+    "top": 16,
+  },
+  "series": [
+    {
+      "backgroundStyle": {
+        "borderRadius": [
+          4,
+          4,
+          0,
+          0,
+        ],
+        "color": "rgba(255,255,255,0.015)",
+      },
+      "barCategoryGap": "36%",
+      "barMaxWidth": 56,
+      "barMinHeight": 6,
+      "data": [
+        {
+          "itemStyle": {
+            "borderColor": "rgba(240,185,11,0.5)",
+            "borderWidth": 1,
+            "color": {
+              "colorStops": [
+                {
+                  "color": "rgb(244,205,79)",
+                  "offset": 0,
+                },
+                {
+                  "color": "rgba(240,185,11,0.95)",
+                  "offset": 0.3,
+                },
+                {
+                  "color": "rgba(240,185,11,0.78)",
+                  "offset": 1,
+                },
+              ],
+              "type": "linear",
+              "x": 0,
+              "x2": 0,
+              "y": 0,
+              "y2": 1,
+            },
+          },
+          "value": 100,
+        },
+        {
+          "itemStyle": {
+            "borderColor": "rgba(240,185,11,0.5)",
+            "borderWidth": 1,
+            "color": {
+              "colorStops": [
+                {
+                  "color": "rgb(244,205,79)",
+                  "offset": 0,
+                },
+                {
+                  "color": "rgba(240,185,11,0.95)",
+                  "offset": 0.3,
+                },
+                {
+                  "color": "rgba(240,185,11,0.78)",
+                  "offset": 1,
+                },
+              ],
+              "type": "linear",
+              "x": 0,
+              "x2": 0,
+              "y": 0,
+              "y2": 1,
+            },
+          },
+          "value": 250,
+        },
+      ],
+      "emphasis": {
+        "focus": "series",
+        "itemStyle": {
+          "shadowBlur": 12,
+          "shadowColor": "rgba(240,185,11,0.3)",
+        },
+      },
+      "itemStyle": {
+        "borderRadius": [
+          4,
+          4,
+          0,
+          0,
+        ],
+      },
+      "label": {
+        "color": "rgba(234,236,239,0.87)",
+        "distance": 8,
+        "fontFamily": "IBM Plex Mono, monospace",
+        "fontSize": 11,
+        "fontWeight": 600,
+        "formatter": "{c}",
+        "position": "top",
+        "show": true,
+      },
+      "showBackground": true,
+      "type": "bar",
+    },
+  ],
+  "tooltip": {
+    "axisPointer": {
+      "crossStyle": {
+        "color": "rgba(234,236,239,0.2)",
+        "type": "dashed",
+        "width": 1,
+      },
+      "label": {
+        "backgroundColor": "rgba(24,29,39,0.92)",
+        "borderColor": "rgba(240,185,11,0.25)",
+        "borderWidth": 1,
+        "color": "#eaecef",
+        "fontFamily": "IBM Plex Mono, monospace",
+        "fontSize": 10,
+        "padding": [
+          4,
+          8,
+        ],
+        "show": true,
+      },
+      "lineStyle": {
+        "color": "rgba(240,185,11,0.35)",
+        "type": "dashed",
+        "width": 1,
+      },
+      "type": "cross",
+    },
+    "backgroundColor": "rgba(14,18,23,0.94)",
+    "borderColor": "rgba(255,255,255,0.08)",
+    "borderWidth": 1,
+    "confine": true,
+    "extraCssText": "backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 8px 32px rgba(0,0,0,0.55), 0 0 1px rgba(255,255,255,0.1); border-radius: 8px; padding: 10px 14px;",
+    "textStyle": {
+      "color": "#eaecef",
+      "fontFamily": "'Inter', sans-serif",
+      "fontSize": 11,
+    },
+    "trigger": "axis",
+  },
+  "xAxis": {
+    "axisLabel": {
+      "color": "rgba(234,236,239,0.55)",
+      "fontFamily": "IBM Plex Mono, monospace",
+      "fontSize": 11,
+      "hideOverlap": true,
+      "interval": 0,
+      "margin": 12,
+      "rotate": 0,
+    },
+    "axisLine": {
+      "lineStyle": {
+        "color": "rgba(255,255,255,0.08)",
+      },
+    },
+    "axisTick": {
+      "show": false,
+    },
+    "data": [
+      "alpha",
+      "beta",
+    ],
+    "splitLine": {
+      "show": false,
+    },
+    "type": "category",
+  },
+  "yAxis": {
+    "axisLabel": {
+      "color": "rgba(234,236,239,0.55)",
+      "fontFamily": "IBM Plex Mono, monospace",
+      "fontSize": 10,
+      "margin": 12,
+    },
+    "axisLine": {
+      "show": false,
+    },
+    "axisTick": {
+      "show": false,
+    },
+    "max": 270,
+    "min": 0,
+    "splitLine": {
+      "lineStyle": {
+        "color": "rgba(255,255,255,0.05)",
+        "type": "dashed",
+        "width": 1,
+      },
+    },
+    "splitNumber": 4,
+    "type": "value",
+  },
+}
+`;
+
+exports[`chart option resilience > drops grouped categories where all series are invalid 1`] = `
+{
+  "animationDuration": 650,
+  "animationDurationUpdate": 400,
+  "animationEasing": "cubicOut",
+  "dataZoom": [],
+  "grid": {
+    "bottom": 42,
+    "containLabel": true,
+    "left": 16,
+    "right": 16,
+    "top": 34,
+  },
+  "legend": {
+    "icon": "roundRect",
+    "inactiveBorderWidth": 0,
+    "inactiveColor": "rgba(255,255,255,0.15)",
+    "itemGap": 18,
+    "itemHeight": 3,
+    "itemWidth": 16,
+    "textStyle": {
+      "color": "rgba(234,236,239,0.55)",
+      "fontFamily": "'Inter', sans-serif",
+      "fontSize": 10,
+    },
+    "top": 2,
+  },
+  "series": [
+    {
+      "backgroundStyle": {
+        "borderRadius": [
+          3,
+          3,
+          0,
+          0,
+        ],
+        "color": "rgba(255,255,255,0.012)",
+      },
+      "barCategoryGap": "32%",
+      "barMaxWidth": 30,
+      "data": [
+        100,
+        300,
+        null,
+      ],
+      "emphasis": {
+        "focus": "series",
+        "itemStyle": {
+          "shadowBlur": 10,
+          "shadowColor": "rgba(240,185,11,0.3)",
+        },
+      },
+      "itemStyle": {
+        "borderColor": "rgba(240,185,11,0.4)",
+        "borderRadius": [
+          4,
+          4,
+          0,
+          0,
+        ],
+        "borderWidth": 1,
+        "color": {
+          "colorStops": [
+            {
+              "color": "rgb(244,205,79)",
+              "offset": 0,
+            },
+            {
+              "color": "rgba(240,185,11,0.95)",
+              "offset": 0.3,
+            },
+            {
+              "color": "rgba(240,185,11,0.78)",
+              "offset": 1,
+            },
+          ],
+          "type": "linear",
+          "x": 0,
+          "x2": 0,
+          "y": 0,
+          "y2": 1,
+        },
+      },
+      "name": "Requested",
+      "showBackground": true,
+      "type": "bar",
+    },
+    {
+      "backgroundStyle": {
+        "borderRadius": [
+          3,
+          3,
+          0,
+          0,
+        ],
+        "color": "rgba(255,255,255,0.012)",
+      },
+      "barCategoryGap": "32%",
+      "barMaxWidth": 30,
+      "data": [
+        50,
+        null,
+        -20,
+      ],
+      "emphasis": {
+        "focus": "series",
+        "itemStyle": {
+          "shadowBlur": 10,
+          "shadowColor": "rgba(14,203,129,0.3)",
+        },
+      },
+      "itemStyle": {
+        "borderColor": "rgba(14,203,129,0.4)",
+        "borderRadius": [
+          4,
+          4,
+          0,
+          0,
+        ],
+        "borderWidth": 1,
+        "color": {
+          "colorStops": [
+            {
+              "color": "rgb(81,218,164)",
+              "offset": 0,
+            },
+            {
+              "color": "rgba(14,203,129,0.95)",
+              "offset": 0.3,
+            },
+            {
+              "color": "rgba(14,203,129,0.78)",
+              "offset": 1,
+            },
+          ],
+          "type": "linear",
+          "x": 0,
+          "x2": 0,
+          "y": 0,
+          "y2": 1,
+        },
+      },
+      "name": "Approved",
+      "showBackground": true,
+      "type": "bar",
+    },
+  ],
+  "tooltip": {
+    "axisPointer": {
+      "crossStyle": {
+        "color": "rgba(234,236,239,0.2)",
+        "type": "dashed",
+        "width": 1,
+      },
+      "label": {
+        "backgroundColor": "rgba(24,29,39,0.92)",
+        "borderColor": "rgba(240,185,11,0.25)",
+        "borderWidth": 1,
+        "color": "#eaecef",
+        "fontFamily": "IBM Plex Mono, monospace",
+        "fontSize": 10,
+        "padding": [
+          4,
+          8,
+        ],
+        "show": true,
+      },
+      "lineStyle": {
+        "color": "rgba(240,185,11,0.35)",
+        "type": "dashed",
+        "width": 1,
+      },
+      "type": "cross",
+    },
+    "backgroundColor": "rgba(14,18,23,0.94)",
+    "borderColor": "rgba(255,255,255,0.08)",
+    "borderWidth": 1,
+    "confine": true,
+    "extraCssText": "backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 8px 32px rgba(0,0,0,0.55), 0 0 1px rgba(255,255,255,0.1); border-radius: 8px; padding: 10px 14px;",
+    "textStyle": {
+      "color": "#eaecef",
+      "fontFamily": "'Inter', sans-serif",
+      "fontSize": 11,
+    },
+    "trigger": "axis",
+  },
+  "xAxis": {
+    "axisLabel": {
+      "color": "rgba(234,236,239,0.55)",
+      "fontFamily": "IBM Plex Mono, monospace",
+      "fontSize": 10,
+      "hideOverlap": true,
+      "interval": 0,
+      "margin": 12,
+      "rotate": 0,
+    },
+    "axisLine": {
+      "lineStyle": {
+        "color": "rgba(255,255,255,0.08)",
+      },
+    },
+    "axisTick": {
+      "show": false,
+    },
+    "data": [
+      "A",
+      "C",
+      "D",
+    ],
+    "splitLine": {
+      "show": false,
+    },
+    "type": "category",
+  },
+  "yAxis": {
+    "axisLabel": {
+      "color": "rgba(234,236,239,0.55)",
+      "fontFamily": "IBM Plex Mono, monospace",
+      "fontSize": 10,
+      "margin": 12,
+    },
+    "axisLine": {
+      "show": false,
+    },
+    "axisTick": {
+      "show": false,
+    },
+    "max": 325.6,
+    "min": -45.6,
+    "splitLine": {
+      "lineStyle": {
+        "color": "rgba(255,255,255,0.05)",
+        "type": "dashed",
+        "width": 1,
+      },
+    },
+    "splitNumber": 4,
+    "type": "value",
+  },
+}
+`;
+
+exports[`chart option resilience > filters invalid backtest rows and keeps null for optional var values 1`] = `
+{
+  "animationDuration": 800,
+  "animationDurationUpdate": 400,
+  "animationEasing": "cubicOut",
+  "dataZoom": [],
+  "grid": {
+    "bottom": 58,
+    "containLabel": true,
+    "left": 16,
+    "right": 20,
+    "top": 24,
+  },
+  "legend": {
+    "bottom": 22,
+    "icon": "roundRect",
+    "inactiveBorderWidth": 0,
+    "inactiveColor": "rgba(255,255,255,0.15)",
+    "itemGap": 18,
+    "itemHeight": 3,
+    "itemWidth": 16,
+    "textStyle": {
+      "color": "rgba(234,236,239,0.55)",
+      "fontFamily": "'Inter', sans-serif",
+      "fontSize": 10,
+    },
+  },
+  "series": [
+    {
+      "areaStyle": {
+        "color": {
+          "colorStops": [
+            {
+              "color": "rgba(71,183,248,0.32)",
+              "offset": 0,
+            },
+            {
+              "color": "rgba(71,183,248,0.12)",
+              "offset": 0.4,
+            },
+            {
+              "color": "rgba(71,183,248,0.03)",
+              "offset": 0.85,
+            },
+            {
+              "color": "rgba(71,183,248,0)",
+              "offset": 1,
+            },
+          ],
+          "type": "linear",
+          "x": 0,
+          "x2": 0,
+          "y": 0,
+          "y2": 1,
+        },
+      },
+      "data": [
+        10,
+        30,
+      ],
+      "lineStyle": {
+        "color": "#47b7f8",
+        "shadowBlur": 10,
+        "shadowColor": "rgba(71,183,248,0.25)",
+        "shadowOffsetY": 4,
+        "width": 2,
+      },
+      "markLine": {
+        "data": [
+          {
+            "yAxis": 0,
+          },
+        ],
+        "label": {
+          "show": false,
+        },
+        "lineStyle": {
+          "color": "rgba(255,255,255,0.12)",
+          "type": "dashed",
+          "width": 1,
+        },
+        "silent": true,
+        "symbol": "none",
+      },
+      "name": "PnL",
+      "smooth": false,
+      "symbol": "none",
+      "type": "line",
+      "z": 4,
+    },
+    {
+      "data": [
+        null,
+        15,
+      ],
+      "lineStyle": {
+        "color": "#f0b90b",
+        "shadowBlur": 10,
+        "shadowColor": "rgba(240,185,11,0.2)",
+        "shadowOffsetY": 4,
+        "width": 1.5,
+      },
+      "name": "Hist VaR",
+      "smooth": 0.3,
+      "symbol": "none",
+      "type": "line",
+      "z": 3,
+    },
+    {
+      "data": [
+        5,
+        null,
+      ],
+      "lineStyle": {
+        "color": "#0ecb81",
+        "shadowBlur": 10,
+        "shadowColor": "rgba(14,203,129,0.2)",
+        "shadowOffsetY": 4,
+        "width": 1.5,
+      },
+      "name": "GARCH VaR",
+      "smooth": 0.3,
+      "symbol": "none",
+      "type": "line",
+      "z": 2,
+    },
+    {
+      "data": [
+        4,
+        12,
+      ],
+      "lineStyle": {
+        "color": "#f6465d",
+        "shadowBlur": 10,
+        "shadowColor": "rgba(246,70,93,0.2)",
+        "shadowOffsetY": 4,
+        "width": 1.5,
+      },
+      "name": "FHS VaR",
+      "smooth": 0.3,
+      "symbol": "none",
+      "type": "line",
+      "z": 1,
+    },
+  ],
+  "tooltip": {
+    "axisPointer": {
+      "crossStyle": {
+        "color": "rgba(234,236,239,0.2)",
+        "type": "dashed",
+        "width": 1,
+      },
+      "label": {
+        "backgroundColor": "rgba(24,29,39,0.92)",
+        "borderColor": "rgba(240,185,11,0.25)",
+        "borderWidth": 1,
+        "color": "#eaecef",
+        "fontFamily": "IBM Plex Mono, monospace",
+        "fontSize": 10,
+        "padding": [
+          4,
+          8,
+        ],
+        "show": true,
+      },
+      "lineStyle": {
+        "color": "rgba(240,185,11,0.35)",
+        "type": "dashed",
+        "width": 1,
+      },
+      "type": "cross",
+    },
+    "backgroundColor": "rgba(14,18,23,0.94)",
+    "borderColor": "rgba(255,255,255,0.08)",
+    "borderWidth": 1,
+    "confine": true,
+    "extraCssText": "backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 8px 32px rgba(0,0,0,0.55), 0 0 1px rgba(255,255,255,0.1); border-radius: 8px; padding: 10px 14px;",
+    "textStyle": {
+      "color": "#eaecef",
+      "fontFamily": "'Inter', sans-serif",
+      "fontSize": 11,
+    },
+    "trigger": "axis",
+  },
+  "xAxis": {
+    "axisLabel": {
+      "color": "rgba(234,236,239,0.55)",
+      "fontFamily": "IBM Plex Mono, monospace",
+      "fontSize": 10,
+      "hideOverlap": true,
+      "interval": 0,
+      "margin": 12,
+      "rotate": 0,
+    },
+    "axisLine": {
+      "lineStyle": {
+        "color": "rgba(255,255,255,0.08)",
+      },
+    },
+    "axisTick": {
+      "show": false,
+    },
+    "data": [
+      "2026 03 01T00:00:00Z",
+      "2026 03 03T00:00:00Z",
+    ],
+    "splitLine": {
+      "show": false,
+    },
+    "type": "category",
+  },
+  "yAxis": {
+    "axisLabel": {
+      "color": "rgba(234,236,239,0.55)",
+      "fontFamily": "IBM Plex Mono, monospace",
+      "fontSize": 10,
+      "margin": 12,
+    },
+    "axisLine": {
+      "show": false,
+    },
+    "axisTick": {
+      "show": false,
+    },
+    "max": 32.4,
+    "min": 0,
+    "splitLine": {
+      "lineStyle": {
+        "color": "rgba(255,255,255,0.05)",
+        "type": "dashed",
+        "width": 1,
+      },
+    },
+    "splitNumber": 4,
+    "type": "value",
+  },
+}
+`;
+
+exports[`chart option resilience > normalizes and sorts line series when timestamps are unordered 1`] = `
+{
+  "animationDuration": 700,
+  "animationDurationUpdate": 400,
+  "animationEasing": "cubicOut",
+  "dataZoom": [],
+  "grid": {
+    "bottom": 36,
+    "containLabel": true,
+    "left": 14,
+    "right": 14,
+    "top": 20,
+  },
+  "series": [
+    {
+      "areaStyle": {
+        "color": {
+          "colorStops": [
+            {
+              "color": "rgba(240,185,11,0.32)",
+              "offset": 0,
+            },
+            {
+              "color": "rgba(240,185,11,0.12)",
+              "offset": 0.4,
+            },
+            {
+              "color": "rgba(240,185,11,0.03)",
+              "offset": 0.85,
+            },
+            {
+              "color": "rgba(240,185,11,0)",
+              "offset": 1,
+            },
+          ],
+          "type": "linear",
+          "x": 0,
+          "x2": 0,
+          "y": 0,
+          "y2": 1,
+        },
+      },
+      "data": [
+        10,
+        20,
+        30,
+      ],
+      "lineStyle": {
+        "color": "#f0b90b",
+        "shadowBlur": 10,
+        "shadowColor": "rgba(240,185,11,0.3)",
+        "shadowOffsetY": 4,
+        "width": 2,
+      },
+      "markLine": {
+        "data": [
+          {
+            "name": "Avg",
+            "type": "average",
+          },
+        ],
+        "label": {
+          "color": "rgba(234,236,239,0.55)",
+          "fontFamily": "IBM Plex Mono, monospace",
+          "fontSize": 9,
+          "formatter": "avg: {c}",
+        },
+        "lineStyle": {
+          "color": "rgba(240,185,11,0.28)",
+          "type": "dashed",
+          "width": 1,
+        },
+        "silent": true,
+        "symbol": "none",
+      },
+      "sampling": "lttb",
+      "smooth": 0.35,
+      "symbol": "none",
+      "type": "line",
+    },
+  ],
+  "tooltip": {
+    "axisPointer": {
+      "crossStyle": {
+        "color": "rgba(234,236,239,0.2)",
+        "type": "dashed",
+        "width": 1,
+      },
+      "label": {
+        "backgroundColor": "rgba(24,29,39,0.92)",
+        "borderColor": "rgba(240,185,11,0.25)",
+        "borderWidth": 1,
+        "color": "#eaecef",
+        "fontFamily": "IBM Plex Mono, monospace",
+        "fontSize": 10,
+        "padding": [
+          4,
+          8,
+        ],
+        "show": true,
+      },
+      "lineStyle": {
+        "color": "rgba(240,185,11,0.35)",
+        "type": "dashed",
+        "width": 1,
+      },
+      "type": "cross",
+    },
+    "backgroundColor": "rgba(14,18,23,0.94)",
+    "borderColor": "rgba(255,255,255,0.08)",
+    "borderWidth": 1,
+    "confine": true,
+    "extraCssText": "backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 8px 32px rgba(0,0,0,0.55), 0 0 1px rgba(255,255,255,0.1); border-radius: 8px; padding: 10px 14px;",
+    "textStyle": {
+      "color": "#eaecef",
+      "fontFamily": "'Inter', sans-serif",
+      "fontSize": 11,
+    },
+    "trigger": "axis",
+  },
+  "xAxis": {
+    "axisLabel": {
+      "color": "rgba(234,236,239,0.55)",
+      "fontFamily": "IBM Plex Mono, monospace",
+      "fontSize": 10,
+      "hideOverlap": true,
+      "interval": 0,
+      "margin": 12,
+      "rotate": 0,
+    },
+    "axisLine": {
+      "lineStyle": {
+        "color": "rgba(255,255,255,0.08)",
+      },
+    },
+    "axisTick": {
+      "show": false,
+    },
+    "data": [
+      "2026 01 01T00:00:00Z",
+      "2026 01 02T00:00:00Z",
+      "2026 01 03T00:00:00Z",
+    ],
+    "splitLine": {
+      "show": false,
+    },
+    "type": "category",
+  },
+  "yAxis": {
+    "axisLabel": {
+      "color": "rgba(234,236,239,0.55)",
+      "fontFamily": "IBM Plex Mono, monospace",
+      "fontSize": 10,
+      "margin": 12,
+    },
+    "axisLine": {
+      "show": false,
+    },
+    "axisTick": {
+      "show": false,
+    },
+    "max": 31.6,
+    "min": 8.4,
+    "splitLine": {
+      "lineStyle": {
+        "color": "rgba(255,255,255,0.05)",
+        "type": "dashed",
+        "width": 1,
+      },
+    },
+    "splitNumber": 4,
+    "type": "value",
+  },
+}
+`;
+
+exports[`chart option resilience > returns a safe empty chart shape when all bar values are invalid 1`] = `
+{
+  "animationDuration": 600,
+  "animationDurationUpdate": 400,
+  "animationEasing": "cubicOut",
+  "dataZoom": [],
+  "grid": {
+    "bottom": 20,
+    "containLabel": true,
+    "left": 12,
+    "right": 12,
+    "top": 16,
+  },
+  "series": [
+    {
+      "backgroundStyle": {
+        "borderRadius": [
+          4,
+          4,
+          0,
+          0,
+        ],
+        "color": "rgba(255,255,255,0.015)",
+      },
+      "barCategoryGap": "36%",
+      "barMaxWidth": 56,
+      "barMinHeight": 6,
+      "data": [],
+      "emphasis": {
+        "focus": "series",
+        "itemStyle": {
+          "shadowBlur": 12,
+          "shadowColor": "rgba(240,185,11,0.3)",
+        },
+      },
+      "itemStyle": {
+        "borderRadius": [
+          4,
+          4,
+          0,
+          0,
+        ],
+      },
+      "label": {
+        "color": "rgba(234,236,239,0.87)",
+        "distance": 8,
+        "fontFamily": "IBM Plex Mono, monospace",
+        "fontSize": 11,
+        "fontWeight": 600,
+        "formatter": "{c}",
+        "position": "top",
+        "show": true,
+      },
+      "showBackground": true,
+      "type": "bar",
+    },
+  ],
+  "tooltip": {
+    "axisPointer": {
+      "crossStyle": {
+        "color": "rgba(234,236,239,0.2)",
+        "type": "dashed",
+        "width": 1,
+      },
+      "label": {
+        "backgroundColor": "rgba(24,29,39,0.92)",
+        "borderColor": "rgba(240,185,11,0.25)",
+        "borderWidth": 1,
+        "color": "#eaecef",
+        "fontFamily": "IBM Plex Mono, monospace",
+        "fontSize": 10,
+        "padding": [
+          4,
+          8,
+        ],
+        "show": true,
+      },
+      "lineStyle": {
+        "color": "rgba(240,185,11,0.35)",
+        "type": "dashed",
+        "width": 1,
+      },
+      "type": "cross",
+    },
+    "backgroundColor": "rgba(14,18,23,0.94)",
+    "borderColor": "rgba(255,255,255,0.08)",
+    "borderWidth": 1,
+    "confine": true,
+    "extraCssText": "backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 8px 32px rgba(0,0,0,0.55), 0 0 1px rgba(255,255,255,0.1); border-radius: 8px; padding: 10px 14px;",
+    "textStyle": {
+      "color": "#eaecef",
+      "fontFamily": "'Inter', sans-serif",
+      "fontSize": 11,
+    },
+    "trigger": "axis",
+  },
+  "xAxis": {
+    "axisLabel": {
+      "color": "rgba(234,236,239,0.55)",
+      "fontFamily": "IBM Plex Mono, monospace",
+      "fontSize": 11,
+      "hideOverlap": true,
+      "interval": 0,
+      "margin": 12,
+      "rotate": 0,
+    },
+    "axisLine": {
+      "lineStyle": {
+        "color": "rgba(255,255,255,0.08)",
+      },
+    },
+    "axisTick": {
+      "show": false,
+    },
+    "data": [],
+    "splitLine": {
+      "show": false,
+    },
+    "type": "category",
+  },
+  "yAxis": {
+    "axisLabel": {
+      "color": "rgba(234,236,239,0.55)",
+      "fontFamily": "IBM Plex Mono, monospace",
+      "fontSize": 10,
+      "margin": 12,
+    },
+    "axisLine": {
+      "show": false,
+    },
+    "axisTick": {
+      "show": false,
+    },
+    "max": 1,
+    "min": 0,
+    "splitLine": {
+      "lineStyle": {
+        "color": "rgba(255,255,255,0.05)",
+        "type": "dashed",
+        "width": 1,
+      },
+    },
+    "splitNumber": 4,
+    "type": "value",
+  },
+}
+`;
+
+exports[`chart option resilience > sorts valid timestamps first and appends invalid labels in line series 1`] = `
+{
+  "animationDuration": 700,
+  "animationDurationUpdate": 400,
+  "animationEasing": "cubicOut",
+  "dataZoom": [],
+  "grid": {
+    "bottom": 36,
+    "containLabel": true,
+    "left": 14,
+    "right": 14,
+    "top": 20,
+  },
+  "series": [
+    {
+      "areaStyle": {
+        "color": {
+          "colorStops": [
+            {
+              "color": "rgba(71,183,248,0.32)",
+              "offset": 0,
+            },
+            {
+              "color": "rgba(71,183,248,0.12)",
+              "offset": 0.4,
+            },
+            {
+              "color": "rgba(71,183,248,0.03)",
+              "offset": 0.85,
+            },
+            {
+              "color": "rgba(71,183,248,0)",
+              "offset": 1,
+            },
+          ],
+          "type": "linear",
+          "x": 0,
+          "x2": 0,
+          "y": 0,
+          "y2": 1,
+        },
+      },
+      "data": [
+        3,
+        2,
+        1,
+      ],
+      "lineStyle": {
+        "color": "#47b7f8",
+        "shadowBlur": 10,
+        "shadowColor": "rgba(71,183,248,0.3)",
+        "shadowOffsetY": 4,
+        "width": 2,
+      },
+      "markLine": {
+        "data": [
+          {
+            "name": "Avg",
+            "type": "average",
+          },
+        ],
+        "label": {
+          "color": "rgba(234,236,239,0.55)",
+          "fontFamily": "IBM Plex Mono, monospace",
+          "fontSize": 9,
+          "formatter": "avg: {c}",
+        },
+        "lineStyle": {
+          "color": "rgba(71,183,248,0.28)",
+          "type": "dashed",
+          "width": 1,
+        },
+        "silent": true,
+        "symbol": "none",
+      },
+      "sampling": "lttb",
+      "smooth": 0.35,
+      "symbol": "none",
+      "type": "line",
+    },
+  ],
+  "tooltip": {
+    "axisPointer": {
+      "crossStyle": {
+        "color": "rgba(234,236,239,0.2)",
+        "type": "dashed",
+        "width": 1,
+      },
+      "label": {
+        "backgroundColor": "rgba(24,29,39,0.92)",
+        "borderColor": "rgba(240,185,11,0.25)",
+        "borderWidth": 1,
+        "color": "#eaecef",
+        "fontFamily": "IBM Plex Mono, monospace",
+        "fontSize": 10,
+        "padding": [
+          4,
+          8,
+        ],
+        "show": true,
+      },
+      "lineStyle": {
+        "color": "rgba(240,185,11,0.35)",
+        "type": "dashed",
+        "width": 1,
+      },
+      "type": "cross",
+    },
+    "backgroundColor": "rgba(14,18,23,0.94)",
+    "borderColor": "rgba(255,255,255,0.08)",
+    "borderWidth": 1,
+    "confine": true,
+    "extraCssText": "backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 8px 32px rgba(0,0,0,0.55), 0 0 1px rgba(255,255,255,0.1); border-radius: 8px; padding: 10px 14px;",
+    "textStyle": {
+      "color": "#eaecef",
+      "fontFamily": "'Inter', sans-serif",
+      "fontSize": 11,
+    },
+    "trigger": "axis",
+  },
+  "xAxis": {
+    "axisLabel": {
+      "color": "rgba(234,236,239,0.55)",
+      "fontFamily": "IBM Plex Mono, monospace",
+      "fontSize": 10,
+      "hideOverlap": true,
+      "interval": 0,
+      "margin": 12,
+      "rotate": 0,
+    },
+    "axisLine": {
+      "lineStyle": {
+        "color": "rgba(255,255,255,0.08)",
+      },
+    },
+    "axisTick": {
+      "show": false,
+    },
+    "data": [
+      "2026 01 01T00:00:00Z",
+      "2026 01 02T00:00:00Z",
+      "1",
+    ],
+    "splitLine": {
+      "show": false,
+    },
+    "type": "category",
+  },
+  "yAxis": {
+    "axisLabel": {
+      "color": "rgba(234,236,239,0.55)",
+      "fontFamily": "IBM Plex Mono, monospace",
+      "fontSize": 10,
+      "margin": 12,
+    },
+    "axisLine": {
+      "show": false,
+    },
+    "axisTick": {
+      "show": false,
+    },
+    "max": 3.5,
+    "min": 0.5,
+    "splitLine": {
+      "lineStyle": {
+        "color": "rgba(255,255,255,0.05)",
+        "type": "dashed",
+        "width": 1,
+      },
+    },
+    "splitNumber": 4,
+    "type": "value",
+  },
+}
+`;
