@@ -24,6 +24,7 @@ from var_project.api.schemas import (
     MT5LiveStateResponse,
     MT5PendingOrderResponse,
     MT5PositionResponse,
+    MT5TransactionHistoryResponse,
     MT5TerminalStatusResponse,
     OrderHistoryEntryResponse,
     PortfolioExposureResponse,
@@ -515,14 +516,24 @@ def mt5_history_orders(
     limit: int = Query(default=100, ge=1, le=500),
     portfolio_slug: str | None = Query(default=None),
     account_id: str | None = Query(default=None),
+    date_from: str | None = Query(default=None, description="UTC start datetime (ISO-8601)."),
+    date_to: str | None = Query(default=None, description="UTC end datetime (ISO-8601)."),
+    symbol: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> list[OrderHistoryEntryResponse]:
     try:
-        payload = service.mt5_history_orders(portfolio_slug=portfolio_slug, limit=limit, account_id=account_id)
+        payload = service.mt5_history_orders(
+            portfolio_slug=portfolio_slug,
+            limit=limit,
+            account_id=account_id,
+            date_from=date_from,
+            date_to=date_to,
+            symbol=symbol,
+        )
     except MT5ConnectionError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return [OrderHistoryEntryResponse.model_validate(item) for item in payload]
 
 
@@ -531,15 +542,91 @@ def mt5_history_deals(
     limit: int = Query(default=100, ge=1, le=500),
     portfolio_slug: str | None = Query(default=None),
     account_id: str | None = Query(default=None),
+    date_from: str | None = Query(default=None, description="UTC start datetime (ISO-8601)."),
+    date_to: str | None = Query(default=None, description="UTC end datetime (ISO-8601)."),
+    symbol: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> list[DealHistoryEntryResponse]:
     try:
-        payload = service.mt5_history_deals(portfolio_slug=portfolio_slug, limit=limit, account_id=account_id)
+        payload = service.mt5_history_deals(
+            portfolio_slug=portfolio_slug,
+            limit=limit,
+            account_id=account_id,
+            date_from=date_from,
+            date_to=date_to,
+            symbol=symbol,
+        )
     except MT5ConnectionError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return [DealHistoryEntryResponse.model_validate(item) for item in payload]
+
+
+@router.get("/mt5/history/transactions", response_model=MT5TransactionHistoryResponse)
+def mt5_history_transactions(
+    portfolio_slug: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
+    date_from: str | None = Query(default=None, description="UTC start datetime (ISO-8601)."),
+    date_to: str | None = Query(default=None, description="UTC end datetime (ISO-8601)."),
+    symbol: str | None = Query(default=None),
+    type: str | None = Query(default=None, description="all|order|deal|manual|desk"),
+    sort: str = Query(default="time_desc", description="time_desc|time_asc"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    service: DeskApiService = Depends(get_service),
+) -> MT5TransactionHistoryResponse:
+    try:
+        payload = service.mt5_transaction_history(
+            portfolio_slug=portfolio_slug,
+            account_id=account_id,
+            date_from=date_from,
+            date_to=date_to,
+            symbol=symbol,
+            type=type,
+            sort=sort,
+            page=page,
+            page_size=page_size,
+        )
+    except MT5ConnectionError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return MT5TransactionHistoryResponse.model_validate(payload)
+
+
+@router.get("/mt5/history/transactions/export")
+def mt5_history_transactions_export(
+    portfolio_slug: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
+    date_from: str | None = Query(default=None, description="UTC start datetime (ISO-8601)."),
+    date_to: str | None = Query(default=None, description="UTC end datetime (ISO-8601)."),
+    symbol: str | None = Query(default=None),
+    type: str | None = Query(default=None, description="all|order|deal|manual|desk"),
+    sort: str = Query(default="time_desc", description="time_desc|time_asc"),
+    max_rows: int = Query(default=5000, ge=1, le=10000),
+    service: DeskApiService = Depends(get_service),
+) -> Response:
+    try:
+        filename, payload = service.mt5_transaction_history_csv(
+            portfolio_slug=portfolio_slug,
+            account_id=account_id,
+            date_from=date_from,
+            date_to=date_to,
+            symbol=symbol,
+            type=type,
+            sort=sort,
+            max_rows=max_rows,
+        )
+    except MT5ConnectionError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        content=payload,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/market-data/status", response_model=MarketDataSyncStatusResponse)

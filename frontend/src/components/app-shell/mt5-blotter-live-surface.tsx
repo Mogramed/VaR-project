@@ -6,8 +6,8 @@ import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts"
 import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
 import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
 import { PageHeader } from "@/components/app-shell/page-header";
-import { DealHistoryTable, ExecutionFillsTable, ExecutionHistoryTable, OrderHistoryTable, ReconciliationTable } from "@/components/data/risk-tables";
-import { FieldLabel, FieldSelect, FieldTextarea, FormError, FormSection, SubmitButton } from "@/components/forms/shared";
+import { ExecutionFillsTable, ExecutionHistoryTable, MT5TransactionHistoryTable, ReconciliationTable } from "@/components/data/risk-tables";
+import { FieldInput, FieldLabel, FieldSelect, FieldTextarea, FormError, FormSection, SubmitButton } from "@/components/forms/shared";
 import { MetricBlock } from "@/components/ui/metric-block";
 import { ButtonLink, StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
@@ -15,6 +15,7 @@ import type {
   AuditEventResponse,
   ExecutionFillResponse,
   ExecutionResultResponse,
+  MT5TransactionHistoryResponse,
   ReconciliationSummaryResponse,
 } from "@/lib/api/types";
 import { buildIncidentTimeline } from "@/lib/incidents";
@@ -23,6 +24,14 @@ import { formatCurrency, formatTimestamp, humanizeIdentifier } from "@/lib/utils
 import { countManualMt5Events } from "@/lib/view-models";
 
 type IncidentStatus = "acknowledged" | "investigating" | "resolved";
+type TransactionHistoryType = "all" | "order" | "deal" | "manual" | "desk";
+
+type TransactionHistoryFilters = {
+  dateFrom: string;
+  dateTo: string;
+  symbol: string;
+  type: TransactionHistoryType;
+};
 
 function selectedMismatch(
   reconciliation: ReconciliationSummaryResponse | null,
@@ -71,6 +80,23 @@ export function Mt5BlotterLiveSurface({
   const [resolutionNote, setResolutionNote] = useState("");
   const [submitPending, setSubmitPending] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [historyDraftFilters, setHistoryDraftFilters] = useState<TransactionHistoryFilters>({
+    dateFrom: "",
+    dateTo: "",
+    symbol: "",
+    type: "all",
+  });
+  const [historyFilters, setHistoryFilters] = useState<TransactionHistoryFilters>({
+    dateFrom: "",
+    dateTo: "",
+    symbol: "",
+    type: "all",
+  });
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPageSize, setHistoryPageSize] = useState(50);
+  const [historyState, setHistoryState] = useState<MT5TransactionHistoryResponse | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   useEffect(() => {
     setReconciliationState(liveState?.reconciliation ?? null);
@@ -134,6 +160,82 @@ export function Mt5BlotterLiveSurface({
   const handleManage = useCallback((symbol: string) => {
     setSelectedSymbol(symbol);
   }, []);
+
+  const handleApplyHistoryFilters = useCallback(() => {
+    setHistoryFilters({
+      ...historyDraftFilters,
+      symbol: historyDraftFilters.symbol.trim().toUpperCase(),
+    });
+    setHistoryPage(1);
+  }, [historyDraftFilters]);
+
+  const handleResetHistoryFilters = useCallback(() => {
+    const cleared: TransactionHistoryFilters = { dateFrom: "", dateTo: "", symbol: "", type: "all" };
+    setHistoryDraftFilters(cleared);
+    setHistoryFilters(cleared);
+    setHistoryPage(1);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function refreshHistory() {
+      setHistoryLoading(true);
+      setHistoryError(null);
+      try {
+        const payload = await api.mt5TransactionHistory({
+          portfolioSlug,
+          accountId,
+          dateFrom: historyFilters.dateFrom ? `${historyFilters.dateFrom}T00:00:00Z` : undefined,
+          dateTo: historyFilters.dateTo ? `${historyFilters.dateTo}T23:59:59Z` : undefined,
+          symbol: historyFilters.symbol || undefined,
+          type: historyFilters.type,
+          sort: "time_desc",
+          page: historyPage,
+          pageSize: historyPageSize,
+        });
+        if (cancelled) {
+          return;
+        }
+        setHistoryState(payload);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setHistoryState(null);
+        setHistoryError(error instanceof Error ? error.message : "Unable to load MT5 transaction history.");
+      } finally {
+        if (!cancelled) {
+          setHistoryLoading(false);
+        }
+      }
+    }
+
+    void refreshHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, historyFilters.dateFrom, historyFilters.dateTo, historyFilters.symbol, historyFilters.type, historyPage, historyPageSize, portfolioSlug]);
+
+  const historyRows = historyState?.items ?? [];
+  const historyTotal = historyState?.total ?? 0;
+  const historyPageCount = Math.max(1, Math.ceil(historyTotal / historyPageSize));
+  const historyFrom = historyTotal === 0 ? 0 : (historyPage - 1) * historyPageSize + 1;
+  const historyTo = historyTotal === 0 ? 0 : Math.min(historyPage * historyPageSize, historyTotal);
+  const historyExportUrl = useMemo(
+    () =>
+      api.mt5TransactionHistoryExportUrl({
+        portfolioSlug,
+        accountId,
+        dateFrom: historyFilters.dateFrom ? `${historyFilters.dateFrom}T00:00:00Z` : undefined,
+        dateTo: historyFilters.dateTo ? `${historyFilters.dateTo}T23:59:59Z` : undefined,
+        symbol: historyFilters.symbol || undefined,
+        type: historyFilters.type,
+        sort: "time_desc",
+        maxRows: 5000,
+      }),
+    [accountId, historyFilters.dateFrom, historyFilters.dateTo, historyFilters.symbol, historyFilters.type, portfolioSlug],
+  );
 
   const handleSaveIncident = useCallback(async () => {
     if (!selectedSymbol) {
@@ -220,14 +322,128 @@ export function Mt5BlotterLiveSurface({
         </section>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <div className="space-y-2">
-          <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Order history</h4>
-          <OrderHistoryTable rows={orders} />
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+            MT5 transaction history (read-only)
+          </h4>
+          <ButtonLink href={historyExportUrl} variant="secondary">Export CSV</ButtonLink>
         </div>
-        <div className="space-y-2">
-          <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Deal history</h4>
-          <DealHistoryTable rows={deals} />
+        <div className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)]/95 p-3 shadow-[var(--shadow-soft)]">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <div>
+              <FieldLabel htmlFor="history-date-from">Date from</FieldLabel>
+              <FieldInput
+                id="history-date-from"
+                type="date"
+                value={historyDraftFilters.dateFrom}
+                onChange={(event) => setHistoryDraftFilters((current) => ({ ...current, dateFrom: event.target.value }))}
+              />
+            </div>
+            <div>
+              <FieldLabel htmlFor="history-date-to">Date to</FieldLabel>
+              <FieldInput
+                id="history-date-to"
+                type="date"
+                value={historyDraftFilters.dateTo}
+                onChange={(event) => setHistoryDraftFilters((current) => ({ ...current, dateTo: event.target.value }))}
+              />
+            </div>
+            <div>
+              <FieldLabel htmlFor="history-symbol">Symbol</FieldLabel>
+              <FieldInput
+                id="history-symbol"
+                placeholder="EURUSD"
+                value={historyDraftFilters.symbol}
+                onChange={(event) => setHistoryDraftFilters((current) => ({ ...current, symbol: event.target.value }))}
+              />
+            </div>
+            <div>
+              <FieldLabel htmlFor="history-type">Type</FieldLabel>
+              <FieldSelect
+                id="history-type"
+                value={historyDraftFilters.type}
+                onChange={(event) => setHistoryDraftFilters((current) => ({ ...current, type: event.target.value as TransactionHistoryType }))}
+              >
+                <option value="all">All</option>
+                <option value="order">Order</option>
+                <option value="deal">Deal</option>
+                <option value="manual">Manual</option>
+                <option value="desk">Desk</option>
+              </FieldSelect>
+            </div>
+            <div>
+              <FieldLabel htmlFor="history-page-size">Rows per page</FieldLabel>
+              <FieldSelect
+                id="history-page-size"
+                value={String(historyPageSize)}
+                onChange={(event) => {
+                  setHistoryPageSize(Number(event.target.value));
+                  setHistoryPage(1);
+                }}
+              >
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+              </FieldSelect>
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-1 text-[12px] font-semibold text-[var(--color-text)] transition hover:bg-[var(--color-surface-hover)]"
+                onClick={handleApplyHistoryFilters}
+              >
+                Apply filters
+              </button>
+              <button
+                type="button"
+                className="rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-1 text-[12px] font-semibold text-[var(--color-text-muted)] transition hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]"
+                onClick={handleResetHistoryFilters}
+              >
+                Reset
+              </button>
+            </div>
+            <span className="text-[11px] text-[var(--color-text-muted)]">
+              {historyLoading ? "Loading..." : `Showing ${historyFrom}-${historyTo} of ${historyTotal}`}
+            </span>
+          </div>
+
+          <div className="mt-3">
+            {historyError ? (
+              <FormError message={historyError} />
+            ) : historyRows.length > 0 ? (
+              <MT5TransactionHistoryTable rows={historyRows} />
+            ) : (
+              <p className="rounded-[var(--radius-md)] border border-dashed border-[var(--color-border)] px-3 py-2 text-[12px] text-[var(--color-text-soft)]">
+                No MT5 transactions matched the selected filters.
+              </p>
+            )}
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--color-text-muted)]">
+            <button
+              type="button"
+              className="rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 py-1 transition enabled:hover:bg-[var(--color-surface-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => setHistoryPage((current) => Math.max(current - 1, 1))}
+              disabled={historyPage <= 1 || historyLoading}
+            >
+              Previous
+            </button>
+            <span>
+              Page {historyPage} / {historyPageCount}
+            </span>
+            <button
+              type="button"
+              className="rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 py-1 transition enabled:hover:bg-[var(--color-surface-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => setHistoryPage((current) => current + 1)}
+              disabled={historyLoading || !historyState?.has_next}
+            >
+              Next
+            </button>
+          </div>
         </div>
       </div>
 

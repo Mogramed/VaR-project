@@ -25,6 +25,7 @@ import type {
   MT5LiveStateResponse,
   MT5PendingOrderResponse,
   MT5PositionResponse,
+  MT5TransactionHistoryResponse,
   MT5TerminalStatusResponse,
   OperatorRunResponse,
   OrderHistoryEntryResponse,
@@ -516,6 +517,50 @@ export const api = {
   mt5HistoryDeals: (portfolioSlug?: string, limit = 100, accountId?: string) =>
     request<DealHistoryEntryResponse[]>("/mt5/history/deals", {
       query: { portfolio_slug: portfolioSlug, limit, account_id: accountId },
+    }),
+  mt5TransactionHistory: (options?: {
+    portfolioSlug?: string;
+    accountId?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    symbol?: string;
+    type?: "all" | "order" | "deal" | "manual" | "desk";
+    sort?: "time_desc" | "time_asc";
+    page?: number;
+    pageSize?: number;
+  }) =>
+    request<MT5TransactionHistoryResponse>("/mt5/history/transactions", {
+      query: {
+        portfolio_slug: options?.portfolioSlug,
+        account_id: options?.accountId,
+        date_from: options?.dateFrom,
+        date_to: options?.dateTo,
+        symbol: options?.symbol,
+        type: options?.type,
+        sort: options?.sort,
+        page: options?.page,
+        page_size: options?.pageSize,
+      },
+    }),
+  mt5TransactionHistoryExportUrl: (options?: {
+    portfolioSlug?: string;
+    accountId?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    symbol?: string;
+    type?: "all" | "order" | "deal" | "manual" | "desk";
+    sort?: "time_desc" | "time_asc";
+    maxRows?: number;
+  }) =>
+    buildUrl("/mt5/history/transactions/export", {
+      portfolio_slug: options?.portfolioSlug,
+      account_id: options?.accountId,
+      date_from: options?.dateFrom,
+      date_to: options?.dateTo,
+      symbol: options?.symbol,
+      type: options?.type,
+      sort: options?.sort,
+      max_rows: options?.maxRows,
     }),
   marketDataStatus: (portfolioSlug?: string) =>
     request<MarketDataSyncStatusResponse>("/market-data/status", {

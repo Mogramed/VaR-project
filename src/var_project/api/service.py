@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import csv
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from io import StringIO
 import math
 import os
 from pathlib import Path
@@ -768,6 +770,123 @@ class DeskApiService:
             account_id=account_id,
         )
 
+    @staticmethod
+    def _coerce_utc_datetime(value: Any) -> datetime | None:
+        parsed = coerce_datetime(value)
+        if parsed is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+
+    def _mt5_history_bounds(
+        self,
+        *,
+        date_from: Any | None,
+        date_to: Any | None,
+    ) -> tuple[datetime, datetime]:
+        end_at = self._coerce_utc_datetime(date_to) or datetime.now(timezone.utc)
+        start_at = self._coerce_utc_datetime(date_from) or (end_at - timedelta(days=30))
+        if start_at > end_at:
+            raise ValueError("date_from must be less than or equal to date_to.")
+        return start_at, end_at
+
+    @staticmethod
+    def _normalize_transaction_type(value: str | None = None) -> str:
+        normalized = str(value or "all").strip().lower()
+        if not normalized:
+            return "all"
+        if normalized not in {"all", "order", "deal", "manual", "desk"}:
+            raise ValueError("type must be one of: all, order, deal, manual, desk.")
+        return normalized
+
+    @staticmethod
+    def _normalize_sort(value: str | None = None) -> str:
+        normalized = str(value or "time_desc").strip().lower()
+        if normalized in {"desc", "time_desc"}:
+            return "time_desc"
+        if normalized in {"asc", "time_asc"}:
+            return "time_asc"
+        raise ValueError("sort must be one of: time_desc, time_asc.")
+
+    def _mt5_order_history_rows(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+        date_from: Any | None = None,
+        date_to: Any | None = None,
+        symbol: str | None = None,
+    ) -> list[dict[str, Any]]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        start_at, end_at = self._mt5_history_bounds(date_from=date_from, date_to=date_to)
+        symbol_filter = str(symbol or "").strip().upper()
+        with self.runtime._mt5_gateway(account_id=account_id) as live:
+            rows = [
+                item.to_dict()
+                for item in live.order_history(
+                    date_from=start_at,
+                    date_to=end_at,
+                    symbols=[symbol_filter] if symbol_filter else None,
+                )
+            ]
+        filtered: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            if symbol_filter and str(item.get("symbol") or "").strip().upper() != symbol_filter:
+                continue
+            event_time = self._coerce_utc_datetime(item.get("time_done_utc") or item.get("time_setup_utc"))
+            if event_time is not None and (event_time < start_at or event_time > end_at):
+                continue
+            item["portfolio_slug"] = portfolio["slug"]
+            filtered.append(item)
+        filtered.sort(
+            key=lambda item: (
+                self._coerce_utc_datetime(item.get("time_done_utc") or item.get("time_setup_utc")) or datetime.min.replace(tzinfo=timezone.utc),
+                int(item.get("ticket") or 0),
+            ),
+            reverse=True,
+        )
+        return filtered
+
+    def _mt5_deal_history_rows(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+        date_from: Any | None = None,
+        date_to: Any | None = None,
+        symbol: str | None = None,
+    ) -> list[dict[str, Any]]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        start_at, end_at = self._mt5_history_bounds(date_from=date_from, date_to=date_to)
+        symbol_filter = str(symbol or "").strip().upper()
+        with self.runtime._mt5_gateway(account_id=account_id) as live:
+            rows = [
+                item.to_dict()
+                for item in live.deal_history(
+                    date_from=start_at,
+                    date_to=end_at,
+                    symbols=[symbol_filter] if symbol_filter else None,
+                )
+            ]
+        filtered: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            if symbol_filter and str(item.get("symbol") or "").strip().upper() != symbol_filter:
+                continue
+            event_time = self._coerce_utc_datetime(item.get("time_utc"))
+            if event_time is not None and (event_time < start_at or event_time > end_at):
+                continue
+            item["portfolio_slug"] = portfolio["slug"]
+            filtered.append(item)
+        filtered.sort(
+            key=lambda item: (
+                self._coerce_utc_datetime(item.get("time_utc")) or datetime.min.replace(tzinfo=timezone.utc),
+                int(item.get("ticket") or 0),
+            ),
+            reverse=True,
+        )
+        return filtered
+
     def mt5_live_state(
         self,
         *,
@@ -823,12 +942,18 @@ class DeskApiService:
         portfolio_slug: str | None = None,
         limit: int = 100,
         account_id: str | None = None,
+        date_from: Any | None = None,
+        date_to: Any | None = None,
+        symbol: str | None = None,
     ) -> list[dict[str, Any]]:
-        live_state = self.mt5.live_state(portfolio_slug=portfolio_slug, account_id=account_id)
-        live_orders = list(live_state.get("order_history") or [])
-        if live_orders:
-            return live_orders[: max(int(limit), 1)]
-        return self.market.mt5_order_history(portfolio_slug=portfolio_slug, limit=limit)
+        rows = self._mt5_order_history_rows(
+            portfolio_slug=portfolio_slug,
+            account_id=account_id,
+            date_from=date_from,
+            date_to=date_to,
+            symbol=symbol,
+        )
+        return rows[: max(int(limit), 1)]
 
     def mt5_history_deals(
         self,
@@ -836,12 +961,240 @@ class DeskApiService:
         portfolio_slug: str | None = None,
         limit: int = 100,
         account_id: str | None = None,
+        date_from: Any | None = None,
+        date_to: Any | None = None,
+        symbol: str | None = None,
     ) -> list[dict[str, Any]]:
-        live_state = self.mt5.live_state(portfolio_slug=portfolio_slug, account_id=account_id)
-        live_deals = list(live_state.get("deal_history") or [])
-        if live_deals:
-            return live_deals[: max(int(limit), 1)]
-        return self.market.mt5_deal_history(portfolio_slug=portfolio_slug, limit=limit)
+        rows = self._mt5_deal_history_rows(
+            portfolio_slug=portfolio_slug,
+            account_id=account_id,
+            date_from=date_from,
+            date_to=date_to,
+            symbol=symbol,
+        )
+        return rows[: max(int(limit), 1)]
+
+    def mt5_transaction_history(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+        date_from: Any | None = None,
+        date_to: Any | None = None,
+        symbol: str | None = None,
+        type: str | None = None,
+        sort: str = "time_desc",
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict[str, Any]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        type_filter = self._normalize_transaction_type(type)
+        sort_order = self._normalize_sort(sort)
+        normalized_page = max(int(page), 1)
+        normalized_page_size = min(max(int(page_size), 1), 200)
+        start_at, end_at = self._mt5_history_bounds(date_from=date_from, date_to=date_to)
+        symbol_filter = str(symbol or "").strip().upper() or None
+
+        needs_orders = type_filter in {"all", "order", "manual", "desk"}
+        needs_deals = type_filter in {"all", "deal", "manual", "desk"}
+        orders = (
+            self._mt5_order_history_rows(
+                portfolio_slug=portfolio["slug"],
+                account_id=resolved_account_id,
+                date_from=start_at,
+                date_to=end_at,
+                symbol=symbol_filter,
+            )
+            if needs_orders
+            else []
+        )
+        deals = (
+            self._mt5_deal_history_rows(
+                portfolio_slug=portfolio["slug"],
+                account_id=resolved_account_id,
+                date_from=start_at,
+                date_to=end_at,
+                symbol=symbol_filter,
+            )
+            if needs_deals
+            else []
+        )
+
+        transactions: list[dict[str, Any]] = []
+        for row in orders:
+            event_time = row.get("time_done_utc") or row.get("time_setup_utc")
+            item = {
+                "id": f"order:{row.get('ticket') or 'na'}:{event_time or 'na'}",
+                "kind": "order",
+                "ticket": row.get("ticket"),
+                "order_ticket": None,
+                "position_id": row.get("position_id"),
+                "symbol": str(row.get("symbol") or ""),
+                "side": row.get("side"),
+                "transaction_type": row.get("order_type"),
+                "state": row.get("state"),
+                "volume": self._float_or_none(row.get("volume_initial") if row.get("volume_initial") is not None else row.get("volume_current")),
+                "price": self._float_or_none(row.get("price_current") if row.get("price_current") is not None else row.get("price_open")),
+                "profit": None,
+                "commission": None,
+                "swap": None,
+                "fee": None,
+                "comment": row.get("comment"),
+                "is_manual": bool(row.get("is_manual")),
+                "time_utc": event_time,
+                "raw": dict(row.get("raw") or {}),
+            }
+            transactions.append(item)
+
+        for row in deals:
+            item = {
+                "id": f"deal:{row.get('ticket') or 'na'}:{row.get('time_utc') or 'na'}",
+                "kind": "deal",
+                "ticket": row.get("ticket"),
+                "order_ticket": row.get("order_ticket"),
+                "position_id": row.get("position_id"),
+                "symbol": str(row.get("symbol") or ""),
+                "side": row.get("side"),
+                "transaction_type": row.get("entry"),
+                "state": None,
+                "volume": self._float_or_none(row.get("volume")),
+                "price": self._float_or_none(row.get("price")),
+                "profit": self._float_or_none(row.get("profit")),
+                "commission": self._float_or_none(row.get("commission")),
+                "swap": self._float_or_none(row.get("swap")),
+                "fee": self._float_or_none(row.get("fee")),
+                "comment": row.get("comment"),
+                "is_manual": bool(row.get("is_manual")),
+                "time_utc": row.get("time_utc"),
+                "raw": dict(row.get("raw") or {}),
+            }
+            transactions.append(item)
+
+        if type_filter == "order":
+            transactions = [item for item in transactions if item["kind"] == "order"]
+        elif type_filter == "deal":
+            transactions = [item for item in transactions if item["kind"] == "deal"]
+        elif type_filter == "manual":
+            transactions = [item for item in transactions if bool(item.get("is_manual"))]
+        elif type_filter == "desk":
+            transactions = [item for item in transactions if not bool(item.get("is_manual"))]
+
+        transactions = [item for item in transactions if str(item.get("symbol") or "").strip()]
+        reverse = sort_order == "time_desc"
+        transactions.sort(
+            key=lambda item: (
+                self._coerce_utc_datetime(item.get("time_utc")) or datetime.min.replace(tzinfo=timezone.utc),
+                str(item.get("kind") or ""),
+                int(item.get("ticket") or 0),
+            ),
+            reverse=reverse,
+        )
+
+        total = len(transactions)
+        start_index = (normalized_page - 1) * normalized_page_size
+        end_index = start_index + normalized_page_size
+        page_items = transactions[start_index:end_index]
+
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "portfolio_slug": portfolio["slug"],
+            "account_id": resolved_account_id,
+            "filters": {
+                "date_from": start_at.isoformat(),
+                "date_to": end_at.isoformat(),
+                "symbol": symbol_filter,
+                "type": type_filter,
+            },
+            "sort": sort_order,
+            "page": normalized_page,
+            "page_size": normalized_page_size,
+            "total": total,
+            "has_next": end_index < total,
+            "items": page_items,
+        }
+
+    def mt5_transaction_history_csv(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+        date_from: Any | None = None,
+        date_to: Any | None = None,
+        symbol: str | None = None,
+        type: str | None = None,
+        sort: str = "time_desc",
+        max_rows: int = 5000,
+    ) -> tuple[str, str]:
+        rows_limit = min(max(int(max_rows), 1), 10000)
+        payload = self.mt5_transaction_history(
+            portfolio_slug=portfolio_slug,
+            account_id=account_id,
+            date_from=date_from,
+            date_to=date_to,
+            symbol=symbol,
+            type=type,
+            sort=sort,
+            page=1,
+            page_size=rows_limit,
+        )
+        items = list(payload.get("items") or [])
+        buffer = StringIO()
+        writer = csv.DictWriter(
+            buffer,
+            fieldnames=[
+                "time_utc",
+                "kind",
+                "symbol",
+                "ticket",
+                "order_ticket",
+                "position_id",
+                "side",
+                "transaction_type",
+                "state",
+                "volume",
+                "price",
+                "profit",
+                "commission",
+                "swap",
+                "fee",
+                "comment",
+                "is_manual",
+                "portfolio_slug",
+                "account_id",
+            ],
+        )
+        writer.writeheader()
+        for item in items:
+            writer.writerow(
+                {
+                    "time_utc": item.get("time_utc"),
+                    "kind": item.get("kind"),
+                    "symbol": item.get("symbol"),
+                    "ticket": item.get("ticket"),
+                    "order_ticket": item.get("order_ticket"),
+                    "position_id": item.get("position_id"),
+                    "side": item.get("side"),
+                    "transaction_type": item.get("transaction_type"),
+                    "state": item.get("state"),
+                    "volume": item.get("volume"),
+                    "price": item.get("price"),
+                    "profit": item.get("profit"),
+                    "commission": item.get("commission"),
+                    "swap": item.get("swap"),
+                    "fee": item.get("fee"),
+                    "comment": item.get("comment"),
+                    "is_manual": bool(item.get("is_manual")),
+                    "portfolio_slug": payload.get("portfolio_slug"),
+                    "account_id": payload.get("account_id"),
+                }
+            )
+        filename = (
+            f"mt5-transactions-"
+            f"{str(payload.get('portfolio_slug') or 'portfolio')}-"
+            f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.csv"
+        )
+        return filename, buffer.getvalue()
 
     def list_instruments(self, *, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
         return self.market.list_instruments(portfolio_slug=portfolio_slug)

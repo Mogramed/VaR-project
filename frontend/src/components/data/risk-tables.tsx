@@ -4,6 +4,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import type {
   AuditEventResponse, DealHistoryEntryResponse, ExecutionFillResponse, ExecutionResultResponse,
   HoldingSnapshotResponse, InstrumentDefinitionResponse, ModelComparisonRow, MT5PendingOrderResponse,
+  MT5TransactionHistoryEntryResponse,
   MT5PositionResponse, OrderHistoryEntryResponse, ReconciliationMismatchResponse, RiskDecisionResponse,
 } from "@/lib/api/types";
 import type { FlatAttributionRow, FlatCapitalRow } from "@/lib/view-models";
@@ -167,6 +168,22 @@ export function DealHistoryTable({ rows }: { rows: DealHistoryEntryResponse[] })
     { accessorKey: "profit", header: "Profit", cell: ({ row }) => formatCurrency(row.original.profit, 2) },
     { accessorKey: "is_manual", header: "Origin", cell: ({ row }) => <StatusBadge label={row.original.is_manual ? "Manual" : "Desk"} tone={row.original.is_manual ? "warning" : "success"} /> },
     { accessorKey: "time_utc", header: "Time", cell: ({ row }) => formatTimestamp(row.original.time_utc) },
+  ];
+  return <DataGrid data={rows} columns={cols} maxHeight="30rem" />;
+}
+
+export function MT5TransactionHistoryTable({ rows }: { rows: MT5TransactionHistoryEntryResponse[] }) {
+  const cols: ColumnDef<MT5TransactionHistoryEntryResponse>[] = [
+    { accessorKey: "time_utc", header: "Time", cell: ({ row }) => formatTimestamp(row.original.time_utc) },
+    { accessorKey: "kind", header: "Kind", cell: ({ row }) => <StatusBadge label={row.original.kind} tone={row.original.kind === "deal" ? "accent" : "neutral"} /> },
+    { accessorKey: "symbol", header: "Symbol", cell: ({ row }) => <span className="font-semibold text-[var(--color-text)]">{row.original.symbol}</span> },
+    { accessorKey: "side", header: "Side", cell: ({ row }) => row.original.side ? <StatusBadge label={row.original.side} tone={tone(row.original.side)} /> : "—" },
+    { accessorKey: "transaction_type", header: "Type", cell: ({ row }) => row.original.transaction_type ?? "—" },
+    { accessorKey: "ticket", header: "Ticket", cell: ({ row }) => <span className="mono">{row.original.ticket ?? "—"}</span> },
+    { accessorKey: "volume", header: "Volume", cell: ({ row }) => row.original.volume == null ? "—" : <span className="mono">{row.original.volume.toFixed(2)}</span> },
+    { accessorKey: "price", header: "Price", cell: ({ row }) => row.original.price == null ? "—" : <span className="mono">{row.original.price.toFixed(5)}</span> },
+    { accessorKey: "profit", header: "Profit", cell: ({ row }) => formatCurrency(row.original.profit, 2) },
+    { accessorKey: "is_manual", header: "Origin", cell: ({ row }) => <StatusBadge label={row.original.is_manual ? "Manual" : "Desk"} tone={row.original.is_manual ? "warning" : "success"} /> },
   ];
   return <DataGrid data={rows} columns={cols} maxHeight="30rem" />;
 }

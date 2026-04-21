@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import time
 
@@ -1257,6 +1257,138 @@ def test_api_exposes_mt5_market_sync_and_reconciliation(tmp_path: Path):
 
     snapshot = client.post("/snapshots/run", json={})
     assert snapshot.status_code == 200
+
+
+def test_api_mt5_transaction_history_supports_filters_pagination_and_csv(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    FakeMT5Connector.reset()
+
+    timestamp = int(datetime(2026, 3, 30, 9, 0, tzinfo=timezone.utc).timestamp())
+    FakeMT5Connector.order_history.append(
+        {
+            "ticket": 902,
+            "position_id": 2,
+            "symbol": "USDJPY",
+            "type": 1,
+            "state": 4,
+            "volume_initial": 0.07,
+            "volume_current": 0.00,
+            "price_open": 156.11,
+            "price_current": 156.07,
+            "comment": "var_risk_desk:auto",
+            "magic": 420001,
+            "time_setup": timestamp,
+            "time_done": timestamp + 60,
+        }
+    )
+    FakeMT5Connector.deal_history.append(
+        {
+            "ticket": 802,
+            "order": 902,
+            "position_id": 2,
+            "symbol": "USDJPY",
+            "type": 1,
+            "entry": 1,
+            "volume": 0.07,
+            "price": 156.08,
+            "profit": -4.5,
+            "commission": -0.3,
+            "swap": 0.0,
+            "fee": 0.0,
+            "reason": 0,
+            "comment": "var_risk_desk:auto",
+            "magic": 420001,
+            "time": timestamp + 60,
+        }
+    )
+
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True))
+
+    first_page = client.get("/mt5/history/transactions", params={"page_size": 1, "page": 1, "type": "all"})
+    assert first_page.status_code == 200
+    first_page_body = first_page.json()
+    assert first_page_body["total"] >= 4
+    assert len(first_page_body["items"]) == 1
+    assert first_page_body["has_next"] is True
+
+    second_page = client.get("/mt5/history/transactions", params={"page_size": 1, "page": 2, "type": "all"})
+    assert second_page.status_code == 200
+    second_page_body = second_page.json()
+    assert len(second_page_body["items"]) == 1
+    assert second_page_body["items"][0]["id"] != first_page_body["items"][0]["id"]
+
+    ascending = client.get("/mt5/history/transactions", params={"sort": "time_asc", "page_size": 200})
+    assert ascending.status_code == 200
+    ascending_items = ascending.json()["items"]
+    ascending_times = [
+        pd.to_datetime(item["time_utc"], utc=True)
+        for item in ascending_items
+        if item.get("time_utc")
+    ]
+    assert ascending_times == sorted(ascending_times)
+
+    orders_usdjpy = client.get("/mt5/history/orders", params={"symbol": "USDJPY", "limit": 20})
+    assert orders_usdjpy.status_code == 200
+    assert orders_usdjpy.json()
+    assert all(item["symbol"] == "USDJPY" for item in orders_usdjpy.json())
+
+    deals_usdjpy = client.get("/mt5/history/deals", params={"symbol": "USDJPY", "limit": 20})
+    assert deals_usdjpy.status_code == 200
+    assert deals_usdjpy.json()
+    assert all(item["symbol"] == "USDJPY" for item in deals_usdjpy.json())
+
+    deals_only = client.get("/mt5/history/transactions", params={"type": "deal", "symbol": "USDJPY"})
+    assert deals_only.status_code == 200
+    deals_only_body = deals_only.json()
+    assert deals_only_body["items"]
+    assert all(item["kind"] == "deal" for item in deals_only_body["items"])
+    assert all(item["symbol"] == "USDJPY" for item in deals_only_body["items"])
+
+    manual_only = client.get("/mt5/history/transactions", params={"type": "manual"})
+    assert manual_only.status_code == 200
+    assert manual_only.json()["items"]
+    assert all(item["is_manual"] is True for item in manual_only.json()["items"])
+
+    desk_only = client.get("/mt5/history/transactions", params={"type": "desk"})
+    assert desk_only.status_code == 200
+    assert desk_only.json()["items"]
+    assert all(item["is_manual"] is False for item in desk_only.json()["items"])
+
+    csv_response = client.get("/mt5/history/transactions/export", params={"symbol": "USDJPY", "max_rows": 10})
+    assert csv_response.status_code == 200
+    assert "text/csv" in csv_response.headers["content-type"]
+    assert "attachment; filename=" in csv_response.headers.get("content-disposition", "")
+    csv_text = csv_response.text
+    assert "kind,symbol,ticket" in csv_text
+    assert "USDJPY" in csv_text
+
+    invalid_type = client.get("/mt5/history/transactions", params={"type": "unsupported"})
+    assert invalid_type.status_code == 400
+    assert "type must be one of" in invalid_type.json()["detail"]
+
+    invalid_sort = client.get("/mt5/history/transactions", params={"sort": "invalid"})
+    assert invalid_sort.status_code == 400
+    assert "sort must be one of" in invalid_sort.json()["detail"]
+
+    invalid_window = client.get(
+        "/mt5/history/transactions",
+        params={"date_from": "2026-04-21T10:00:00Z", "date_to": "2026-04-20T10:00:00Z"},
+    )
+    assert invalid_window.status_code == 400
+    assert "date_from must be less than or equal to date_to" in invalid_window.json()["detail"]
+
+    invalid_order_window = client.get(
+        "/mt5/history/orders",
+        params={"date_from": "2026-04-21T10:00:00Z", "date_to": "2026-04-20T10:00:00Z"},
+    )
+    assert invalid_order_window.status_code == 400
+
+    invalid_deal_window = client.get(
+        "/mt5/history/deals",
+        params={"date_from": "2026-04-21T10:00:00Z", "date_to": "2026-04-20T10:00:00Z"},
+    )
+    assert invalid_deal_window.status_code == 400
 
 
 def test_live_state_backfills_market_data_without_manual_sync(tmp_path: Path):
