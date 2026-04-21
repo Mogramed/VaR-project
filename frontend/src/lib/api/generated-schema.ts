@@ -651,6 +651,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/market-data/sync/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Market Data Sync Runs */
+        get: operations["mt5_list_market_data_sync_runs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/instruments": {
         parameters: {
             query?: never;
@@ -2401,6 +2418,25 @@ export interface components {
             days?: number | null;
             /** Timeframes */
             timeframes?: string[] | null;
+        };
+        /** MarketDataSyncRunResponse */
+        MarketDataSyncRunResponse: {
+            /** Id */
+            id: number;
+            /** Portfolio Id */
+            portfolio_id?: number | null;
+            /** Portfolio Slug */
+            portfolio_slug?: string | null;
+            /** Mode */
+            mode: string;
+            /** Status */
+            status: string;
+            /** Synced At */
+            synced_at?: string | null;
+            /** Details */
+            details?: {
+                [key: string]: unknown;
+            };
         };
         /** MarketDataSyncStatusResponse */
         MarketDataSyncStatusResponse: {
@@ -4840,6 +4876,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MarketDataSyncStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mt5_list_market_data_sync_runs: {
+        parameters: {
+            query?: {
+                /** @description Portfolio slug. Defaults to active portfolio. */
+                portfolio_slug?: string | null;
+                /** @description Optional status filter. Repeat query param for multiple values (e.g. status=ok&status=incomplete). */
+                status?: string[] | null;
+                /** @description Maximum number of runs to return. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketDataSyncRunResponse"][];
                 };
             };
             /** @description Validation Error */
