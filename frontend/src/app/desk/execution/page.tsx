@@ -9,6 +9,8 @@ export default async function DeskExecutionPage({
   const query = await searchParams;
   const portfolioSlug =
     typeof query.portfolio === "string" ? query.portfolio : undefined;
+  const accountId =
+    typeof query.account === "string" ? query.account : undefined;
   const initialSymbol =
     typeof query.symbol === "string" && query.symbol.trim().length > 0
       ? query.symbol.toUpperCase()
@@ -27,14 +29,14 @@ export default async function DeskExecutionPage({
   const resolvedPortfolio = portfolioSlug ?? health.portfolio_slug;
 
   const [recentExecutions, recentFills] = await Promise.all([
-    api.recentExecutionResults(resolvedPortfolio, 12).catch(() => []),
-    api.recentExecutionFills(resolvedPortfolio, 12).catch(() => []),
+    api.recentExecutionResults(resolvedPortfolio, 12, accountId).catch(() => []),
+    api.recentExecutionFills(resolvedPortfolio, 12, accountId).catch(() => []),
   ]);
-  const status = await api.mt5Status();
+  const status = await api.mt5Status(accountId);
 
   return (
     <ExecutionLiveSurface
-      key={resolvedPortfolio}
+      key={`${resolvedPortfolio}:${accountId ?? "default"}`}
       portfolioSlug={resolvedPortfolio}
       initialTerminalStatus={status}
       initialExecutions={recentExecutions}

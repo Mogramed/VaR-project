@@ -512,19 +512,23 @@ class MT5ExecutionOrchestrator:
     def __init__(self, runtime: "DeskServiceRuntime"):
         self.runtime = runtime
 
-    def build_mt5_connector(self):
-        if self.runtime.mt5_config.agent_base_url:
-            return RemoteMT5Connector(self.runtime.mt5_config)
-        return self.runtime.mt5_connector_factory(self.runtime.mt5_config)
+    def build_mt5_connector(self, *, account_id: str | None = None):
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        config = self.runtime.mt5_config_for_account(resolved_account_id)
+        if config.agent_base_url:
+            return RemoteMT5Connector(config, account_id=resolved_account_id)
+        return self.runtime.mt5_connector_factory(config)
 
     @contextmanager
-    def mt5_gateway(self):
-        connector = self.build_mt5_connector()
+    def mt5_gateway(self, *, account_id: str | None = None):
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        config = self.runtime.mt5_config_for_account(resolved_account_id)
+        connector = self.build_mt5_connector(account_id=resolved_account_id)
         connector.init()
         try:
             yield MT5LiveGateway(
                 connector,
-                config=self.runtime.mt5_config,
+                config=config,
                 base_currency=self.runtime.portfolio["base_currency"],
             )
         finally:
@@ -624,7 +628,7 @@ class MT5ExecutionOrchestrator:
                 side=None,
                 volume_lots=0.0,
                 price=None,
-                execution_enabled=bool(self.runtime.mt5_config.execution_enabled),
+                execution_enabled=bool(live.config.execution_enabled),
                 submit_allowed=False,
                 margin_ok=False,
                 margin_required=None,
@@ -668,7 +672,7 @@ class MT5ExecutionOrchestrator:
             side=None if meta.get("side") is None else str(meta.get("side")),
             volume_lots=float(meta.get("volume_lots", 0.0)),
             price=None if meta.get("price") is None else float(meta.get("price")),
-            execution_enabled=bool(self.runtime.mt5_config.execution_enabled),
+            execution_enabled=bool(live.config.execution_enabled),
             submit_allowed=margin_ok and risk_decision != "REJECT" and terminal_status.ready,
             margin_ok=margin_ok,
             margin_required=None if order_check.get("margin") is None else float(order_check.get("margin")),
@@ -679,9 +683,11 @@ class MT5ExecutionOrchestrator:
         )
         return guard, order_request, order_check
 
-    def mt5_dependency(self) -> dict[str, Any]:
-        if self.runtime.mt5_config.agent_base_url:
-            target = str(self.runtime.mt5_config.agent_base_url)
+    def mt5_dependency(self, *, account_id: str | None = None) -> dict[str, Any]:
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        config = self.runtime.mt5_config_for_account(resolved_account_id)
+        if config.agent_base_url:
+            target = str(config.agent_base_url)
             try:
                 response = httpx.get(f"{target}/health", timeout=5.0)
                 response.raise_for_status()
@@ -693,6 +699,7 @@ class MT5ExecutionOrchestrator:
                     "schema_ready": None,
                     "detail": payload.get("agent_mode"),
                     "target": target,
+                    "account_id": resolved_account_id,
                 }
             except Exception as exc:  # pragma: no cover
                 return {
@@ -702,29 +709,39 @@ class MT5ExecutionOrchestrator:
                     "schema_ready": None,
                     "detail": str(exc),
                     "target": target,
+                    "account_id": resolved_account_id,
                 }
 
         return {
             "mode": "direct_terminal",
-            "configured": bool(self.runtime.mt5_config.path or self.runtime.mt5_config.login or self.runtime.mt5_config.server),
+            "configured": bool(config.path or config.login or config.server),
             "reachable": None,
             "schema_ready": None,
             "detail": "MT5 direct connector mode.",
-            "target": self.runtime.mt5_config.path,
+            "target": config.path,
+            "account_id": resolved_account_id,
         }
 
-    def mt5_live_dependency(self, portfolio_slug: str | None = None) -> dict[str, Any]:
-        target = self.runtime.mt5_config.agent_base_url
+    def mt5_live_dependency(
+        self,
+        portfolio_slug: str | None = None,
+        *,
+        account_id: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        config = self.runtime.mt5_config_for_account(resolved_account_id)
+        target = config.agent_base_url
         if not target:
             return {
                 "mode": "direct_terminal",
-                "configured": bool(self.runtime.mt5_config.path or self.runtime.mt5_config.login or self.runtime.mt5_config.server),
+                "configured": bool(config.path or config.login or config.server),
                 "reachable": None,
                 "schema_ready": None,
                 "detail": "Live bridge is only available through the remote MT5 agent.",
-                "target": self.runtime.mt5_config.path,
+                "target": config.path,
+                "account_id": resolved_account_id,
             }
-        connector = self.build_mt5_connector()
+        connector = self.build_mt5_connector(account_id=resolved_account_id)
         try:
             connector.init()
             if hasattr(connector, "live_state"):
@@ -740,6 +757,7 @@ class MT5ExecutionOrchestrator:
                     "generated_at": state.get("generated_at"),
                     "stale": bool(state.get("stale", False)),
                     "degraded": bool(state.get("degraded", False)),
+                    "account_id": resolved_account_id,
                 }
             return {
                 "mode": "remote_agent_live_bridge",
@@ -748,6 +766,7 @@ class MT5ExecutionOrchestrator:
                 "schema_ready": None,
                 "detail": "Remote connector does not expose a live bridge contract.",
                 "target": target,
+                "account_id": resolved_account_id,
             }
         except Exception as exc:  # pragma: no cover
             return {
@@ -757,6 +776,7 @@ class MT5ExecutionOrchestrator:
                 "schema_ready": None,
                 "detail": str(exc),
                 "target": target,
+                "account_id": resolved_account_id,
             }
         finally:
             try:

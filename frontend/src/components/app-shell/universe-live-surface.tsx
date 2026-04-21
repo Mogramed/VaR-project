@@ -35,7 +35,7 @@ export function UniverseLiveSurface({
   initialMarketStatus: MarketDataSyncStatusResponse | null;
   initialMt5Status: MT5TerminalStatusResponse | null;
 }) {
-  const { liveState, transport } = useDeskLive();
+  const { liveState, transport, accountId } = useDeskLive();
   const instrumentsQuery = useQuery({
     queryKey: deskArtifactQueryKey("universe", "instruments", portfolioSlug),
     queryFn: () => api.instruments(portfolioSlug),
@@ -49,8 +49,8 @@ export function UniverseLiveSurface({
     ...deskArtifactQueryOptions,
   });
   const mt5StatusQuery = useQuery({
-    queryKey: deskArtifactQueryKey("universe", "mt5-status", portfolioSlug),
-    queryFn: () => api.mt5Status(),
+    queryKey: deskArtifactQueryKey("universe", "mt5-status", portfolioSlug, accountId ?? "default"),
+    queryFn: () => api.mt5Status(accountId),
     initialData: initialMt5Status,
     ...deskArtifactQueryOptions,
   });

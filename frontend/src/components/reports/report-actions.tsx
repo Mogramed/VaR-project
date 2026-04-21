@@ -13,11 +13,12 @@ export function ReportActions({
   portfolioSlug?: string;
   onGenerated?: (result: ReportRunResponse) => void | Promise<void>;
 }) {
-  const { notifyOperatorRunCompleted } = useDeskLive();
+  const { notifyOperatorRunCompleted, accountId } = useDeskLive();
   const operatorRun = useOperatorRunAction({
     action: "report",
     portfolioSlug,
-    enqueue: async (payload: { portfolio_slug?: string }) => api.enqueueOperatorReport(payload),
+    accountId,
+    enqueue: async (payload: { portfolio_slug?: string; account_id?: string }) => api.enqueueOperatorReport(payload),
     onSucceeded: async (run) => {
       notifyOperatorRunCompleted(run);
       const report = (run.result?.report ?? {}) as ReportRunResponse;
@@ -26,14 +27,16 @@ export function ReportActions({
   });
 
   const pdfUrl = portfolioSlug
-    ? `/api/reports/pdf?portfolio=${encodeURIComponent(portfolioSlug)}`
+    ? accountId
+      ? `/api/reports/pdf?portfolio=${encodeURIComponent(portfolioSlug)}&account=${encodeURIComponent(accountId)}`
+      : `/api/reports/pdf?portfolio=${encodeURIComponent(portfolioSlug)}`
     : "/api/reports/pdf";
 
   return (
     <div className="flex items-center gap-2 print:hidden">
       <button
         type="button"
-        onClick={() => operatorRun.execute({ portfolio_slug: portfolioSlug })}
+        onClick={() => operatorRun.execute({ portfolio_slug: portfolioSlug, account_id: accountId })}
         disabled={operatorRun.pending}
         className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2.5 text-[11px] font-medium text-[var(--color-text-soft)] transition-colors hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)] disabled:opacity-50"
       >

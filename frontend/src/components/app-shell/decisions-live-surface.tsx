@@ -24,12 +24,12 @@ import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
 export function DecisionsLiveSurface({
   portfolioSlug, initialDecisions,
 }: { portfolioSlug: string; initialDecisions: RiskDecisionResponse[] }) {
-  const { liveState, transport } = useDeskLive();
+  const { liveState, transport, accountId } = useDeskLive();
   const queryClient = useQueryClient();
-  const decisionsQueryKey = deskArtifactQueryKey("decisions", portfolioSlug, 12);
+  const decisionsQueryKey = deskArtifactQueryKey("decisions", portfolioSlug, accountId ?? "default", 12);
   const decisionsQuery = useQuery({
     queryKey: decisionsQueryKey,
-    queryFn: () => api.recentDecisions(portfolioSlug, 12),
+    queryFn: () => api.recentDecisions(portfolioSlug, 12, accountId),
     initialData: initialDecisions,
     ...deskArtifactQueryOptions,
   });
@@ -63,6 +63,7 @@ export function DecisionsLiveSurface({
       <LiveOperatorAlerts alerts={liveState?.operator_alerts ?? []} />
       <TradeDecisionPanel
         portfolioSlug={portfolioSlug}
+        accountId={accountId}
         onEvaluated={(result) => {
           queryClient.setQueryData<RiskDecisionResponse[]>(
             decisionsQueryKey,

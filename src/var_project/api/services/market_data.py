@@ -405,6 +405,7 @@ class DeskMarketDataService:
         self,
         *,
         portfolio_slug: str | None = None,
+        account_id: str | None = None,
         max_age_seconds: float = 900.0,
         days: int | None = None,
         timeframes: Iterable[str] | None = None,
@@ -432,6 +433,7 @@ class DeskMarketDataService:
 
         return self.sync_market_data(
             portfolio_slug=portfolio["slug"],
+            account_id=account_id,
             days=days,
             timeframes=timeframes,
         )
@@ -695,11 +697,13 @@ class DeskMarketDataService:
         self,
         *,
         portfolio_slug: str | None = None,
+        account_id: str | None = None,
         days: int | None = None,
         timeframes: Iterable[str] | None = None,
     ) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
         self._invalidate_market_status_cache(portfolio_slug=portfolio["slug"])
         if not self.should_use_mt5_market_data(portfolio):
             if self.runtime.strict_live_required(portfolio):
@@ -741,6 +745,7 @@ class DeskMarketDataService:
                 "retention_tiers": timeframe_days,
                 "market_closed": market_closed,
                 "sync_strategy": "incremental",
+                "account_id": resolved_account_id,
             },
         )
 
@@ -756,7 +761,7 @@ class DeskMarketDataService:
         fatal_exception: Exception | None = None
 
         try:
-            with self.runtime._mt5_gateway() as live:
+            with self.runtime._mt5_gateway(account_id=resolved_account_id) as live:
                 open_positions = [item.to_dict() for item in live.holdings(symbols=None)]
                 pending_orders = [item.to_dict() for item in live.pending_orders(symbols=None)]
                 date_from = started_at - timedelta(days=history_reconciliation_days)

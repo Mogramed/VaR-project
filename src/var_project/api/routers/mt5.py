@@ -17,6 +17,7 @@ from var_project.api.schemas import (
     MarketDataSyncRequest,
     MarketDataSyncStatusResponse,
     MT5AccountSnapshotResponse,
+    MT5AccountsResponse,
     MT5AnalyticsSeriesResponse,
     MT5LiveEventResponse,
     MT5LiveStateResponse,
@@ -48,6 +49,7 @@ def _build_live_state_etag(payload: Mapping[str, object], *, detail_level: str) 
         {
             "detail_level": str(detail_level),
             "portfolio_slug": payload.get("portfolio_slug"),
+            "account_id": payload.get("account_id"),
             "sequence": int(payload.get("sequence") or 0),
             "generated_at": payload.get("generated_at"),
             "last_success_at": payload.get("last_success_at"),
@@ -129,11 +131,17 @@ def _build_stream_error_payload(
     sequence: int,
     service: DeskApiService,
     portfolio: dict[str, object],
+    account_id: str | None,
     error: Exception,
 ) -> dict[str, object]:
     detail = str(error)
+    try:
+        resolved_account_id = service.runtime.resolve_mt5_account_id(account_id)
+    except ValueError:
+        resolved_account_id = service.runtime.resolve_mt5_account_id(None)
+    account_config = service.runtime.mt5_config_for_account(resolved_account_id)
     degraded_state = build_empty_live_state(
-        config=service.runtime.mt5_config,
+        config=account_config,
         seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
         status="degraded",
         connected=False,
@@ -141,6 +149,7 @@ def _build_stream_error_payload(
         stale=True,
         last_error=detail,
     )
+    degraded_state["account_id"] = resolved_account_id
     degraded_state["portfolio_slug"] = portfolio["slug"]
     degraded_state["portfolio_mode"] = portfolio.get("mode")
     degraded_state["generated_at"] = datetime.now(timezone.utc).isoformat()
@@ -175,24 +184,91 @@ def iter_mt5_live_stream(
     *,
     portfolio_slug: str | None = None,
     detail_level: Literal["summary", "full", "inspector"] = "full",
+    account_id: str | None = None,
     after: int = 0,
     emit_bootstrap: bool = False,
 ):
     sequence = max(int(after), 0)
     consecutive_failures = 0
     portfolio = service.runtime._resolve_portfolio_context(portfolio_slug)
+
+    def _call_live_state() -> dict[str, object]:
+        call_kwargs: dict[str, object] = {
+            "portfolio_slug": portfolio_slug,
+            "detail_level": detail_level,
+        }
+        if account_id not in {None, "", "null"}:
+            call_kwargs["account_id"] = account_id
+        try:
+            return service.mt5_live_state(**call_kwargs)
+        except TypeError as exc:
+            message = str(exc)
+            if "detail_level" not in message and "account_id" not in message:
+                raise
+            if "detail_level" in message and "account_id" in message:
+                return service.mt5_live_state(portfolio_slug=portfolio_slug)
+            if "detail_level" in message:
+                if "account_id" in call_kwargs:
+                    return service.mt5_live_state(
+                        portfolio_slug=portfolio_slug,
+                        account_id=account_id,
+                    )
+                return service.mt5_live_state(portfolio_slug=portfolio_slug)
+            return service.mt5_live_state(
+                portfolio_slug=portfolio_slug,
+                detail_level=detail_level,
+            )
+
+    def _call_live_events() -> list[dict[str, object]]:
+        call_kwargs: dict[str, object] = {
+            "portfolio_slug": portfolio_slug,
+            "after": sequence,
+            "limit": 100,
+            "wait_seconds": MT5_LIVE_STREAM_WAIT_SECONDS,
+            "detail_level": detail_level,
+        }
+        if account_id not in {None, "", "null"}:
+            call_kwargs["account_id"] = account_id
+        try:
+            return service.mt5_live_events(**call_kwargs)
+        except TypeError as exc:
+            message = str(exc)
+            if "detail_level" not in message and "account_id" not in message:
+                raise
+            if "detail_level" in message and "account_id" in message:
+                return service.mt5_live_events(
+                    portfolio_slug=portfolio_slug,
+                    after=sequence,
+                    limit=100,
+                    wait_seconds=MT5_LIVE_STREAM_WAIT_SECONDS,
+                )
+            if "detail_level" in message:
+                if "account_id" in call_kwargs:
+                    return service.mt5_live_events(
+                        portfolio_slug=portfolio_slug,
+                        after=sequence,
+                        limit=100,
+                        wait_seconds=MT5_LIVE_STREAM_WAIT_SECONDS,
+                        account_id=account_id,
+                    )
+                return service.mt5_live_events(
+                    portfolio_slug=portfolio_slug,
+                    after=sequence,
+                    limit=100,
+                    wait_seconds=MT5_LIVE_STREAM_WAIT_SECONDS,
+                )
+            return service.mt5_live_events(
+                portfolio_slug=portfolio_slug,
+                after=sequence,
+                limit=100,
+                wait_seconds=MT5_LIVE_STREAM_WAIT_SECONDS,
+                detail_level=detail_level,
+            )
+
     yield f"retry: {MT5_LIVE_STREAM_RETRY_MS}\n\n"
     if emit_bootstrap:
         try:
-            try:
-                state = service.mt5_live_state(
-                    portfolio_slug=portfolio_slug,
-                    detail_level=detail_level,
-                )
-            except TypeError as exc:
-                if "detail_level" not in str(exc):
-                    raise
-                state = service.mt5_live_state(portfolio_slug=portfolio_slug)
+            state = _call_live_state()
             bootstrap_sequence = max(sequence + 1, int(state.get("sequence") or 0))
             state = dict(state)
             state["sequence"] = bootstrap_sequence
@@ -214,6 +290,7 @@ def iter_mt5_live_stream(
                 sequence=sequence,
                 service=service,
                 portfolio=portfolio,
+                account_id=account_id,
                 error=exc,
             )
             yield (
@@ -222,29 +299,14 @@ def iter_mt5_live_stream(
             )
     while True:
         try:
-            try:
-                events = service.mt5_live_events(
-                    portfolio_slug=portfolio_slug,
-                    after=sequence,
-                    limit=100,
-                    wait_seconds=MT5_LIVE_STREAM_WAIT_SECONDS,
-                    detail_level=detail_level,
-                )
-            except TypeError as exc:
-                if "detail_level" not in str(exc):
-                    raise
-                events = service.mt5_live_events(
-                    portfolio_slug=portfolio_slug,
-                    after=sequence,
-                    limit=100,
-                    wait_seconds=MT5_LIVE_STREAM_WAIT_SECONDS,
-                )
+            events = _call_live_events()
         except Exception as exc:
             sequence += 1
             payload = _build_stream_error_payload(
                 sequence=sequence,
                 service=service,
                 portfolio=portfolio,
+                account_id=account_id,
                 error=exc,
             )
             yield (
@@ -271,26 +333,45 @@ def iter_mt5_live_stream(
 
 
 @router.get("/mt5/status", response_model=MT5TerminalStatusResponse)
-def mt5_status(service: DeskApiService = Depends(get_service)) -> MT5TerminalStatusResponse:
-    return MT5TerminalStatusResponse.model_validate(service.mt5_status())
+def mt5_status(
+    account_id: str | None = Query(default=None),
+    service: DeskApiService = Depends(get_service),
+) -> MT5TerminalStatusResponse:
+    try:
+        payload = service.mt5_status(account_id=account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return MT5TerminalStatusResponse.model_validate(payload)
 
 
 @router.get("/mt5/account", response_model=MT5AccountSnapshotResponse)
-def mt5_account(service: DeskApiService = Depends(get_service)) -> MT5AccountSnapshotResponse:
+def mt5_account(
+    account_id: str | None = Query(default=None),
+    service: DeskApiService = Depends(get_service),
+) -> MT5AccountSnapshotResponse:
     try:
-        payload = service.mt5_account()
+        payload = service.mt5_account(account_id=account_id)
     except MT5ConnectionError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return MT5AccountSnapshotResponse.model_validate(payload)
+
+
+@router.get("/mt5/accounts", response_model=MT5AccountsResponse)
+def mt5_accounts(service: DeskApiService = Depends(get_service)) -> MT5AccountsResponse:
+    payload = service.mt5_accounts()
+    return MT5AccountsResponse.model_validate(payload)
 
 
 @router.get("/mt5/positions", response_model=list[MT5PositionResponse])
 def mt5_positions(
     portfolio_slug: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> list[MT5PositionResponse]:
     try:
-        payload = service.mt5_positions(portfolio_slug=portfolio_slug)
+        payload = service.mt5_positions(portfolio_slug=portfolio_slug, account_id=account_id)
     except MT5ConnectionError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
@@ -301,10 +382,11 @@ def mt5_positions(
 @router.get("/mt5/orders", response_model=list[MT5PendingOrderResponse])
 def mt5_orders(
     portfolio_slug: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> list[MT5PendingOrderResponse]:
     try:
-        payload = service.mt5_orders(portfolio_slug=portfolio_slug)
+        payload = service.mt5_orders(portfolio_slug=portfolio_slug, account_id=account_id)
     except MT5ConnectionError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
@@ -316,6 +398,7 @@ def mt5_orders(
 def mt5_live_state(
     response: Response,
     portfolio_slug: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
     detail_level: Literal["summary", "full", "inspector"] = Query(default="full"),
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
     service: DeskApiService = Depends(get_service),
@@ -325,6 +408,7 @@ def mt5_live_state(
         payload = service.mt5_live_state(
             portfolio_slug=portfolio_slug,
             detail_level=effective_detail_level,
+            account_id=account_id,
         )
     except MT5ConnectionError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -344,6 +428,7 @@ def mt5_live_state(
 @router.get("/mt5/analytics/series", response_model=MT5AnalyticsSeriesResponse)
 def mt5_analytics_series(
     portfolio_slug: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
     window_minutes: int = Query(default=240, ge=15, le=10080),
     max_points: int = Query(default=300, ge=50, le=2000),
     service: DeskApiService = Depends(get_service),
@@ -353,6 +438,7 @@ def mt5_analytics_series(
             portfolio_slug=portfolio_slug,
             window_minutes=window_minutes,
             max_points=max_points,
+            account_id=account_id,
         )
     except MT5ConnectionError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -364,6 +450,7 @@ def mt5_analytics_series(
 @router.get("/mt5/live/events", response_model=list[MT5LiveEventResponse])
 def mt5_live_events(
     portfolio_slug: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
     after: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
     wait_seconds: float = Query(default=15.0, ge=0.0, le=60.0),
@@ -378,6 +465,7 @@ def mt5_live_events(
             limit=limit,
             wait_seconds=wait_seconds,
             detail_level=effective_detail_level,
+            account_id=account_id,
         )
     except MT5ConnectionError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -389,6 +477,7 @@ def mt5_live_events(
 @router.get("/mt5/live/stream")
 def mt5_live_stream(
     portfolio_slug: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
     detail_level: Literal["summary", "full", "inspector"] = Query(default="full"),
     after: int | None = Query(default=None, ge=0),
     bootstrap: bool = Query(default=True),
@@ -398,6 +487,7 @@ def mt5_live_stream(
     effective_detail_level = _effective_detail_level(detail_level)
     try:
         service.runtime._resolve_portfolio_context(portfolio_slug)
+        service.runtime.resolve_mt5_account_id(account_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     resume_after = _resolve_stream_after_sequence(after=after, last_event_id=last_event_id)
@@ -406,6 +496,7 @@ def mt5_live_stream(
             service,
             portfolio_slug=portfolio_slug,
             detail_level=effective_detail_level,
+            account_id=account_id,
             after=resume_after,
             emit_bootstrap=bool(bootstrap),
         ),
@@ -422,10 +513,11 @@ def mt5_live_stream(
 def mt5_history_orders(
     limit: int = Query(default=100, ge=1, le=500),
     portfolio_slug: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> list[OrderHistoryEntryResponse]:
     try:
-        payload = service.mt5_history_orders(portfolio_slug=portfolio_slug, limit=limit)
+        payload = service.mt5_history_orders(portfolio_slug=portfolio_slug, limit=limit, account_id=account_id)
     except MT5ConnectionError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
@@ -437,10 +529,11 @@ def mt5_history_orders(
 def mt5_history_deals(
     limit: int = Query(default=100, ge=1, le=500),
     portfolio_slug: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> list[DealHistoryEntryResponse]:
     try:
-        payload = service.mt5_history_deals(portfolio_slug=portfolio_slug, limit=limit)
+        payload = service.mt5_history_deals(portfolio_slug=portfolio_slug, limit=limit, account_id=account_id)
     except MT5ConnectionError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:

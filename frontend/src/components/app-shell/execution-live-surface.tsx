@@ -24,9 +24,15 @@ export function ExecutionLiveSurface({
   initialExposureChange?: number | null;
   initialSide?: "buy" | "sell";
 }) {
-  const { liveState, transport } = useDeskLive();
+  const { liveState, transport, accountId } = useDeskLive();
   const { executions, fills, pushExecutionResult } = useRecentExecutionActivity({
-    portfolioSlug, initialExecutions, initialFills, liveSequence: liveState?.sequence, executionLimit: 12, fillLimit: 12,
+    portfolioSlug,
+    accountId,
+    initialExecutions,
+    initialFills,
+    liveSequence: liveState?.sequence,
+    executionLimit: 12,
+    fillLimit: 12,
   });
   const status = liveState?.terminal_status ?? initialTerminalStatus;
   const executedCount = executions.filter((i) => ["EXECUTED", "PLACED"].includes(i.status)).length;
@@ -53,6 +59,7 @@ export function ExecutionLiveSurface({
       <LiveOperatorAlerts alerts={liveState?.operator_alerts ?? []} title="Execution alerts" />
       <ExecutionPanel
         portfolioSlug={portfolioSlug}
+        accountId={accountId}
         terminalStatus={status}
         onSubmitted={pushExecutionResult}
         initialSymbol={initialSymbol}

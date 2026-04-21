@@ -35,6 +35,7 @@ const executionPresets = ["250000", "500000", "1000000", "2500000"];
 
 export function ExecutionPanel({
   portfolioSlug,
+  accountId,
   terminalStatus,
   onSubmitted,
   initialSymbol,
@@ -42,6 +43,7 @@ export function ExecutionPanel({
   initialSide,
 }: {
   portfolioSlug: string;
+  accountId?: string;
   terminalStatus: MT5TerminalStatusResponse;
   onSubmitted?: (result: ExecutionResultResponse) => void;
   initialSymbol?: string;
@@ -79,6 +81,7 @@ export function ExecutionPanel({
     mutationFn: async () =>
       api.previewExecution({
         portfolio_slug: portfolioSlug,
+        account_id: accountId,
         symbol,
         exposure_change: (side === "buy" ? 1 : -1) * Number(exposureChange),
         note,
@@ -89,6 +92,7 @@ export function ExecutionPanel({
     mutationFn: async () =>
       api.submitExecution({
         portfolio_slug: portfolioSlug,
+        account_id: accountId,
         symbol,
         exposure_change: (side === "buy" ? 1 : -1) * Number(exposureChange),
         note,

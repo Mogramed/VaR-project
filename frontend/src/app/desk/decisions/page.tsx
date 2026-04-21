@@ -9,14 +9,16 @@ export default async function DeskDecisionsPage({
   const query = await searchParams;
   const portfolioSlug =
     typeof query.portfolio === "string" ? query.portfolio : undefined;
+  const accountId =
+    typeof query.account === "string" ? query.account : undefined;
   const health = await api.safeHealth();
   const resolvedPortfolio = portfolioSlug ?? health.portfolio_slug;
 
-  const decisions = await api.recentDecisions(resolvedPortfolio, 12).catch(() => []);
+  const decisions = await api.recentDecisions(resolvedPortfolio, 12, accountId).catch(() => []);
 
   return (
     <DecisionsLiveSurface
-      key={resolvedPortfolio}
+      key={`${resolvedPortfolio}:${accountId ?? "default"}`}
       portfolioSlug={resolvedPortfolio}
       initialDecisions={decisions}
     />

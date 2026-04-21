@@ -257,6 +257,7 @@ def interrupt_operator_run(
 @router.get("/operator/runs", response_model=list[OperatorRunResponse])
 def operator_runs(
     portfolio_slug: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
     action: str | None = Query(default=None),
     status_filter: list[str] | None = Query(default=None, alias="status"),
     status_reason_filter: list[str] | None = Query(default=None, alias="status_reason"),
@@ -267,6 +268,7 @@ def operator_runs(
     try:
         runs = service.operator_runs(
             portfolio_slug=portfolio_slug,
+            account_id=account_id,
             action=action,
             statuses=status_filter,
             status_reasons=status_reason_filter,

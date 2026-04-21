@@ -27,9 +27,11 @@ class RemoteMT5Connector:
         self,
         config: MT5Config,
         *,
+        account_id: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.config = config
+        self.account_id = None if account_id in {None, "", "null"} else str(account_id).strip()
         self.transport = transport
         self._client: httpx.Client | None = None
         self._initialized = False
@@ -293,12 +295,16 @@ class RemoteMT5Connector:
     ) -> Any:
         if not self._initialized or self._client is None:
             raise MT5ConnectionError("Remote MT5 connector not initialized.")
+        request_params = dict(params or {})
+        if self.account_id not in {None, ""} and "account_id" not in request_params:
+            request_params["account_id"] = str(self.account_id)
+        effective_params = request_params or None
         configured_attempts = max(int(getattr(self.config, "reconnect_attempts", 2) or 2), 1)
         max_attempts = configured_attempts if allow_retry else 1
         backoff_seconds = max(float(getattr(self.config, "reconnect_backoff_seconds", 0.25) or 0.0), 0.0)
         for attempt in range(max_attempts):
             try:
-                response = self._client.request(method, path, params=params, json=json, timeout=timeout)
+                response = self._client.request(method, path, params=effective_params, json=json, timeout=timeout)
             except httpx.HTTPError as exc:
                 can_retry = bool(allow_retry) and self._is_retryable_http_error(exc)
                 if can_retry and attempt < (max_attempts - 1):

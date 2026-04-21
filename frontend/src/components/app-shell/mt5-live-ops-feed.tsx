@@ -117,7 +117,7 @@ function coerceNumber(value: unknown): number | null {
 }
 
 export function Mt5LiveOpsFeed() {
-  const { liveState, heartbeatAt, transport } = useDeskLive();
+  const { liveState, heartbeatAt, transport, accountId } = useDeskLive();
   const ls = liveState;
   const [analyticsPoints, setAnalyticsPoints] = useState<AnalyticsPoint[]>([]);
   const analyticsRefreshMs = Math.max(
@@ -136,6 +136,7 @@ export function Mt5LiveOpsFeed() {
         const payload = await api.mt5AnalyticsSeries(activePortfolioSlug, {
           windowMinutes: 240,
           maxPoints: 240,
+          accountId,
         });
         if (!cancelled) {
           startTransition(() => {
@@ -158,7 +159,7 @@ export function Mt5LiveOpsFeed() {
       cancelled = true;
       if (timer != null) window.clearTimeout(timer);
     };
-  }, [analyticsRefreshMs, ls?.portfolio_slug]);
+  }, [accountId, analyticsRefreshMs, ls?.portfolio_slug]);
 
   if (ls == null) {
     return (

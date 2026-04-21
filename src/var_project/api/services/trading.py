@@ -17,6 +17,7 @@ class DeskTradingService:
         delta_position_eur: float | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)

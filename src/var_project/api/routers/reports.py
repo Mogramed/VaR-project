@@ -22,11 +22,17 @@ router = APIRouter(tags=["reports"])
 @router.post("/reports/run", response_model=ReportRunResponse)
 def run_report(payload: RunReportRequest, service: DeskApiService = Depends(get_service)) -> ReportRunResponse:
     try:
-        result = service.run_report(compare_path=payload.compare_path, portfolio_slug=payload.portfolio_slug)
+        result = service.run_report(
+            compare_path=payload.compare_path,
+            portfolio_slug=payload.portfolio_slug,
+            account_id=payload.account_id,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ReportRunResponse.model_validate(result)
 
 
@@ -34,9 +40,13 @@ def run_report(payload: RunReportRequest, service: DeskApiService = Depends(get_
 def latest_report(
     portfolio_slug: str | None = Query(default=None),
     report_id: int | None = Query(default=None, ge=1),
+    account_id: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> ReportContentResponse:
-    report = service.latest_report_content(portfolio_slug=portfolio_slug, report_id=report_id)
+    try:
+        report = service.latest_report_content(portfolio_slug=portfolio_slug, report_id=report_id, account_id=account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if report is None:
         raise HTTPException(status_code=404, detail="No report found.")
     return ReportContentResponse.model_validate(report)
@@ -47,9 +57,13 @@ def latest_report_chart(
     chart_name: str,
     portfolio_slug: str | None = Query(default=None),
     report_id: int | None = Query(default=None, ge=1),
+    account_id: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> FileResponse:
-    report = service.latest_report_content(portfolio_slug=portfolio_slug, report_id=report_id)
+    try:
+        report = service.latest_report_content(portfolio_slug=portfolio_slug, report_id=report_id, account_id=account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if report is None:
         raise HTTPException(status_code=404, detail="No report found.")
 
@@ -77,12 +91,14 @@ def latest_report_chart(
 def report_decision_history(
     limit: int = Query(default=25, ge=1, le=200),
     portfolio_slug: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> list[RiskDecisionResponse]:
-    return [
-        RiskDecisionResponse.model_validate(item)
-        for item in service.report_decision_history(limit=limit, portfolio_slug=portfolio_slug)
-    ]
+    try:
+        payload = service.report_decision_history(limit=limit, portfolio_slug=portfolio_slug, account_id=account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return [RiskDecisionResponse.model_validate(item) for item in payload]
 
 
 @router.get("/reports/capital-history", response_model=list[CapitalUsageSnapshotResponse])

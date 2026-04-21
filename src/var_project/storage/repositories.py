@@ -439,6 +439,8 @@ class StorageWriteRepository:
             fills = list(execution.get("fills") or [])
             for item in fills:
                 fill = jsonable(dict(item))
+                if fill.get("account_id") in {None, "", "null"} and execution.get("account_id") not in {None, "", "null"}:
+                    fill["account_id"] = execution.get("account_id")
                 session.add(
                     ExecutionFillRecord(
                         execution_result_id=int(record.id),

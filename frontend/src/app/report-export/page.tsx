@@ -23,7 +23,12 @@ export default async function ReportExportPage({
   const query = await searchParams;
   const portfolioSlug =
     typeof query.portfolio === "string" ? query.portfolio : undefined;
-  const report = await loadDeskReportViewModel(portfolioSlug, { liveState: null });
+  const accountId =
+    typeof query.account === "string" ? query.account : undefined;
+  const report = await loadDeskReportViewModel(portfolioSlug, {
+    liveState: null,
+    accountId,
+  });
   const snapshotSourceLabel = formatSourceLabel(report.meta.preferredSnapshotSource);
   const isLiveSnapshot = String(report.meta.preferredSnapshotSource ?? "").startsWith("mt5_live");
   const reportDate = REPORT_DATE_FORMATTER.format(new Date());

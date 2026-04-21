@@ -44,8 +44,16 @@ export function Mt5BlotterLiveSurface({
   initialFills: ExecutionFillResponse[];
   initialAudit: AuditEventResponse[];
 }) {
-  const { liveState, transport } = useDeskLive();
-  const { executions, fills } = useRecentExecutionActivity({ portfolioSlug, initialExecutions, initialFills, liveSequence: liveState?.sequence, executionLimit: 20, fillLimit: 20 });
+  const { liveState, transport, accountId } = useDeskLive();
+  const { executions, fills } = useRecentExecutionActivity({
+    portfolioSlug,
+    accountId,
+    initialExecutions,
+    initialFills,
+    liveSequence: liveState?.sequence,
+    executionLimit: 20,
+    fillLimit: 20,
+  });
   const orders = useMemo(() => liveState?.order_history ?? [], [liveState?.order_history]);
   const deals = useMemo(() => liveState?.deal_history ?? [], [liveState?.deal_history]);
   const manual = countManualMt5Events(orders, deals);
@@ -155,7 +163,16 @@ export function Mt5BlotterLiveSurface({
       <PageHeader eyebrow="Blotter" title="MT5 orders, deals, fills and reconciliation"
         aside={<>
           <LiveRuntimeBadgeGroup liveState={liveState} transport={transport} />
-          <ButtonLink href={`/desk/incidents?portfolio=${portfolioSlug}`} variant="secondary">Incidents</ButtonLink>
+          <ButtonLink
+            href={
+              accountId
+                ? `/desk/incidents?portfolio=${encodeURIComponent(portfolioSlug)}&account=${encodeURIComponent(accountId)}`
+                : `/desk/incidents?portfolio=${encodeURIComponent(portfolioSlug)}`
+            }
+            variant="secondary"
+          >
+            Incidents
+          </ButtonLink>
         </>}
       />
       <LivePostureBanner liveState={liveState} transport={transport} />

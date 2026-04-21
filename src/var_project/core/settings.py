@@ -174,6 +174,7 @@ def get_risk_defaults(raw_cfg: Mapping[str, Any]) -> dict[str, Any]:
 
 def get_mt5_config(raw_cfg: Mapping[str, Any]) -> MT5Config:
     mt5_cfg = dict(raw_cfg.get("mt5") or {})
+    account_id = os.getenv("VAR_PROJECT_MT5_ACCOUNT_ID", mt5_cfg.get("account_id"))
     login = os.getenv("VAR_PROJECT_MT5_LOGIN", mt5_cfg.get("login"))
     password = os.getenv("VAR_PROJECT_MT5_PASSWORD", mt5_cfg.get("password"))
     server = os.getenv("VAR_PROJECT_MT5_SERVER", mt5_cfg.get("server"))
@@ -218,6 +219,7 @@ def get_mt5_config(raw_cfg: Mapping[str, Any]) -> MT5Config:
     )
 
     return MT5Config(
+        account_id=None if account_id in {None, "", "null"} else str(account_id),
         login=None if login in {None, "", "null"} else int(login),
         password=None if password in {None, "", "null"} else str(password),
         server=None if server in {None, "", "null"} else str(server),

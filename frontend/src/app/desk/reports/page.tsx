@@ -9,12 +9,17 @@ export default async function DeskReportsPage({
   const query = await searchParams;
   const portfolioSlug =
     typeof query.portfolio === "string" ? query.portfolio : undefined;
+  const accountId =
+    typeof query.account === "string" ? query.account : undefined;
 
-  const reportView = await loadDeskReportViewModel(portfolioSlug, { liveState: null });
+  const reportView = await loadDeskReportViewModel(portfolioSlug, {
+    liveState: null,
+    accountId,
+  });
 
   return (
     <ReportsLiveSurface
-      key={reportView.resolvedPortfolio}
+      key={`${reportView.resolvedPortfolio}:${accountId ?? "default"}`}
       portfolioSlug={reportView.resolvedPortfolio}
       initialView={reportView}
     />

@@ -11,6 +11,7 @@ type DeskLiveTransport = "stream" | "polling" | "connecting";
 
 interface DeskLiveContextValue {
   portfolioSlug?: string;
+  accountId?: string;
   liveState: MT5LiveStateResponse | null;
   heartbeatAt: string | null;
   transport: DeskLiveTransport;
@@ -23,9 +24,11 @@ const DeskLiveContext = createContext<DeskLiveContextValue | null>(null);
 
 export function DeskLiveProvider({
   portfolioSlug,
+  accountId,
   children,
 }: {
   portfolioSlug?: string;
+  accountId?: string;
   children: ReactNode;
 }) {
   const pathname = usePathname();
@@ -43,6 +46,7 @@ export function DeskLiveProvider({
         : "summary";
   const { liveState, transport, heartbeatAt } = useMt5LiveState(portfolioSlug, {
     detailLevel,
+    accountId,
   });
 
   useEffect(() => {
@@ -63,6 +67,7 @@ export function DeskLiveProvider({
     }
     const heartbeatSignature = [
       portfolioSlug ?? "default",
+      accountId ?? "default",
       String(liveState.sequence ?? "0"),
       String(liveState.generated_at ?? ""),
       String(liveState.status ?? ""),
@@ -79,7 +84,7 @@ export function DeskLiveProvider({
     startTransition(() => {
       setArtifactVersion((current) => current + 1);
     });
-  }, [liveState, portfolioSlug]);
+  }, [accountId, liveState, portfolioSlug]);
 
   const notifyOperatorRunCompleted = (run: OperatorRunResponse) => {
     const signature = `${run.id}:${run.status}:${run.updated_at ?? run.finished_at ?? ""}`;
@@ -97,6 +102,7 @@ export function DeskLiveProvider({
     <DeskLiveContext.Provider
       value={{
         portfolioSlug,
+        accountId,
         liveState,
         heartbeatAt,
         transport,
