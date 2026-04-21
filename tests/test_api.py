@@ -1302,6 +1302,28 @@ def test_api_mt5_transaction_history_supports_filters_pagination_and_csv(tmp_pat
             "time": timestamp + 60,
         }
     )
+    for index in range(260):
+        ts = timestamp + 120 + index
+        FakeMT5Connector.deal_history.append(
+            {
+                "ticket": 9000 + index,
+                "order": 9500 + index,
+                "position_id": 100 + index,
+                "symbol": "EURUSD",
+                "type": 0,
+                "entry": 1,
+                "volume": 0.01,
+                "price": 1.08 + (index * 0.00001),
+                "profit": float(index) * 0.1,
+                "commission": -0.01,
+                "swap": 0.0,
+                "fee": 0.0,
+                "reason": 0,
+                "comment": "var_risk_desk:auto",
+                "magic": 420001,
+                "time": ts,
+            }
+        )
 
     client = TestClient(create_app(repo_root=root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True))
 
@@ -1363,6 +1385,14 @@ def test_api_mt5_transaction_history_supports_filters_pagination_and_csv(tmp_pat
     assert "kind,symbol,ticket" in csv_text
     assert "USDJPY" in csv_text
 
+    csv_many_rows = client.get(
+        "/mt5/history/transactions/export",
+        params={"symbol": "EURUSD", "type": "deal", "max_rows": 250},
+    )
+    assert csv_many_rows.status_code == 200
+    csv_many_lines = [line for line in csv_many_rows.text.splitlines() if line.strip()]
+    assert len(csv_many_lines) == 251
+
     invalid_type = client.get("/mt5/history/transactions", params={"type": "unsupported"})
     assert invalid_type.status_code == 400
     assert "type must be one of" in invalid_type.json()["detail"]
@@ -1370,6 +1400,14 @@ def test_api_mt5_transaction_history_supports_filters_pagination_and_csv(tmp_pat
     invalid_sort = client.get("/mt5/history/transactions", params={"sort": "invalid"})
     assert invalid_sort.status_code == 400
     assert "sort must be one of" in invalid_sort.json()["detail"]
+
+    invalid_date = client.get("/mt5/history/transactions", params={"date_from": "not-a-date"})
+    assert invalid_date.status_code == 400
+    assert "date_from must be a valid ISO-8601 datetime" in invalid_date.json()["detail"]
+
+    invalid_csv_date = client.get("/mt5/history/transactions/export", params={"date_to": "not-a-date"})
+    assert invalid_csv_date.status_code == 400
+    assert "date_to must be a valid ISO-8601 datetime" in invalid_csv_date.json()["detail"]
 
     invalid_window = client.get(
         "/mt5/history/transactions",

@@ -777,14 +777,29 @@ class DeskApiService:
             return None
         return parsed.astimezone(timezone.utc)
 
+    def _parse_utc_datetime(
+        self,
+        value: Any | None,
+        *,
+        field_name: str,
+    ) -> datetime | None:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        parsed = self._coerce_utc_datetime(value)
+        if parsed is None:
+            raise ValueError(f"{field_name} must be a valid ISO-8601 datetime.")
+        return parsed
+
     def _mt5_history_bounds(
         self,
         *,
         date_from: Any | None,
         date_to: Any | None,
     ) -> tuple[datetime, datetime]:
-        end_at = self._coerce_utc_datetime(date_to) or datetime.now(timezone.utc)
-        start_at = self._coerce_utc_datetime(date_from) or (end_at - timedelta(days=30))
+        end_at = self._parse_utc_datetime(date_to, field_name="date_to") or datetime.now(timezone.utc)
+        start_at = self._parse_utc_datetime(date_from, field_name="date_from") or (end_at - timedelta(days=30))
         if start_at > end_at:
             raise ValueError("date_from must be less than or equal to date_to.")
         return start_at, end_at
@@ -986,13 +1001,16 @@ class DeskApiService:
         sort: str = "time_desc",
         page: int = 1,
         page_size: int = 50,
+        page_size_cap: int | None = 200,
     ) -> dict[str, Any]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
         type_filter = self._normalize_transaction_type(type)
         sort_order = self._normalize_sort(sort)
         normalized_page = max(int(page), 1)
-        normalized_page_size = min(max(int(page_size), 1), 200)
+        normalized_page_size = max(int(page_size), 1)
+        if page_size_cap is not None:
+            normalized_page_size = min(normalized_page_size, max(int(page_size_cap), 1))
         start_at, end_at = self._mt5_history_bounds(date_from=date_from, date_to=date_to)
         symbol_filter = str(symbol or "").strip().upper() or None
 
@@ -1137,6 +1155,7 @@ class DeskApiService:
             sort=sort,
             page=1,
             page_size=rows_limit,
+            page_size_cap=rows_limit,
         )
         items = list(payload.get("items") or [])
         buffer = StringIO()
