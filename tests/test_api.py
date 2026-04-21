@@ -1809,6 +1809,67 @@ def test_market_data_sync_uses_incremental_history_windows_after_bootstrap(tmp_p
     assert details["history_windows"]["deals"]["mode"] == "incremental"
 
 
+def test_market_data_sync_bootstrap_history_honors_reconciliation_window(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5", market_history_days=365)
+    HistoryWindowTrackingConnector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=HistoryWindowTrackingConnector, bootstrap_storage=True)
+    portfolio_slug = service.runtime.portfolio["slug"]
+    portfolio_id = service.runtime._resolve_portfolio_id(portfolio_slug)
+    unresolved_created_at = utcnow() - timedelta(days=14, hours=6)
+
+    service.runtime.storage.record_execution_result(
+        {
+            "created_at": unresolved_created_at.isoformat(),
+            "time_utc": unresolved_created_at.isoformat(),
+            "portfolio_slug": portfolio_slug,
+            "symbol": "EURUSD",
+            "status": "EXECUTED",
+            "reconciliation_status": "pending_broker",
+            "requested_exposure_change": 1_000.0,
+            "approved_exposure_change": 1_000.0,
+            "executed_exposure_change": 0.0,
+            "mt5_result": {"order": 91_000_001, "deal": 81_000_001},
+        },
+        portfolio_id=portfolio_id,
+    )
+
+    service.runtime.market_data.sync_market_data(
+        portfolio_slug=portfolio_slug,
+        days=1,
+        timeframes=["H1"],
+    )
+    latest_sync = service.runtime.storage.latest_market_data_sync(portfolio_slug=portfolio_slug)
+
+    assert latest_sync is not None
+    assert HistoryWindowTrackingConnector.order_history_calls
+    assert HistoryWindowTrackingConnector.deal_history_calls
+
+    details = dict(latest_sync.get("details") or {})
+    sync_started = pd.to_datetime(details["sync_started_at"], utc=True).to_pydatetime()
+    expected_reconciliation_days = max(
+        7,
+        min(
+            int(max((sync_started - unresolved_created_at).total_seconds(), 0.0) // 86400) + 1,
+            30,
+        ),
+    )
+
+    last_order_call = HistoryWindowTrackingConnector.order_history_calls[-1]
+    last_deal_call = HistoryWindowTrackingConnector.deal_history_calls[-1]
+    order_from = pd.to_datetime(last_order_call["date_from"], utc=True).to_pydatetime()
+    order_to = pd.to_datetime(last_order_call["date_to"], utc=True).to_pydatetime()
+    deal_from = pd.to_datetime(last_deal_call["date_from"], utc=True).to_pydatetime()
+    deal_to = pd.to_datetime(last_deal_call["date_to"], utc=True).to_pydatetime()
+
+    order_lookback_days = (order_to - order_from).total_seconds() / 86400.0
+    deal_lookback_days = (deal_to - deal_from).total_seconds() / 86400.0
+    assert order_lookback_days >= float(expected_reconciliation_days) - 0.01
+    assert deal_lookback_days >= float(expected_reconciliation_days) - 0.01
+    assert int(details.get("history_reconciliation_days") or 0) >= expected_reconciliation_days
+
+
 def test_market_data_sync_recovers_after_partial_history_failure_without_duplicates(tmp_path: Path):
     root = tmp_path
     _write_settings(root, portfolio_mode="live_mt5", market_history_days=365)

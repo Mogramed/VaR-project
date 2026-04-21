@@ -901,13 +901,14 @@ class DeskMarketDataService:
             requested_days=requested_days,
             now=started_at,
         )
+        history_bootstrap_days = max(int(stored_history_days), int(history_reconciliation_days), 1)
         market_closed = _is_fx_weekend_closed(started_at)
         latest_sync_before = self.runtime.storage.latest_market_data_sync(portfolio_slug=portfolio["slug"])
         resume_hint = self._resume_hint_from_latest_sync(latest_sync_before)
         history_windows = self._history_sync_windows(
             portfolio_slug=portfolio["slug"],
             started_at=started_at,
-            bootstrap_days=stored_history_days,
+            bootstrap_days=history_bootstrap_days,
         )
         tracked_symbols = self._portfolio_symbols_from_details(portfolio)
         running_details = {
@@ -1204,7 +1205,7 @@ class DeskMarketDataService:
                 stage_errors_before = len(errors)
                 order_window = history_windows["orders"]
                 order_since = _coerce_utc_datetime(order_window.get("since")) or (
-                    started_at - timedelta(days=max(int(stored_history_days), 1))
+                    started_at - timedelta(days=history_bootstrap_days)
                 )
                 _start_stage(
                     "sync_order_history",
@@ -1244,7 +1245,7 @@ class DeskMarketDataService:
                 stage_errors_before = len(errors)
                 deal_window = history_windows["deals"]
                 deal_since = _coerce_utc_datetime(deal_window.get("since")) or (
-                    started_at - timedelta(days=max(int(stored_history_days), 1))
+                    started_at - timedelta(days=history_bootstrap_days)
                 )
                 _start_stage(
                     "sync_deal_history",
