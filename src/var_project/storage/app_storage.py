@@ -659,6 +659,19 @@ class AppStorage:
     def latest_market_data_sync(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
         return self.reads.latest_market_data_sync(portfolio_slug=portfolio_slug)
 
+    def list_market_data_sync_runs(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        statuses: Iterable[str] | None = None,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        return self.reads.list_market_data_sync_runs(
+            portfolio_slug=portfolio_slug,
+            statuses=statuses,
+            limit=limit,
+        )
+
     def market_bars(
         self,
         *,

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import pandas as pd
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 
 from var_project.alerts.engine import AlertEvent
 from var_project.storage.mappers import (
@@ -1285,6 +1285,25 @@ class StorageReadRepository:
                 stmt = stmt.where(MarketDataSyncRecord.portfolio_slug == str(portfolio_slug))
             record = session.scalars(stmt.order_by(MarketDataSyncRecord.synced_at.desc(), MarketDataSyncRecord.id.desc())).first()
             return None if record is None else market_data_sync_to_dict(record)
+
+    def list_market_data_sync_runs(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        statuses: Iterable[str] | None = None,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        normalized_statuses = [str(item).strip().lower() for item in (statuses or []) if str(item).strip()]
+        with self.session_factory() as session:
+            stmt = select(MarketDataSyncRecord)
+            if portfolio_slug:
+                stmt = stmt.where(MarketDataSyncRecord.portfolio_slug == str(portfolio_slug))
+            if normalized_statuses:
+                stmt = stmt.where(func.lower(MarketDataSyncRecord.status).in_(normalized_statuses))
+            records = session.scalars(
+                stmt.order_by(MarketDataSyncRecord.synced_at.desc(), MarketDataSyncRecord.id.desc()).limit(max(int(limit), 1))
+            ).all()
+            return [market_data_sync_to_dict(record) for record in records]
 
     def market_bars(
         self,
