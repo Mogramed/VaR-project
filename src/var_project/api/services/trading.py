@@ -41,6 +41,7 @@ class DeskTradingService:
             symbol=symbol,
             exposure_change=normalized_exposure_change,
             note=note,
+            account_id=account_id,
             persist=True,
             audit_action="decision.evaluate",
         )

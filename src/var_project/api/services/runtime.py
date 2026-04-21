@@ -74,6 +74,7 @@ class DeskServiceRuntime:
         self.portfolio_ids: dict[str, int] = {}
         self._refresh_portfolio_ids_if_ready()
         self.portfolio_id = self.portfolio_ids.get(self.portfolio["slug"])
+        self._enforce_technical_audit_retention()
 
         self.risk = PortfolioRiskCalculator(self)
         self.decisions = DecisionPolicyEngine(self)
@@ -232,6 +233,31 @@ class DeskServiceRuntime:
 
     def is_live_portfolio(self, portfolio: Mapping[str, Any]) -> bool:
         return self._portfolio_mode(portfolio) == "live_mt5"
+
+    def mt5_is_business_source_of_truth(self, portfolio: Mapping[str, Any]) -> bool:
+        return self.is_live_portfolio(portfolio)
+
+    def persist_business_decisions_locally(self, portfolio: Mapping[str, Any]) -> bool:
+        return not self.mt5_is_business_source_of_truth(portfolio)
+
+    def technical_audit_retention_days(self) -> int:
+        storage_cfg = dict(self.raw_config.get("storage") or {})
+        configured = storage_cfg.get("technical_audit_retention_days")
+        env_value = os.getenv("VAR_PROJECT_TECHNICAL_AUDIT_RETENTION_DAYS")
+        selected = env_value if env_value not in {None, ""} else configured
+        try:
+            return max(int(selected), 1)
+        except (TypeError, ValueError):
+            return 90
+
+    def _enforce_technical_audit_retention(self) -> None:
+        if not self.storage_ready:
+            return
+        try:
+            self.storage.purge_old_audit_events(ttl_days=self.technical_audit_retention_days())
+        except Exception:
+            # Audit retention is best-effort and must not block API startup.
+            return
 
     def strict_live_enabled(self, portfolio: Mapping[str, Any]) -> bool:
         # Live portfolios are always strict: risk/capital must come from MT5 broker state.
@@ -408,6 +434,7 @@ class DeskServiceRuntime:
         exposure_change: float | None = None,
         delta_position_eur: float | None = None,
         note: str | None,
+        account_id: str | None = None,
         persist: bool,
         audit_action: str = "decision.evaluate",
     ) -> dict[str, Any]:
@@ -417,6 +444,7 @@ class DeskServiceRuntime:
             exposure_change=exposure_change,
             delta_position_eur=delta_position_eur,
             note=note,
+            account_id=account_id,
             persist=persist,
             audit_action=audit_action,
         )

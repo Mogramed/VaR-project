@@ -2771,6 +2771,7 @@ class DeskMt5Service:
                 symbol=symbol,
                 exposure_change=normalized_exposure_change,
                 note=note,
+                account_id=resolved_account_id,
                 persist=False,
             )
             post_capital = self.runtime._post_capital_after_trade(
@@ -3168,6 +3169,7 @@ class DeskMt5Service:
                 symbol=symbol,
                 exposure_change=normalized_exposure_change,
                 note=note,
+                account_id=resolved_account_id,
                 persist=True,
                 audit_action="execution.guard",
             )

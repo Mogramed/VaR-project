@@ -374,10 +374,12 @@ class DecisionPolicyEngine:
         exposure_change: float | None = None,
         delta_position_eur: float | None = None,
         note: str | None,
+        account_id: str | None = None,
         persist: bool,
         audit_action: str = "decision.evaluate",
     ) -> dict[str, Any]:
         portfolio = dict(bundle["portfolio"])
+        portfolio_context = self.runtime._resolve_portfolio_context(portfolio.get("slug"))
         exposure_by_symbol = dict(bundle["exposure_by_symbol"])
         sample = bundle["sample"]
         sample_symbols = list(bundle.get("portfolio_symbols") or portfolio["symbols"])
@@ -395,6 +397,7 @@ class DecisionPolicyEngine:
             "time_utc": now.isoformat(),
             "decision_mode": self.decision_settings()["decision_mode"],
             "portfolio_slug": portfolio["slug"],
+            "account_id": account_id,
             "timeframe": bundle["timeframe"],
             "days": bundle["days"],
             "window": bundle["window"],
@@ -427,18 +430,27 @@ class DecisionPolicyEngine:
             return payload
 
         portfolio_id = self.runtime._resolve_portfolio_id(portfolio["slug"])
-        decision_id = self.runtime.storage.record_decision(payload, portfolio_id=portfolio_id)
-        payload["id"] = decision_id
         payload["created_at"] = now.isoformat()
+        should_persist_local = self.runtime.persist_business_decisions_locally(portfolio_context)
+        decision_id: int | None = None
+        if should_persist_local:
+            decision_id = self.runtime.storage.record_decision(payload, portfolio_id=portfolio_id)
+            payload["id"] = decision_id
+        else:
+            payload.pop("id", None)
         decision_alerts = alerts_from_risk_decision(payload)
         if decision_alerts:
             self.runtime.storage.record_alerts(decision_alerts, portfolio_id=portfolio_id)
+        audit_payload = dict(payload)
+        if decision_id is not None:
+            audit_payload["id"] = decision_id
+        audit_payload["decision_storage_mode"] = "local_db" if should_persist_local else "audit_only"
         self.runtime.storage.record_audit_event(
             actor="api",
             action_type=audit_action,
             object_type="risk_decision",
             object_id=decision_id,
-            payload=payload,
+            payload=audit_payload,
             portfolio_id=portfolio_id,
         )
         return payload
@@ -1031,11 +1043,7 @@ class GovernanceRecorder:
         capital_source: str | None = None,
     ) -> None:
         content = report_path.read_text(encoding="utf-8")
-        decisions = (
-            self.runtime.storage.recent_decisions(limit=5, portfolio_slug=portfolio_slug)
-            if self.runtime.storage_ready
-            else []
-        )
+        decisions = self._recent_governance_decisions(limit=5, portfolio_slug=portfolio_slug)
         capital_history = (
             self.runtime.storage.capital_history(
                 limit=5,
@@ -1088,3 +1096,90 @@ class GovernanceRecorder:
                 )
 
         report_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+    @staticmethod
+    def _looks_like_risk_decision_payload(payload: Mapping[str, Any]) -> bool:
+        return (
+            str(payload.get("symbol") or "").strip() != ""
+            and str(payload.get("decision") or "").strip() != ""
+            and isinstance(payload.get("pre_trade"), Mapping)
+            and isinstance(payload.get("post_trade"), Mapping)
+        )
+
+    def _recent_governance_decisions(
+        self,
+        *,
+        limit: int,
+        portfolio_slug: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if not self.runtime.storage_ready:
+            return []
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        normalized_limit = max(int(limit), 1)
+        if self.runtime.persist_business_decisions_locally(portfolio):
+            return self.runtime.storage.recent_decisions(
+                limit=normalized_limit,
+                portfolio_slug=portfolio_slug,
+            )
+
+        candidate_limit = max(normalized_limit * 4, 50)
+        events = self.runtime.storage.recent_audit_events(
+            limit=candidate_limit,
+            portfolio_slug=portfolio_slug,
+            object_type="risk_decision",
+        )
+        decisions: list[dict[str, Any]] = []
+        for event in events:
+            payload = event.get("payload")
+            candidate = dict(payload) if isinstance(payload, Mapping) else dict(event)
+            if not self._looks_like_risk_decision_payload(candidate):
+                continue
+            if candidate.get("id") in {None, "", "null"} and event.get("object_id") not in {None, "", "null"}:
+                try:
+                    candidate["id"] = int(event.get("object_id"))
+                except (TypeError, ValueError):
+                    pass
+            if candidate.get("portfolio_id") in {None, "", "null"} and event.get("portfolio_id") not in {None, "", "null"}:
+                try:
+                    candidate["portfolio_id"] = int(event.get("portfolio_id"))
+                except (TypeError, ValueError):
+                    pass
+            if candidate.get("created_at") in {None, "", "null"}:
+                candidate["created_at"] = candidate.get("time_utc") or event.get("created_at")
+            if candidate.get("time_utc") in {None, "", "null"}:
+                candidate["time_utc"] = candidate.get("created_at") or event.get("created_at")
+            if candidate.get("portfolio_slug") in {None, "", "null"} and portfolio_slug not in {None, "", "null"}:
+                candidate["portfolio_slug"] = portfolio_slug
+            decisions.append(candidate)
+            if len(decisions) >= normalized_limit:
+                return decisions
+
+        legacy_decisions = self.runtime.storage.recent_decisions(
+            limit=max(normalized_limit * 4, 20),
+            portfolio_slug=portfolio_slug,
+        )
+        if not legacy_decisions:
+            return decisions
+        seen_keys = {
+            (
+                str(item.get("symbol") or "").upper(),
+                str(item.get("decision") or "").upper(),
+                str(item.get("created_at") or item.get("time_utc") or ""),
+                str(item.get("note") or ""),
+            )
+            for item in decisions
+        }
+        for legacy in legacy_decisions:
+            dedupe_key = (
+                str(legacy.get("symbol") or "").upper(),
+                str(legacy.get("decision") or "").upper(),
+                str(legacy.get("created_at") or legacy.get("time_utc") or ""),
+                str(legacy.get("note") or ""),
+            )
+            if dedupe_key in seen_keys:
+                continue
+            decisions.append(legacy)
+            seen_keys.add(dedupe_key)
+            if len(decisions) >= normalized_limit:
+                break
+        return decisions[:normalized_limit]

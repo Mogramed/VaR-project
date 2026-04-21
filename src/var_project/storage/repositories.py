@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import pandas as pd
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 
 from var_project.alerts.engine import AlertEvent
 from var_project.storage.mappers import (
@@ -550,6 +551,15 @@ class StorageWriteRepository:
             session.commit()
             session.refresh(record)
             return int(record.id)
+
+    def purge_old_audit_events(self, *, ttl_days: int) -> int:
+        normalized_ttl_days = max(int(ttl_days), 1)
+        cutoff = utcnow() - timedelta(days=normalized_ttl_days)
+        with self.session_factory() as session:
+            result = session.execute(delete(AuditRecord).where(AuditRecord.created_at < cutoff))
+            deleted = int(result.rowcount or 0)
+            session.commit()
+            return deleted
 
     def upsert_reconciliation_acknowledgement(
         self,
@@ -1151,7 +1161,13 @@ class StorageReadRepository:
             ).all()
             return [execution_fill_to_dict(record) for record in records]
 
-    def recent_audit_events(self, *, limit: int = 50, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
+    def recent_audit_events(
+        self,
+        *,
+        limit: int = 50,
+        portfolio_slug: str | None = None,
+        object_type: str | None = None,
+    ) -> list[dict[str, Any]]:
         with self.session_factory() as session:
             stmt = select(AuditRecord)
             if portfolio_slug:
@@ -1159,6 +1175,8 @@ class StorageReadRepository:
                 if portfolio_id is None:
                     return []
                 stmt = stmt.where(AuditRecord.portfolio_id == portfolio_id)
+            if object_type not in {None, "", "null"}:
+                stmt = stmt.where(AuditRecord.object_type == str(object_type))
             records = session.scalars(stmt.order_by(AuditRecord.created_at.desc(), AuditRecord.id.desc()).limit(int(limit))).all()
             return [audit_to_dict(record) for record in records]
 

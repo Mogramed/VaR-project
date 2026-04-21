@@ -108,6 +108,65 @@ class DeskReadService:
                     break
         return filtered
 
+    @staticmethod
+    def _decision_audit_action_supported(action_type: str) -> bool:
+        normalized = str(action_type or "").strip().lower()
+        return normalized.startswith("decision.") or normalized == "execution.guard"
+
+    @staticmethod
+    def _looks_like_risk_decision_payload(payload: Mapping[str, Any]) -> bool:
+        return (
+            str(payload.get("symbol") or "").strip() != ""
+            and str(payload.get("decision") or "").strip() != ""
+            and isinstance(payload.get("pre_trade"), Mapping)
+            and isinstance(payload.get("post_trade"), Mapping)
+        )
+
+    def _recent_decisions_from_audit(
+        self,
+        *,
+        limit: int,
+        portfolio_slug: str | None = None,
+    ) -> list[dict[str, Any]]:
+        candidate_limit = self._account_filter_candidate_limit(limit)
+        scan_limit = max(candidate_limit * 4, 200)
+        events = self.runtime.storage.recent_audit_events(
+            limit=scan_limit,
+            portfolio_slug=portfolio_slug,
+            object_type="risk_decision",
+        )
+        records: list[dict[str, Any]] = []
+        for event in events:
+            if not self._decision_audit_action_supported(str(event.get("action_type") or "")):
+                continue
+            payload = event.get("payload")
+            if isinstance(payload, Mapping):
+                candidate = dict(payload)
+            else:
+                candidate = dict(event)
+            if not self._looks_like_risk_decision_payload(candidate):
+                continue
+            if candidate.get("id") in {None, "", "null"} and event.get("object_id") not in {None, "", "null"}:
+                try:
+                    candidate["id"] = int(event.get("object_id"))
+                except (TypeError, ValueError):
+                    pass
+            if candidate.get("portfolio_id") in {None, "", "null"} and event.get("portfolio_id") not in {None, "", "null"}:
+                try:
+                    candidate["portfolio_id"] = int(event.get("portfolio_id"))
+                except (TypeError, ValueError):
+                    pass
+            if candidate.get("created_at") in {None, "", "null"}:
+                candidate["created_at"] = candidate.get("time_utc") or event.get("created_at")
+            if candidate.get("time_utc") in {None, "", "null"}:
+                candidate["time_utc"] = candidate.get("created_at") or event.get("created_at")
+            if candidate.get("portfolio_slug") in {None, "", "null"} and portfolio_slug not in {None, "", "null"}:
+                candidate["portfolio_slug"] = portfolio_slug
+            records.append(candidate)
+            if len(records) >= candidate_limit:
+                break
+        return records
+
     def _latest_model_comparison_uncached(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
         validation = self.latest_validation(portfolio_slug=portfolio_slug)
         if validation is None:
@@ -433,14 +492,58 @@ class DeskReadService:
     ) -> list[dict[str, Any]]:
         if not self.runtime.storage_ready:
             return []
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         requested_account_id = self._resolve_requested_account_id(account_id)
-        if requested_account_id is None:
-            return self.runtime.storage.recent_decisions(limit=limit, portfolio_slug=portfolio_slug)
         default_account_id = self.runtime.resolve_mt5_account_id(None)
-        records = self.runtime.storage.recent_decisions(
-            limit=self._account_filter_candidate_limit(limit),
+        if self.runtime.persist_business_decisions_locally(portfolio):
+            records = (
+                self.runtime.storage.recent_decisions(limit=limit, portfolio_slug=portfolio_slug)
+                if requested_account_id is None
+                else self.runtime.storage.recent_decisions(
+                    limit=self._account_filter_candidate_limit(limit),
+                    portfolio_slug=portfolio_slug,
+                )
+            )
+            if requested_account_id is None:
+                return records
+            return self._filter_records_by_account(
+                records,
+                requested_account_id=requested_account_id,
+                default_account_id=default_account_id,
+                limit=limit,
+            )
+
+        candidate_limit = self._account_filter_candidate_limit(limit)
+        records = self._recent_decisions_from_audit(limit=limit, portfolio_slug=portfolio_slug)
+        legacy_records = self.runtime.storage.recent_decisions(
+            limit=candidate_limit,
             portfolio_slug=portfolio_slug,
         )
+        if legacy_records:
+            seen_keys = {
+                (
+                    str(item.get("symbol") or "").upper(),
+                    str(item.get("decision") or "").upper(),
+                    str(item.get("created_at") or item.get("time_utc") or ""),
+                    str(item.get("note") or ""),
+                )
+                for item in records
+            }
+            for record in legacy_records:
+                dedupe_key = (
+                    str(record.get("symbol") or "").upper(),
+                    str(record.get("decision") or "").upper(),
+                    str(record.get("created_at") or record.get("time_utc") or ""),
+                    str(record.get("note") or ""),
+                )
+                if dedupe_key in seen_keys:
+                    continue
+                records.append(record)
+                seen_keys.add(dedupe_key)
+                if len(records) >= candidate_limit:
+                    break
+        if requested_account_id is None:
+            return records[: max(int(limit), 1)]
         return self._filter_records_by_account(
             records,
             requested_account_id=requested_account_id,

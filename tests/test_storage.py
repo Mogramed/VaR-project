@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
 
 from var_project.alerts.engine import alerts_from_validation_summary
 from var_project.storage import AppStorage
+from var_project.storage.models import AuditRecord
 from var_project.validation.model_validation import (
     BacktestModelValidation,
     ValidationSummary,
@@ -99,6 +101,38 @@ def test_upsert_portfolio_renames_legacy_default_slug_without_history(tmp_path: 
     assert renamed_id == initial_id
     assert len(portfolios) == 1
     assert portfolios[0]["slug"] == "mt5_live_portfolio"
+
+
+def test_app_storage_purges_old_audit_events_with_ttl(tmp_path: Path):
+    root = tmp_path
+    storage = AppStorage.from_root(root, {"storage": {"database_path": "data/app/test_audit_ttl.db"}})
+    storage.initialize(create_schema=True)
+
+    old_id = storage.record_audit_event(
+        actor="api",
+        action_type="decision.evaluate",
+        object_type="risk_decision",
+        payload={"symbol": "EURUSD"},
+    )
+    fresh_id = storage.record_audit_event(
+        actor="api",
+        action_type="execution.submit",
+        object_type="execution_result",
+        payload={"symbol": "USDJPY"},
+    )
+
+    with storage.session_factory() as session:
+        old_record = session.get(AuditRecord, int(old_id))
+        assert old_record is not None
+        old_record.created_at = datetime.now(timezone.utc) - timedelta(days=120)
+        session.commit()
+
+    deleted = storage.purge_old_audit_events(ttl_days=30)
+    recent = storage.recent_audit_events(limit=10)
+
+    assert deleted == 1
+    assert recent
+    assert int(recent[0]["id"]) == int(fresh_id)
 
 
 def test_app_storage_persists_and_reads_platform_records(tmp_path: Path):
