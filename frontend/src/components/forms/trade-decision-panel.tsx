@@ -30,9 +30,11 @@ const decisionPresets = ["500000", "1000000", "2500000", "5000000"];
 
 export function TradeDecisionPanel({
   portfolioSlug,
+  accountId,
   onEvaluated,
 }: {
   portfolioSlug: string;
+  accountId?: string;
   onEvaluated?: (result: RiskDecisionResponse) => void;
 }) {
   const router = useRouter();
@@ -62,6 +64,7 @@ export function TradeDecisionPanel({
     mutationFn: async () =>
       api.evaluateDecision({
         portfolio_slug: portfolioSlug,
+        account_id: accountId,
         symbol,
         exposure_change: (side === "buy" ? 1 : -1) * Number(exposureChange),
         note,

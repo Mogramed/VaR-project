@@ -289,14 +289,18 @@ function executiveSignal(
 
 export async function loadDeskReportViewModel(
   portfolioSlug?: string,
-  options?: { liveState?: MT5LiveStateResponse | null },
+  options?: { liveState?: MT5LiveStateResponse | null; accountId?: string | null },
 ) {
   const health = await api.safeHealth();
   const resolvedPortfolio = portfolioSlug ?? health.portfolio_slug;
+  const accountId = String(options?.accountId ?? "").trim() || undefined;
   const liveState =
     options?.liveState !== undefined
       ? options.liveState
-      : await api.mt5LiveState(resolvedPortfolio, { detailLevel: "summary" }).catch(() => null);
+      : await api.mt5LiveState(resolvedPortfolio, {
+        detailLevel: "summary",
+        accountId,
+      }).catch(() => null);
   const persistedLiveSnapshot = await api
     .latestSnapshot(resolvedPortfolio, "mt5_live_bridge")
     .catch(() => null);
@@ -304,8 +308,8 @@ export async function loadDeskReportViewModel(
     liveState?.risk_summary?.source
     ?? (persistedLiveSnapshot ? "mt5_live_bridge" : "auto");
   const [report, decisions, capitalHistory, audit, comparison, validation, frame, desk] = await Promise.all([
-    api.latestReport(resolvedPortfolio).catch(() => null),
-    api.reportDecisionHistory(resolvedPortfolio, 12).catch(() => []),
+    api.latestReport(resolvedPortfolio, undefined, accountId).catch(() => null),
+    api.reportDecisionHistory(resolvedPortfolio, 12, accountId).catch(() => []),
     api.reportCapitalHistory(resolvedPortfolio, 8, preferredSnapshotSource).catch(() => []),
     api.recentAudit(resolvedPortfolio, 16).catch(() => []),
     api.latestModelComparison(resolvedPortfolio).catch(() => null),

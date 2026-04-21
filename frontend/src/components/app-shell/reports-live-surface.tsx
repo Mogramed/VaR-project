@@ -79,12 +79,15 @@ export function ReportsLiveSurface({
   portfolioSlug: string;
   initialView: DeskReportViewModel;
 }) {
-  const { liveState, transport } = useDeskLive();
+  const { liveState, transport, accountId } = useDeskLive();
   const queryClient = useQueryClient();
-  const reportViewQueryKey = deskArtifactQueryKey("reports", portfolioSlug);
+  const reportViewQueryKey = deskArtifactQueryKey("reports", portfolioSlug, accountId ?? "default");
   const reportViewQuery = useQuery({
     queryKey: reportViewQueryKey,
-    queryFn: () => loadDeskReportViewModel(portfolioSlug, { liveState: liveState ?? null }),
+    queryFn: () => loadDeskReportViewModel(portfolioSlug, {
+      liveState: liveState ?? null,
+      accountId,
+    }),
     initialData: initialView,
     ...deskArtifactQueryOptions,
   });

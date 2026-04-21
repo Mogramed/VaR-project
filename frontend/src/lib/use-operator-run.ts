@@ -20,6 +20,7 @@ const FALLBACK_SLA_SECONDS: Record<string, number> = {
 type UseOperatorRunActionOptions<TPayload> = {
   action: string;
   portfolioSlug?: string;
+  accountId?: string;
   enqueue: (payload: TPayload) => Promise<OperatorRunResponse>;
   onSucceeded?: (run: OperatorRunResponse) => void | Promise<void>;
 };
@@ -56,9 +57,19 @@ function operatorRunStorageKey(action: string, portfolioSlug: string) {
   return `operator:run:${portfolioSlug}:${action}`;
 }
 
+function operatorRunStorageKeyWithAccount(
+  action: string,
+  portfolioSlug: string,
+  accountId?: string,
+) {
+  const normalizedAccountId = String(accountId ?? "").trim() || "default";
+  return `${operatorRunStorageKey(action, portfolioSlug)}:${normalizedAccountId}`;
+}
+
 export function useOperatorRunAction<TPayload>({
   action,
   portfolioSlug,
+  accountId,
   enqueue,
   onSucceeded,
 }: UseOperatorRunActionOptions<TPayload>) {
@@ -86,11 +97,12 @@ export function useOperatorRunAction<TPayload>({
     if (!portfolioSlug) {
       return undefined;
     }
+    const storageKey = operatorRunStorageKeyWithAccount(action, portfolioSlug, accountId);
 
     const loadActiveRun = async () => {
       let recoveredFromStorage = false;
       if (typeof window !== "undefined") {
-        const rawRunId = window.sessionStorage.getItem(operatorRunStorageKey(action, portfolioSlug));
+        const rawRunId = window.sessionStorage.getItem(storageKey);
         const runId = Number(rawRunId);
         if (Number.isFinite(runId) && runId > 0) {
           try {
@@ -116,6 +128,7 @@ export function useOperatorRunAction<TPayload>({
       try {
         const runs = await api.operatorRuns({
           portfolioSlug,
+          accountId,
           action,
           statuses: ["queued", "running"],
           limit: 1,
@@ -133,20 +146,20 @@ export function useOperatorRunAction<TPayload>({
     return () => {
       cancelled = true;
     };
-  }, [action, portfolioSlug]);
+  }, [accountId, action, portfolioSlug]);
 
   const currentRun = run;
   useEffect(() => {
     if (!portfolioSlug || typeof window === "undefined") {
       return;
     }
-    const storageKey = operatorRunStorageKey(action, portfolioSlug);
+    const storageKey = operatorRunStorageKeyWithAccount(action, portfolioSlug, accountId);
     if (currentRun && !TERMINAL_STATUSES.has(String(currentRun.status))) {
       window.sessionStorage.setItem(storageKey, String(currentRun.id));
       return;
     }
     window.sessionStorage.removeItem(storageKey);
-  }, [action, currentRun, portfolioSlug]);
+  }, [accountId, action, currentRun, portfolioSlug]);
 
   const activeRunId =
     run && !TERMINAL_STATUSES.has(run.status)
@@ -154,7 +167,7 @@ export function useOperatorRunAction<TPayload>({
       : null;
 
   const pollQuery = useQuery({
-    queryKey: ["operator-run", action, activeRunId],
+    queryKey: ["operator-run", action, accountId ?? "default", activeRunId],
     enabled: activeRunId != null,
     queryFn: async () => api.operatorRun(activeRunId as number),
     retry: 2,
@@ -214,6 +227,7 @@ export function useOperatorRunAction<TPayload>({
           try {
             const runs = await api.operatorRuns({
               portfolioSlug,
+              accountId,
               action,
               statuses: ["queued", "running"],
               limit: 1,
@@ -335,7 +349,9 @@ export function useOperatorRunAction<TPayload>({
       setManualError(null);
       startTransition(() => setRun(null));
       if (portfolioSlug && typeof window !== "undefined") {
-        window.sessionStorage.removeItem(operatorRunStorageKey(action, portfolioSlug));
+        window.sessionStorage.removeItem(
+          operatorRunStorageKeyWithAccount(action, portfolioSlug, accountId),
+        );
       }
     },
   };

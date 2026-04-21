@@ -57,12 +57,14 @@ def evaluate_trade_decision(payload: TradeProposalRequest, service: DeskApiServi
 def recent_decisions(
     limit: int = Query(default=20, ge=1, le=200),
     portfolio_slug: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> list[RiskDecisionResponse]:
-    return [
-        RiskDecisionResponse.model_validate(item)
-        for item in service.recent_decisions(limit=limit, portfolio_slug=portfolio_slug)
-    ]
+    try:
+        payload = service.recent_decisions(limit=limit, portfolio_slug=portfolio_slug, account_id=account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return [RiskDecisionResponse.model_validate(item) for item in payload]
 
 
 @router.post("/execution/preview", response_model=ExecutionPreviewResponse)
@@ -95,24 +97,28 @@ def execution_submit(payload: ExecutionRequest, service: DeskApiService = Depend
 def recent_execution_results(
     limit: int = Query(default=20, ge=1, le=200),
     portfolio_slug: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> list[ExecutionResultResponse]:
-    return [
-        ExecutionResultResponse.model_validate(item)
-        for item in service.recent_execution_results(limit=limit, portfolio_slug=portfolio_slug)
-    ]
+    try:
+        payload = service.recent_execution_results(limit=limit, portfolio_slug=portfolio_slug, account_id=account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return [ExecutionResultResponse.model_validate(item) for item in payload]
 
 
 @router.get("/execution/fills/recent", response_model=list[ExecutionFillResponse])
 def recent_execution_fills(
     limit: int = Query(default=50, ge=1, le=500),
     portfolio_slug: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
     service: DeskApiService = Depends(get_service),
 ) -> list[ExecutionFillResponse]:
-    return [
-        ExecutionFillResponse.model_validate(item)
-        for item in service.recent_execution_fills(limit=limit, portfolio_slug=portfolio_slug)
-    ]
+    try:
+        payload = service.recent_execution_fills(limit=limit, portfolio_slug=portfolio_slug, account_id=account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return [ExecutionFillResponse.model_validate(item) for item in payload]
 
 
 @router.post("/reconciliation/acknowledge", response_model=ReconciliationAcknowledgeResponse)

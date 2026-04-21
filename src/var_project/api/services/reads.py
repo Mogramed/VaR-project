@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 import time
-from typing import Any
+from typing import Any, Mapping
 
 import pandas as pd
 
@@ -56,6 +56,57 @@ class DeskReadService:
                 lock = Lock()
                 self._shared_model_comparison_compute_locks[cache_key] = lock
             return lock
+
+    @staticmethod
+    def _account_filter_candidate_limit(limit: int) -> int:
+        normalized_limit = max(int(limit), 1)
+        return max(normalized_limit * 12, 200)
+
+    @staticmethod
+    def _normalize_optional_account_id(account_id: str | None) -> str | None:
+        if account_id in {None, "", "null"}:
+            return None
+        normalized = str(account_id).strip()
+        if not normalized or normalized.lower() == "null":
+            return None
+        return normalized
+
+    def _resolve_requested_account_id(self, account_id: str | None) -> str | None:
+        normalized = self._normalize_optional_account_id(account_id)
+        if normalized is None:
+            return None
+        return self.runtime.resolve_mt5_account_id(normalized)
+
+    def _resolved_record_account_id(self, record: Mapping[str, Any], *, default_account_id: str) -> str:
+        raw_account_id: Any = record.get("account_id")
+        if raw_account_id in {None, "", "null"}:
+            request_payload = record.get("request_payload")
+            if isinstance(request_payload, Mapping):
+                raw_account_id = request_payload.get("account_id")
+        normalized = self._normalize_optional_account_id(None if raw_account_id is None else str(raw_account_id))
+        if normalized is None:
+            return default_account_id
+        try:
+            return self.runtime.resolve_mt5_account_id(normalized)
+        except ValueError:
+            return normalized
+
+    def _filter_records_by_account(
+        self,
+        records: list[dict[str, Any]],
+        *,
+        requested_account_id: str,
+        default_account_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        normalized_limit = max(int(limit), 1)
+        filtered: list[dict[str, Any]] = []
+        for record in records:
+            if self._resolved_record_account_id(record, default_account_id=default_account_id) == requested_account_id:
+                filtered.append(record)
+                if len(filtered) >= normalized_limit:
+                    break
+        return filtered
 
     def _latest_model_comparison_uncached(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
         validation = self.latest_validation(portfolio_slug=portfolio_slug)
@@ -373,10 +424,29 @@ class DeskReadService:
             return []
         return self.runtime.storage.recent_alerts(limit=limit)
 
-    def recent_decisions(self, *, limit: int = 25, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
+    def recent_decisions(
+        self,
+        *,
+        limit: int = 25,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         if not self.runtime.storage_ready:
             return []
-        return self.runtime.storage.recent_decisions(limit=limit, portfolio_slug=portfolio_slug)
+        requested_account_id = self._resolve_requested_account_id(account_id)
+        if requested_account_id is None:
+            return self.runtime.storage.recent_decisions(limit=limit, portfolio_slug=portfolio_slug)
+        default_account_id = self.runtime.resolve_mt5_account_id(None)
+        records = self.runtime.storage.recent_decisions(
+            limit=self._account_filter_candidate_limit(limit),
+            portfolio_slug=portfolio_slug,
+        )
+        return self._filter_records_by_account(
+            records,
+            requested_account_id=requested_account_id,
+            default_account_id=default_account_id,
+            limit=limit,
+        )
 
     def latest_capital(
         self,
@@ -427,23 +497,91 @@ class DeskReadService:
             return []
         return self.runtime.storage.capital_history(limit=limit, source=source, portfolio_slug=portfolio_slug)
 
-    def recent_execution_results(self, *, limit: int = 25, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
+    def recent_execution_results(
+        self,
+        *,
+        limit: int = 25,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         if not self.runtime.storage_ready:
             return []
-        return self.runtime.storage.recent_execution_results(limit=limit, portfolio_slug=portfolio_slug)
+        requested_account_id = self._resolve_requested_account_id(account_id)
+        if requested_account_id is None:
+            return self.runtime.storage.recent_execution_results(limit=limit, portfolio_slug=portfolio_slug)
+        default_account_id = self.runtime.resolve_mt5_account_id(None)
+        records = self.runtime.storage.recent_execution_results(
+            limit=self._account_filter_candidate_limit(limit),
+            portfolio_slug=portfolio_slug,
+        )
+        return self._filter_records_by_account(
+            records,
+            requested_account_id=requested_account_id,
+            default_account_id=default_account_id,
+            limit=limit,
+        )
 
-    def recent_execution_fills(self, *, limit: int = 50, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
+    def recent_execution_fills(
+        self,
+        *,
+        limit: int = 50,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         if not self.runtime.storage_ready:
             return []
-        return self.runtime.storage.recent_execution_fills(limit=limit, portfolio_slug=portfolio_slug)
+        requested_account_id = self._resolve_requested_account_id(account_id)
+        if requested_account_id is None:
+            return self.runtime.storage.recent_execution_fills(limit=limit, portfolio_slug=portfolio_slug)
+        default_account_id = self.runtime.resolve_mt5_account_id(None)
+        candidate_limit = self._account_filter_candidate_limit(limit)
+        records = self.runtime.storage.recent_execution_fills(limit=candidate_limit, portfolio_slug=portfolio_slug)
+        execution_candidates = self.runtime.storage.recent_execution_results(limit=candidate_limit, portfolio_slug=portfolio_slug)
+        execution_account_by_id: dict[int, str] = {}
+        for execution in execution_candidates:
+            try:
+                execution_id = int(execution.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if execution_id <= 0:
+                continue
+            execution_account_by_id[execution_id] = self._resolved_record_account_id(
+                execution,
+                default_account_id=default_account_id,
+            )
+
+        filtered: list[dict[str, Any]] = []
+        normalized_limit = max(int(limit), 1)
+        for record in records:
+            resolved_account_id = self._resolved_record_account_id(record, default_account_id=default_account_id)
+            if resolved_account_id == default_account_id:
+                try:
+                    execution_result_id = int(record.get("execution_result_id"))
+                except (TypeError, ValueError):
+                    execution_result_id = 0
+                if execution_result_id > 0:
+                    resolved_account_id = execution_account_by_id.get(execution_result_id, resolved_account_id)
+            if resolved_account_id == requested_account_id:
+                normalized_record = dict(record)
+                normalized_record["account_id"] = resolved_account_id
+                filtered.append(normalized_record)
+                if len(filtered) >= normalized_limit:
+                    break
+        return filtered
 
     def recent_audit_events(self, *, limit: int = 50, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
         if not self.runtime.storage_ready:
             return []
         return self.runtime.storage.recent_audit_events(limit=limit, portfolio_slug=portfolio_slug)
 
-    def report_decision_history(self, *, limit: int = 25, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
-        return self.recent_decisions(limit=limit, portfolio_slug=portfolio_slug)
+    def report_decision_history(
+        self,
+        *,
+        limit: int = 25,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.recent_decisions(limit=limit, portfolio_slug=portfolio_slug, account_id=account_id)
 
     def report_capital_history(
         self,
@@ -582,21 +720,44 @@ class DeskReadService:
         *,
         portfolio_slug: str | None = None,
         report_id: int | None = None,
+        account_id: str | None = None,
     ) -> dict[str, Any] | None:
         if not self.runtime.storage_ready:
             return None
+
+        requested_account_id = self._resolve_requested_account_id(account_id)
+        default_account_id = self.runtime.resolve_mt5_account_id(None)
 
         artifact = None
         if report_id is not None:
             candidate = self.runtime.storage.artifact_by_id(int(report_id))
             if candidate is not None and str(candidate.get("artifact_type") or "") == "daily_report":
                 details = dict(candidate.get("details") or {})
-                if portfolio_slug is None or str(details.get("portfolio_slug") or "") == str(portfolio_slug):
+                matches_portfolio = portfolio_slug is None or str(details.get("portfolio_slug") or "") == str(portfolio_slug)
+                matches_account = requested_account_id is None or (
+                    self._resolved_record_account_id(details, default_account_id=default_account_id) == requested_account_id
+                )
+                if matches_portfolio and matches_account:
                     artifact = candidate
         else:
-            artifact = self.runtime.storage.latest_artifact("daily_report", portfolio_slug=portfolio_slug)
+            if requested_account_id is None:
+                artifact = self.runtime.storage.latest_artifact("daily_report", portfolio_slug=portfolio_slug)
+            else:
+                candidates = self.runtime.storage.recent_artifacts(
+                    "daily_report",
+                    limit=200,
+                    portfolio_slug=portfolio_slug,
+                )
+                for candidate in candidates:
+                    details = dict(candidate.get("details") or {})
+                    if self._resolved_record_account_id(details, default_account_id=default_account_id) == requested_account_id:
+                        artifact = candidate
+                        break
         if artifact is None:
             return None
+
+        details = dict(artifact.get("details") or {})
+        resolved_account_id = self._resolved_record_account_id(details, default_account_id=default_account_id)
 
         report_path = Path(artifact["path"])
         if not report_path.exists():
@@ -613,7 +774,8 @@ class DeskReadService:
         return {
             "report_id": int(artifact["id"]),
             "report_markdown": str(report_path.resolve()),
-            "portfolio_slug": str((artifact.get("details") or {}).get("portfolio_slug") or portfolio_slug or ""),
+            "portfolio_slug": str(details.get("portfolio_slug") or portfolio_slug or ""),
+            "account_id": resolved_account_id,
             "content": report_path.read_text(encoding="utf-8"),
             "chart_paths": chart_paths,
         }

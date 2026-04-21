@@ -38,16 +38,23 @@ class DeskMt5Service:
     def __init__(self, runtime: DeskServiceRuntime):
         self.runtime = runtime
 
-    def _live_scope_key(self, portfolio_slug: str) -> tuple[str, str]:
-        return (str(self.runtime.root.resolve()), str(portfolio_slug))
+    def _live_scope_key(
+        self,
+        portfolio_slug: str,
+        *,
+        account_id: str | None = None,
+    ) -> tuple[str, str]:
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        return (str(self.runtime.root.resolve()), f"{portfolio_slug}::{resolved_account_id}")
 
     def _live_state_response_cache_key(
         self,
         *,
         portfolio_slug: str,
         detail_level: str,
+        account_id: str | None = None,
     ) -> tuple[str, str, str]:
-        return (*self._live_scope_key(portfolio_slug), str(detail_level))
+        return (*self._live_scope_key(portfolio_slug, account_id=account_id), str(detail_level))
 
     def _summary_cache_ttl_seconds(self) -> float:
         configured = max(float(self.runtime.mt5_config.live_poll_seconds), 0.5)
@@ -75,8 +82,9 @@ class DeskMt5Service:
         *,
         portfolio_slug: str,
         analytics: Mapping[str, Any],
+        account_id: str | None = None,
     ) -> None:
-        scope_key = self._live_scope_key(portfolio_slug)
+        scope_key = self._live_scope_key(portfolio_slug, account_id=account_id)
         self._shared_last_broker_analytics[scope_key] = {
             "captured_at": datetime.now(timezone.utc).isoformat(),
             "analytics": deepcopy(dict(analytics)),
@@ -86,8 +94,9 @@ class DeskMt5Service:
         self,
         *,
         portfolio_slug: str,
+        account_id: str | None = None,
     ) -> dict[str, Any] | None:
-        scope_key = self._live_scope_key(portfolio_slug)
+        scope_key = self._live_scope_key(portfolio_slug, account_id=account_id)
         cached = self._shared_last_broker_analytics.get(scope_key)
         if cached is None:
             return None
@@ -107,8 +116,9 @@ class DeskMt5Service:
         *,
         portfolio_slug: str,
         payload: Mapping[str, Any],
+        account_id: str | None = None,
     ) -> None:
-        scope_key = self._live_scope_key(portfolio_slug)
+        scope_key = self._live_scope_key(portfolio_slug, account_id=account_id)
         self._shared_last_good_live_state[scope_key] = {
             "captured_at": datetime.now(timezone.utc).isoformat(),
             "payload": deepcopy(dict(payload)),
@@ -118,8 +128,9 @@ class DeskMt5Service:
         self,
         *,
         portfolio_slug: str,
+        account_id: str | None = None,
     ) -> dict[str, Any] | None:
-        scope_key = self._live_scope_key(portfolio_slug)
+        scope_key = self._live_scope_key(portfolio_slug, account_id=account_id)
         cached = self._shared_last_good_live_state.get(scope_key)
         if cached is None:
             return None
@@ -205,13 +216,16 @@ class DeskMt5Service:
         *,
         portfolio_slug: str | None = None,
         detail_level: Literal["summary", "full", "inspector"] = "summary",
+        account_id: str | None = None,
     ) -> dict[str, Any] | None:
         if detail_level != "summary":
             return None
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
         cache_key = self._live_state_response_cache_key(
             portfolio_slug=portfolio["slug"],
             detail_level=detail_level,
+            account_id=resolved_account_id,
         )
         cached = self._shared_live_state_response_cache.get(cache_key)
         if cached is None:
@@ -237,6 +251,7 @@ class DeskMt5Service:
         *,
         portfolio_slug: str,
         raw_state: Mapping[str, Any],
+        account_id: str | None = None,
     ) -> tuple[str, str, str]:
         holdings = []
         for item in list(raw_state.get("holdings") or []):
@@ -259,7 +274,7 @@ class DeskMt5Service:
         latest_sync_marker = self._latest_market_sync_marker(portfolio_slug)
         latest_validation_marker = self._latest_validation_marker(portfolio_slug)
         return (
-            *self._live_scope_key(portfolio_slug),
+            *self._live_scope_key(portfolio_slug, account_id=account_id),
             json.dumps(
                 {
                     "holdings": holdings,
@@ -278,9 +293,10 @@ class DeskMt5Service:
         *,
         portfolio_slug: str,
         raw_state: Mapping[str, Any],
+        account_id: str | None = None,
     ) -> tuple[str, str, str, str]:
         return (
-            *self._live_scope_key(portfolio_slug),
+            *self._live_scope_key(portfolio_slug, account_id=account_id),
             self._live_persistence_key(dict(raw_state)),
             self._latest_market_sync_marker(portfolio_slug),
         )
@@ -311,19 +327,25 @@ class DeskMt5Service:
         raw_state: dict[str, Any],
         *,
         portfolio_slug: str,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         cache_key = self._enriched_live_state_cache_key(
             portfolio_slug=portfolio_slug,
             raw_state=raw_state,
+            account_id=account_id,
         )
         cached = self._shared_enriched_live_state_cache.get(cache_key)
         if cached is not None:
             return deepcopy(cached)
 
-        enriched = self._enrich_live_state(raw_state, portfolio_slug=portfolio_slug)
+        enriched = self._enrich_live_state(
+            raw_state,
+            portfolio_slug=portfolio_slug,
+            account_id=account_id,
+        )
         self._shared_enriched_live_state_cache[cache_key] = deepcopy(enriched)
 
-        scope_key = self._live_scope_key(portfolio_slug)
+        scope_key = self._live_scope_key(portfolio_slug, account_id=account_id)
         for key in list(self._shared_enriched_live_state_cache):
             if key[:2] == scope_key and key != cache_key:
                 del self._shared_enriched_live_state_cache[key]
@@ -335,22 +357,28 @@ class DeskMt5Service:
         raw_state: dict[str, Any],
         *,
         portfolio_slug: str,
+        account_id: str | None = None,
     ) -> dict[str, Any] | None:
         cache_key = self._live_analytics_cache_key(
             portfolio_slug=portfolio_slug,
             raw_state=raw_state,
+            account_id=account_id,
         )
         cached = self._shared_live_analytics_cache.get(cache_key)
         if cached is not None:
             return deepcopy(cached)
 
-        analytics = self._build_live_analytics(raw_state, portfolio_slug=portfolio_slug)
+        analytics = self._build_live_analytics(
+            raw_state,
+            portfolio_slug=portfolio_slug,
+            account_id=account_id,
+        )
         if analytics is None:
             return None
 
         self._shared_live_analytics_cache[cache_key] = deepcopy(analytics)
 
-        scope_key = self._live_scope_key(portfolio_slug)
+        scope_key = self._live_scope_key(portfolio_slug, account_id=account_id)
         for key in list(self._shared_live_analytics_cache):
             if key[:2] == scope_key and key != cache_key:
                 del self._shared_live_analytics_cache[key]
@@ -363,8 +391,12 @@ class DeskMt5Service:
         portfolio: Mapping[str, Any],
         portfolio_id: int | None,
         imported_symbols: list[str],
+        account_id: str | None = None,
     ) -> None:
-        scope_key = self._live_scope_key(str(portfolio["slug"]))
+        scope_key = self._live_scope_key(
+            str(portfolio["slug"]),
+            account_id=account_id,
+        )
         with self._shared_startup_sync_lock:
             if scope_key in self._shared_startup_sync_inflight:
                 return
@@ -374,6 +406,7 @@ class DeskMt5Service:
             try:
                 self.runtime.market_data.sync_market_data(
                     portfolio_slug=str(portfolio["slug"]),
+                    account_id=account_id,
                     days=self.runtime.market_data.history_backfill_days(),
                     timeframes=self.runtime.market_data.startup_sync_timeframes(),
                 )
@@ -463,7 +496,13 @@ class DeskMt5Service:
         payload["health"] = dict(payload.get("health") or {})
         return payload
 
-    def _check_startup_import(self, raw_state: dict[str, Any], *, portfolio_slug: str | None = None) -> None:
+    def _check_startup_import(
+        self,
+        raw_state: dict[str, Any],
+        *,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> None:
         if not raw_state.get("connected"):
             return
         live_holdings = list(raw_state.get("holdings") or [])
@@ -484,7 +523,8 @@ class DeskMt5Service:
             return
 
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
-        scope_key = self._live_scope_key(portfolio["slug"])
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        scope_key = self._live_scope_key(portfolio["slug"], account_id=resolved_account_id)
         if scope_key in self._shared_startup_import_done:
             return
         self._shared_startup_import_done.add(scope_key)
@@ -513,6 +553,7 @@ class DeskMt5Service:
             portfolio=portfolio,
             portfolio_id=portfolio_id,
             imported_symbols=imported_symbols,
+            account_id=resolved_account_id,
         )
 
     def _live_portfolio_scope(
@@ -695,6 +736,7 @@ class DeskMt5Service:
         raw_state: dict[str, Any],
         *,
         portfolio_slug: str | None = None,
+        account_id: str | None = None,
     ) -> dict[str, Any] | None:
         portfolio = self._live_portfolio_scope(raw_state, portfolio_slug=portfolio_slug)
         if not list(raw_state.get("holdings") or []):
@@ -1275,6 +1317,7 @@ class DeskMt5Service:
         raw_state: Mapping[str, Any],
         *,
         portfolio_slug: str,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         symbols = sorted(
             {
@@ -1288,7 +1331,7 @@ class DeskMt5Service:
         if not bool(raw_state.get("connected", False)):
             return self.runtime.market_data.tick_archive_summary(symbols=symbols)
         sequence = int(raw_state.get("sequence") or 0)
-        scope_key = self._live_scope_key(portfolio_slug)
+        scope_key = self._live_scope_key(portfolio_slug, account_id=account_id)
         if sequence > 0 and self._shared_last_tick_archive_sequence.get(scope_key) == sequence:
             return self.runtime.market_data.tick_archive_summary(symbols=symbols)
         archived = self.runtime.market_data.archive_live_ticks_from_state(raw_state, portfolio_slug=portfolio_slug)
@@ -1320,19 +1363,26 @@ class DeskMt5Service:
         portfolio_slug: str | None = None,
         window_minutes: int = 240,
         max_points: int = 300,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         resolved_window_minutes = max(int(window_minutes), 15)
         resolved_max_points = max(int(max_points), 50)
         now = datetime.now(timezone.utc)
         window_start = now - timedelta(minutes=resolved_window_minutes)
-        current_state = self.live_state(portfolio_slug=portfolio["slug"], detail_level="summary")
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        current_state = self.live_state(
+            portfolio_slug=portfolio["slug"],
+            detail_level="summary",
+            account_id=resolved_account_id,
+        )
         events = self.live_events(
             portfolio_slug=portfolio["slug"],
             after=0,
             limit=max(resolved_max_points * 4, 200),
             wait_seconds=0.0,
             detail_level="summary",
+            account_id=resolved_account_id,
         )
         states = [dict(item.get("state") or {}) for item in events]
         states.append(dict(current_state))
@@ -1385,6 +1435,7 @@ class DeskMt5Service:
         return {
             "generated_at": now.isoformat(),
             "portfolio_slug": portfolio["slug"],
+            "account_id": resolved_account_id,
             "window_minutes": resolved_window_minutes,
             "market_closed": bool(current_state.get("market_closed", False)),
             "market_reference_timestamp": current_state.get("market_reference_timestamp"),
@@ -1577,14 +1628,14 @@ class DeskMt5Service:
             "governance_10d_99": _scale(governance),
         }
 
-    def _instrument_metadata(self, symbol: str) -> dict[str, Any]:
+    def _instrument_metadata(self, symbol: str, *, account_id: str | None = None) -> dict[str, Any]:
         normalized = str(symbol).upper()
         instruments = self.runtime.storage.list_instruments(symbols=[normalized]) if self.runtime.storage_ready else []
         instrument = {} if not instruments else dict(instruments[0])
         if any(instrument.get(key) not in {None, 0, 0.0} for key in ("contract_size", "tick_size", "tick_value")):
             return instrument
         try:
-            with self.runtime._mt5_gateway() as live:
+            with self.runtime._mt5_gateway(account_id=account_id) as live:
                 live_instrument = live.instrument_definition(normalized).to_dict()
         except Exception:
             return instrument
@@ -1598,10 +1649,11 @@ class DeskMt5Service:
         symbol: str,
         volume_lots: float,
         spread: float | None,
+        account_id: str | None = None,
     ) -> float | None:
         if spread is None or volume_lots == 0:
             return None
-        instrument = self._instrument_metadata(symbol)
+        instrument = self._instrument_metadata(symbol, account_id=account_id)
         tick_size = instrument.get("tick_size")
         tick_value = instrument.get("tick_value")
         contract_size = instrument.get("contract_size")
@@ -1761,24 +1813,33 @@ class DeskMt5Service:
 
         return compact
 
-    def _build_live_state_direct(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
+    def _build_live_state_direct(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> dict[str, Any]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
-        connector = self.runtime._build_mt5_connector()
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        account_config = self.runtime.mt5_config_for_account(resolved_account_id)
+        connector = self.runtime._build_mt5_connector(account_id=resolved_account_id)
         try:
             connector.init()
             raw_state = collect_live_state_from_connector(
                 connector,
-                config=self.runtime.mt5_config,
+                config=account_config,
                 base_currency=str(portfolio["base_currency"]),
                 seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
-                history_lookback_minutes=int(self.runtime.mt5_config.live_history_lookback_minutes),
+                history_lookback_minutes=int(account_config.live_history_lookback_minutes),
             )
         finally:
             connector.shutdown()
-        return self._normalize_live_state(raw_state)
+        payload = self._normalize_live_state(raw_state)
+        payload["account_id"] = resolved_account_id
+        return payload
 
-    def _clear_scope_caches(self, *, portfolio_slug: str) -> None:
-        scope_key = self._live_scope_key(portfolio_slug)
+    def _clear_scope_caches(self, *, portfolio_slug: str, account_id: str | None = None) -> None:
+        scope_key = self._live_scope_key(portfolio_slug, account_id=account_id)
         for key in list(self._shared_enriched_live_state_cache):
             if key[:2] == scope_key:
                 del self._shared_enriched_live_state_cache[key]
@@ -2012,15 +2073,26 @@ class DeskMt5Service:
 
         return {"checked": checked, "resolved": resolved}
 
-    def _enrich_live_state(self, raw_state: dict[str, Any], *, portfolio_slug: str | None = None) -> dict[str, Any]:
-        self._check_startup_import(raw_state, portfolio_slug=portfolio_slug)
+    def _enrich_live_state(
+        self,
+        raw_state: dict[str, Any],
+        *,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> dict[str, Any]:
+        self._check_startup_import(
+            raw_state,
+            portfolio_slug=portfolio_slug,
+            account_id=account_id,
+        )
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
         try:
             healed = self._auto_heal_execution_reconciliation(portfolio_slug=portfolio["slug"])
         except Exception:
             healed = None
         if healed is not None and int(healed.get("healed") or 0) > 0:
-            self._clear_scope_caches(portfolio_slug=portfolio["slug"])
+            self._clear_scope_caches(portfolio_slug=portfolio["slug"], account_id=resolved_account_id)
         exposure = self.runtime.market_data.exposure_from_holdings(
             list(raw_state.get("holdings") or []),
             portfolio_slug=portfolio["slug"],
@@ -2037,7 +2109,7 @@ class DeskMt5Service:
         except Exception:
             autoresolve = None
         if autoresolve is not None and int(autoresolve.get("resolved") or 0) > 0:
-            self._clear_scope_caches(portfolio_slug=portfolio["slug"])
+            self._clear_scope_caches(portfolio_slug=portfolio["slug"], account_id=resolved_account_id)
             reconciliation = self.runtime.market_data.reconciliation_summary_from_live_state(
                 raw_state,
                 portfolio_slug=portfolio["slug"],
@@ -2049,6 +2121,7 @@ class DeskMt5Service:
             **dict(raw_state),
             "portfolio_slug": portfolio["slug"],
             "portfolio_mode": portfolio.get("mode"),
+            "account_id": resolved_account_id,
             "exposure": exposure,
             "reconciliation": reconciliation,
         }
@@ -2068,7 +2141,11 @@ class DeskMt5Service:
             or enriched.get("history_lookback_minutes")
             or self.runtime.mt5_config.live_history_lookback_minutes
         )
-        tick_archive = self._archive_live_ticks_if_needed(enriched, portfolio_slug=portfolio["slug"])
+        tick_archive = self._archive_live_ticks_if_needed(
+            enriched,
+            portfolio_slug=portfolio["slug"],
+            account_id=resolved_account_id,
+        )
         microstructure, tick_quality = self._build_microstructure(enriched, tick_archive=tick_archive)
         pnl_explain = self._build_pnl_explain(enriched, microstructure=microstructure)
         enriched["microstructure"] = microstructure
@@ -2076,7 +2153,11 @@ class DeskMt5Service:
         enriched["pnl_explain"] = pnl_explain
         operator_alerts = [alert.to_dict() for alert in alerts_from_live_operator_state(enriched)]
         try:
-            analytics = self._cached_build_live_analytics(enriched, portfolio_slug=portfolio["slug"])
+            analytics = self._cached_build_live_analytics(
+                enriched,
+                portfolio_slug=portfolio["slug"],
+                account_id=resolved_account_id,
+            )
         except Exception as exc:
             analytics = None
             operator_alerts.append(
@@ -2095,11 +2176,15 @@ class DeskMt5Service:
             self._remember_last_broker_analytics(
                 portfolio_slug=portfolio["slug"],
                 analytics=analytics,
+                account_id=resolved_account_id,
             )
 
         using_cached_broker_fallback = False
         if strict_live and not live_base_ready:
-            fallback_analytics = self._latest_broker_analytics(portfolio_slug=portfolio["slug"])
+            fallback_analytics = self._latest_broker_analytics(
+                portfolio_slug=portfolio["slug"],
+                account_id=resolved_account_id,
+            )
             if fallback_analytics is not None:
                 analytics = fallback_analytics
                 using_cached_broker_fallback = True
@@ -2185,11 +2270,15 @@ class DeskMt5Service:
         portfolio_slug: str | None = None,
         detail_level: Literal["summary", "full", "inspector"] = "full",
         force_refresh: bool = False,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        account_config = self.runtime.mt5_config_for_account(resolved_account_id)
         cache_key = self._live_state_response_cache_key(
             portfolio_slug=portfolio["slug"],
             detail_level=detail_level,
+            account_id=resolved_account_id,
         )
         if not force_refresh:
             cached = self._shared_live_state_response_cache.get(cache_key)
@@ -2200,7 +2289,7 @@ class DeskMt5Service:
                 cached = self._shared_live_state_response_cache.get(cache_key)
                 if cached is not None and float(cached.get("expires_at") or 0.0) > time.monotonic():
                     return deepcopy(dict(cached.get("payload") or {}))
-            connector = self.runtime._build_mt5_connector()
+            connector = self.runtime._build_mt5_connector(account_id=resolved_account_id)
             try:
                 connector.init()
                 if hasattr(connector, "live_state"):
@@ -2209,14 +2298,17 @@ class DeskMt5Service:
                     raw_state = self._normalize_live_state(
                         collect_live_state_from_connector(
                             connector,
-                            config=self.runtime.mt5_config,
+                            config=account_config,
                             base_currency=str(portfolio["base_currency"]),
                             seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
-                            history_lookback_minutes=int(self.runtime.mt5_config.live_history_lookback_minutes),
+                            history_lookback_minutes=int(account_config.live_history_lookback_minutes),
                         )
                     )
             except Exception as exc:
-                fallback_state = self._latest_good_live_state(portfolio_slug=portfolio["slug"])
+                fallback_state = self._latest_good_live_state(
+                    portfolio_slug=portfolio["slug"],
+                    account_id=resolved_account_id,
+                )
                 if fallback_state is not None:
                     now_iso = datetime.now(timezone.utc).isoformat()
                     raw_state = self._normalize_live_state(dict(fallback_state))
@@ -2241,7 +2333,7 @@ class DeskMt5Service:
                         raw_state["last_success_at"] = str(fallback_state.get("generated_at") or now_iso)
                 else:
                     raw_state = build_empty_live_state(
-                        config=self.runtime.mt5_config,
+                        config=account_config,
                         seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
                         status="degraded",
                         connected=False,
@@ -2252,7 +2344,10 @@ class DeskMt5Service:
             finally:
                 connector.shutdown()
 
-            cached_good_state = self._latest_good_live_state(portfolio_slug=portfolio["slug"])
+            cached_good_state = self._latest_good_live_state(
+                portfolio_slug=portfolio["slug"],
+                account_id=resolved_account_id,
+            )
             can_use_fast_overlay = (
                 not force_refresh
                 and cached_good_state is not None
@@ -2264,31 +2359,49 @@ class DeskMt5Service:
                     raw_state=raw_state,
                 )
             else:
-                enriched = self._cached_enrich_live_state(raw_state, portfolio_slug=portfolio["slug"])
+                enriched = self._cached_enrich_live_state(
+                    raw_state,
+                    portfolio_slug=portfolio["slug"],
+                    account_id=resolved_account_id,
+                )
+            enriched["account_id"] = resolved_account_id
 
             if bool(enriched.get("connected", False)) and not bool(enriched.get("stale", False)):
                 self._remember_last_good_live_state(
                     portfolio_slug=portfolio["slug"],
                     payload=enriched,
+                    account_id=resolved_account_id,
                 )
             payload_summary = self._apply_live_detail_level(enriched, detail_level="summary")
             payload_full = self._apply_live_detail_level(enriched, detail_level="full")
             payload_inspector = self._apply_live_detail_level(enriched, detail_level="inspector")
             now_monotonic = time.monotonic()
             self._shared_live_state_response_cache[
-                self._live_state_response_cache_key(portfolio_slug=portfolio["slug"], detail_level="summary")
+                self._live_state_response_cache_key(
+                    portfolio_slug=portfolio["slug"],
+                    detail_level="summary",
+                    account_id=resolved_account_id,
+                )
             ] = {
                 "expires_at": now_monotonic + self._detail_cache_ttl_seconds("summary"),
                 "payload": deepcopy(payload_summary),
             }
             self._shared_live_state_response_cache[
-                self._live_state_response_cache_key(portfolio_slug=portfolio["slug"], detail_level="full")
+                self._live_state_response_cache_key(
+                    portfolio_slug=portfolio["slug"],
+                    detail_level="full",
+                    account_id=resolved_account_id,
+                )
             ] = {
                 "expires_at": now_monotonic + self._detail_cache_ttl_seconds("full"),
                 "payload": deepcopy(payload_full),
             }
             self._shared_live_state_response_cache[
-                self._live_state_response_cache_key(portfolio_slug=portfolio["slug"], detail_level="inspector")
+                self._live_state_response_cache_key(
+                    portfolio_slug=portfolio["slug"],
+                    detail_level="inspector",
+                    account_id=resolved_account_id,
+                )
             ] = {
                 "expires_at": now_monotonic + self._detail_cache_ttl_seconds("inspector"),
                 "payload": deepcopy(payload_inspector),
@@ -2307,9 +2420,12 @@ class DeskMt5Service:
         limit: int = 100,
         wait_seconds: float = 15.0,
         detail_level: Literal["summary", "full", "inspector"] = "full",
+        account_id: str | None = None,
     ) -> list[dict[str, Any]]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
-        connector = self.runtime._build_mt5_connector()
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        account_config = self.runtime.mt5_config_for_account(resolved_account_id)
+        connector = self.runtime._build_mt5_connector(account_id=resolved_account_id)
         try:
             connector.init()
             if hasattr(connector, "live_events"):
@@ -2323,15 +2439,18 @@ class DeskMt5Service:
                         "change_summary": {},
                         "state": collect_live_state_from_connector(
                             connector,
-                            config=self.runtime.mt5_config,
+                            config=account_config,
                             base_currency=str(portfolio["base_currency"]),
                             seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
-                            history_lookback_minutes=int(self.runtime.mt5_config.live_history_lookback_minutes),
+                            history_lookback_minutes=int(account_config.live_history_lookback_minutes),
                         ),
                     }
                 ]
         except Exception as exc:
-            fallback_state = self._latest_good_live_state(portfolio_slug=portfolio["slug"])
+            fallback_state = self._latest_good_live_state(
+                portfolio_slug=portfolio["slug"],
+                account_id=resolved_account_id,
+            )
             if fallback_state is not None:
                 now_iso = datetime.now(timezone.utc).isoformat()
                 degraded_state = self._normalize_live_state(dict(fallback_state))
@@ -2357,7 +2476,7 @@ class DeskMt5Service:
                 error_state = degraded_state
             else:
                 error_state = build_empty_live_state(
-                    config=self.runtime.mt5_config,
+                    config=account_config,
                     seed_symbols=portfolio.get("watchlist_symbols") or portfolio["symbols"],
                     status="degraded",
                     connected=False,
@@ -2382,7 +2501,9 @@ class DeskMt5Service:
             enriched_state = self._cached_enrich_live_state(
                 self._normalize_live_state(dict(event.get("state") or {})),
                 portfolio_slug=portfolio["slug"],
+                account_id=resolved_account_id,
             )
+            enriched_state["account_id"] = resolved_account_id
             payload["state"] = self._apply_live_detail_level(
                 enriched_state,
                 detail_level=detail_level,
@@ -2461,45 +2582,85 @@ class DeskMt5Service:
             )
         )
 
-    def mt5_status(self) -> dict[str, Any]:
+    def mt5_status(self, *, account_id: str | None = None) -> dict[str, Any]:
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        account_config = self.runtime.mt5_config_for_account(resolved_account_id)
         try:
-            with self.runtime._mt5_gateway() as live:
-                return live.terminal_status().to_dict()
+            with self.runtime._mt5_gateway(account_id=resolved_account_id) as live:
+                payload = live.terminal_status().to_dict()
+                payload["account_id"] = resolved_account_id
+                return payload
         except MT5ConnectionError as exc:
-            return MT5TerminalStatus(
+            payload = MT5TerminalStatus(
                 connected=False,
                 ready=False,
-                execution_enabled=bool(self.runtime.mt5_config.execution_enabled),
+                execution_enabled=bool(account_config.execution_enabled),
                 trade_allowed=None,
                 tradeapi_disabled=None,
                 company=None,
-                terminal_path=self.runtime.mt5_config.path,
+                terminal_path=account_config.path,
                 data_path=None,
                 commondata_path=None,
                 message=str(exc),
                 timestamp_utc=datetime.now(timezone.utc).isoformat(),
                 raw={},
             ).to_dict()
+            payload["account_id"] = resolved_account_id
+            return payload
 
-    def mt5_account(self) -> dict[str, Any]:
-        with self.runtime._mt5_gateway() as live:
-            return live.account_snapshot().to_dict()
+    def mt5_account(self, *, account_id: str | None = None) -> dict[str, Any]:
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        with self.runtime._mt5_gateway(account_id=resolved_account_id) as live:
+            payload = live.account_snapshot().to_dict()
+            payload["account_id"] = resolved_account_id
+            return payload
 
-    def mt5_positions(self, *, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
+    def mt5_accounts(self) -> dict[str, Any]:
+        accounts = self.runtime.list_mt5_accounts()
+        return {
+            "active_account_id": self.runtime.resolve_mt5_account_id(None),
+            "accounts": accounts,
+        }
+
+    def mt5_positions(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         portfolio = None if portfolio_slug is None else self.runtime._resolve_portfolio_context(portfolio_slug)
-        with self.runtime._mt5_gateway() as live:
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        with self.runtime._mt5_gateway(account_id=resolved_account_id) as live:
             symbols = None
             if portfolio is not None and not self.runtime.market_data.should_use_mt5_market_data(portfolio):
                 symbols = portfolio["symbols"]
-            return [item.to_dict() for item in live.positions(symbols=symbols)]
+            return [
+                {
+                    **item.to_dict(),
+                    "account_id": resolved_account_id,
+                }
+                for item in live.positions(symbols=symbols)
+            ]
 
-    def mt5_orders(self, *, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
+    def mt5_orders(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         portfolio = None if portfolio_slug is None else self.runtime._resolve_portfolio_context(portfolio_slug)
-        with self.runtime._mt5_gateway() as live:
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        with self.runtime._mt5_gateway(account_id=resolved_account_id) as live:
             symbols = None
             if portfolio is not None and not self.runtime.market_data.should_use_mt5_market_data(portfolio):
                 symbols = portfolio["symbols"]
-            return [item.to_dict() for item in live.pending_orders(symbols=symbols)]
+            return [
+                {
+                    **item.to_dict(),
+                    "account_id": resolved_account_id,
+                }
+                for item in live.pending_orders(symbols=symbols)
+            ]
 
     def _compute_execution_bundle(
         self,
@@ -2525,6 +2686,7 @@ class DeskMt5Service:
         *,
         requested_exposure_change: float,
         portfolio_slug: str,
+        account_id: str,
         symbol: str,
         timestamp_utc: str,
         terminal_status: MT5TerminalStatus,
@@ -2561,6 +2723,7 @@ class DeskMt5Service:
         ).to_dict()
         payload.update(
             {
+                "account_id": account_id,
                 "requested_volume_lots": requested_volume_lots,
                 "approved_volume_lots": approved_volume_lots,
                 "submitted_volume_lots": 0.0,
@@ -2588,14 +2751,16 @@ class DeskMt5Service:
         delta_position_eur: float | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         portfolio_id = self.runtime._resolve_portfolio_id(portfolio["slug"])
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
         normalized_exposure_change = (
             float(exposure_change) if exposure_change is not None else float(delta_position_eur or 0.0)
         )
-        with self.runtime._mt5_gateway() as live:
+        with self.runtime._mt5_gateway(account_id=resolved_account_id) as live:
             terminal_status = live.terminal_status()
             account = live.account_snapshot()
             live_positions = live.positions()
@@ -2683,9 +2848,10 @@ class DeskMt5Service:
                 symbol=str(symbol).upper(),
                 volume_lots=float(guard.volume_lots or 0.0),
                 spread=None if live_spread is None else float(live_spread),
+                account_id=resolved_account_id,
             )
             expected_slippage_points = None
-            instrument = self._instrument_metadata(str(symbol).upper())
+            instrument = self._instrument_metadata(str(symbol).upper(), account_id=resolved_account_id)
             tick_size = instrument.get("tick_size")
             if live_spread is not None:
                 multiplier = 1.0
@@ -2727,9 +2893,11 @@ class DeskMt5Service:
                 estimated_spread_cost=estimated_spread_cost,
                 expected_slippage_points=expected_slippage_points,
             ).to_dict()
+            preview["account_id"] = resolved_account_id
             preview_result_payload = self._preview_execution_result_payload(
                 requested_exposure_change=normalized_exposure_change,
                 portfolio_slug=portfolio["slug"],
+                account_id=resolved_account_id,
                 symbol=str(symbol).upper(),
                 timestamp_utc=preview_timestamp,
                 terminal_status=terminal_status,
@@ -2753,6 +2921,7 @@ class DeskMt5Service:
                 object_id=preview_execution_id,
                 payload={
                     "portfolio_slug": portfolio["slug"],
+                    "account_id": resolved_account_id,
                     "symbol": str(symbol).upper(),
                     "decision": guard.decision,
                     "risk_decision": decision.get("decision"),
@@ -2981,14 +3150,16 @@ class DeskMt5Service:
         delta_position_eur: float | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         portfolio_id = self.runtime._resolve_portfolio_id(portfolio["slug"])
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
         normalized_exposure_change = (
             float(exposure_change) if exposure_change is not None else float(delta_position_eur or 0.0)
         )
-        with self.runtime._mt5_gateway() as live:
+        with self.runtime._mt5_gateway(account_id=resolved_account_id) as live:
             terminal_status = live.terminal_status()
             account_before = live.account_snapshot()
             bundle = self._compute_execution_bundle(portfolio=portfolio, live=live)
@@ -3122,6 +3293,7 @@ class DeskMt5Service:
             ).to_dict()
             result_payload.update(
                 {
+                    "account_id": resolved_account_id,
                     "portfolio_id": portfolio_id,
                     "decision_id": decision.get("id"),
                     "requested_volume_lots": requested_volume_lots,
@@ -3156,6 +3328,7 @@ class DeskMt5Service:
                 object_id=execution_id,
                 payload={
                     "portfolio_slug": portfolio["slug"],
+                    "account_id": resolved_account_id,
                     "symbol": str(symbol).upper(),
                     "status": status,
                     "decision_id": decision.get("id"),

@@ -28,6 +28,8 @@ def _write_settings(
     *,
     portfolio_mode: str | None = None,
     market_history_days: int | None = None,
+    mt5_accounts: list[dict[str, object]] | None = None,
+    mt5_default_account_id: str | None = None,
 ) -> None:
     config_dir = root / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -65,6 +67,8 @@ def _write_settings(
             "magic": 420001,
             "deviation_points": 20,
             "comment_prefix": "var_risk_desk",
+            **({} if mt5_default_account_id is None else {"account_id": str(mt5_default_account_id)}),
+            **({} if not mt5_accounts else {"accounts": list(mt5_accounts)}),
         },
         "storage": {
             "database_path": "data/app/test_mt5_api.db",
@@ -884,6 +888,151 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     assert latest_capital.json()["portfolio_slug"] == "fx_eur_20k"
 
 
+def test_recent_execution_activity_filters_by_account_id(tmp_path: Path):
+    root = tmp_path
+    _write_settings(
+        root,
+        portfolio_mode="live_mt5",
+        mt5_default_account_id="alpha",
+        mt5_accounts=[{"account_id": "alpha"}, {"account_id": "beta"}],
+    )
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+    FakeMT5Connector.reset()
+
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True))
+
+    preview_alpha = client.post(
+        "/execution/preview",
+        json={"symbol": "EURUSD", "exposure_change": 1_000.0, "note": "alpha preview", "account_id": "alpha"},
+    )
+    assert preview_alpha.status_code == 200
+    assert preview_alpha.json()["account_id"] == "alpha"
+
+    submit_alpha = client.post(
+        "/execution/submit",
+        json={"symbol": "EURUSD", "exposure_change": 1_000.0, "note": "alpha submit", "account_id": "alpha"},
+    )
+    assert submit_alpha.status_code == 200
+    assert submit_alpha.json()["account_id"] == "alpha"
+
+    submit_beta = client.post(
+        "/execution/submit",
+        json={"symbol": "USDJPY", "exposure_change": 1_000.0, "note": "beta submit", "account_id": "beta"},
+    )
+    assert submit_beta.status_code == 200
+    assert submit_beta.json()["account_id"] == "beta"
+
+    recent_alpha = client.get("/execution/recent", params={"limit": 20, "account_id": "alpha"})
+    assert recent_alpha.status_code == 200
+    recent_alpha_payload = recent_alpha.json()
+    assert recent_alpha_payload
+    assert all(str(item.get("account_id") or "") == "alpha" for item in recent_alpha_payload)
+    assert any(str(item.get("status") or "").upper() == "PREVIEW" for item in recent_alpha_payload)
+
+    recent_beta = client.get("/execution/recent", params={"limit": 20, "account_id": "beta"})
+    assert recent_beta.status_code == 200
+    recent_beta_payload = recent_beta.json()
+    assert recent_beta_payload
+    assert all(str(item.get("account_id") or "") == "beta" for item in recent_beta_payload)
+    assert any(str(item.get("status") or "").upper() in {"EXECUTED", "PLACED"} for item in recent_beta_payload)
+
+    fills_beta = client.get("/execution/fills/recent", params={"limit": 20, "account_id": "beta"})
+    assert fills_beta.status_code == 200
+    fills_beta_payload = fills_beta.json()
+    assert fills_beta_payload
+    assert all(str(item.get("account_id") or "") == "beta" for item in fills_beta_payload)
+
+    invalid_account = client.get("/execution/recent", params={"limit": 5, "account_id": "unknown_account"})
+    assert invalid_account.status_code == 400
+    assert "Unknown MT5 account" in str(invalid_account.json().get("detail") or "")
+
+
+def test_decision_history_filters_by_account_id(tmp_path: Path):
+    root = tmp_path
+    _write_settings(
+        root,
+        portfolio_mode="live_mt5",
+        mt5_default_account_id="alpha",
+        mt5_accounts=[{"account_id": "alpha"}, {"account_id": "beta"}],
+    )
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+    FakeMT5Connector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+    portfolio_slug = service.runtime.portfolio["slug"]
+    portfolio_id = service.runtime._resolve_portfolio_id(portfolio_slug)
+    base_decision = service.evaluate_trade_decision(
+        symbol="EURUSD",
+        exposure_change=1_000.0,
+        note="seed-decision",
+    )
+
+    def _build_seed_decision(*, account_id: str, symbol: str, note: str, approved_exposure_change: float) -> dict[str, object]:
+        payload = json.loads(json.dumps(base_decision))
+        now_iso = datetime.now(timezone.utc).isoformat()
+        payload.update(
+            {
+                "time_utc": now_iso,
+                "created_at": now_iso,
+                "portfolio_slug": portfolio_slug,
+                "account_id": account_id,
+                "symbol": symbol,
+                "requested_exposure_change": 1_000.0,
+                "approved_exposure_change": approved_exposure_change,
+                "decision": "ACCEPT" if approved_exposure_change >= 1_000.0 else "REDUCE",
+                "model_used": "hist",
+                "note": note,
+            }
+        )
+        payload.pop("id", None)
+        return payload
+
+    service.storage.record_decision(
+        _build_seed_decision(
+            account_id="alpha",
+            symbol="EURUSD",
+            note="alpha-sentinel",
+            approved_exposure_change=1_000.0,
+        ),
+        portfolio_id=portfolio_id,
+    )
+    service.storage.record_decision(
+        _build_seed_decision(
+            account_id="beta",
+            symbol="USDJPY",
+            note="beta-sentinel",
+            approved_exposure_change=500.0,
+        ),
+        portfolio_id=portfolio_id,
+    )
+
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True))
+
+    recent_alpha = client.get("/decisions/recent", params={"limit": 25, "account_id": "alpha"})
+    assert recent_alpha.status_code == 200
+    recent_alpha_payload = recent_alpha.json()
+    assert any(str(item.get("note") or "") == "alpha-sentinel" for item in recent_alpha_payload)
+    assert all(str(item.get("note") or "") != "beta-sentinel" for item in recent_alpha_payload)
+
+    recent_beta = client.get("/decisions/recent", params={"limit": 25, "account_id": "beta"})
+    assert recent_beta.status_code == 200
+    recent_beta_payload = recent_beta.json()
+    assert any(str(item.get("note") or "") == "beta-sentinel" for item in recent_beta_payload)
+    assert all(str(item.get("note") or "") != "alpha-sentinel" for item in recent_beta_payload)
+
+    history_beta = client.get("/reports/decision-history", params={"limit": 25, "account_id": "beta"})
+    assert history_beta.status_code == 200
+    history_beta_payload = history_beta.json()
+    assert any(str(item.get("note") or "") == "beta-sentinel" for item in history_beta_payload)
+    assert all(str(item.get("note") or "") != "alpha-sentinel" for item in history_beta_payload)
+
+    invalid_history = client.get("/reports/decision-history", params={"limit": 5, "account_id": "unknown_account"})
+    assert invalid_history.status_code == 400
+    assert "Unknown MT5 account" in str(invalid_history.json().get("detail") or "")
+
+
 def test_mt5_preview_rows_are_excluded_from_reconciliation_accounting(tmp_path: Path):
     root = tmp_path
     _write_settings(root, portfolio_mode="live_mt5")
@@ -1254,12 +1403,13 @@ def test_mt5_startup_import_schedules_sync_only_once(tmp_path: Path):
 
     calls: list[dict[str, object]] = []
 
-    def record_schedule(*, portfolio, portfolio_id, imported_symbols):
+    def record_schedule(*, portfolio, portfolio_id, imported_symbols, account_id=None):
         calls.append(
             {
                 "portfolio_slug": portfolio["slug"],
                 "portfolio_id": portfolio_id,
                 "imported_symbols": list(imported_symbols),
+                "account_id": account_id,
             }
         )
 
@@ -1281,6 +1431,7 @@ def test_mt5_startup_import_schedules_sync_only_once(tmp_path: Path):
             "portfolio_slug": "fx_eur_20k",
             "portfolio_id": service.runtime.portfolio_ids["fx_eur_20k"],
             "imported_symbols": ["GBPUSD"],
+            "account_id": service.runtime.resolve_mt5_account_id(None),
         }
     ]
 
@@ -1295,7 +1446,7 @@ def test_mt5_live_analytics_cache_reuses_holdings_snapshot(tmp_path: Path):
 
     calls = {"count": 0}
 
-    def fake_build_live_analytics(raw_state, *, portfolio_slug=None):
+    def fake_build_live_analytics(raw_state, *, portfolio_slug=None, account_id=None):
         calls["count"] += 1
         return {
             "bundle": {"portfolio_slug": portfolio_slug, "holdings": list(raw_state.get("holdings") or [])},

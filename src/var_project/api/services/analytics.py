@@ -65,13 +65,18 @@ class DeskAnalyticsService:
             normalized[column] = parsed.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         return normalized
 
-    def _resolve_report_snapshot(self, *, portfolio_slug: str) -> tuple[dict[str, Any] | None, str]:
+    def _resolve_report_snapshot(
+        self,
+        *,
+        portfolio_slug: str,
+        account_id: str | None = None,
+    ) -> tuple[dict[str, Any] | None, str]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         strict_live = self.runtime.strict_live_required(portfolio)
         preferred_sources: list[str] = []
         if self.runtime.market_data.should_use_mt5_market_data(portfolio):
             try:
-                live_state = DeskMt5Service(self.runtime).live_state(portfolio_slug=portfolio["slug"])
+                live_state = DeskMt5Service(self.runtime).live_state(portfolio_slug=portfolio["slug"], account_id=account_id)
             except Exception:
                 live_state = None
             if live_state is not None and (live_state.get("risk_summary") or {}).get("source") == "mt5_live_bridge":
@@ -103,6 +108,7 @@ class DeskAnalyticsService:
         df_t: int | None = None,
         seed: int | None = None,
         portfolio_slug: str | None = None,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
@@ -230,6 +236,7 @@ class DeskAnalyticsService:
         df_t: int | None = None,
         seed: int | None = None,
         portfolio_slug: str | None = None,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
@@ -408,15 +415,25 @@ class DeskAnalyticsService:
         )
         return result
 
-    def run_report(self, *, compare_path: str | None = None, portfolio_slug: str | None = None) -> dict[str, Any]:
+    def run_report(
+        self,
+        *,
+        compare_path: str | None = None,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
         compare_csv = self.runtime._resolve_compare_path(compare_path, portfolio_slug=portfolio["slug"])
         if compare_csv is None or not compare_csv.exists():
             raise FileNotFoundError("No compare CSV available to generate report.")
 
         out_dir = self.runtime.storage.settings.reports_dir
-        report_snapshot, report_snapshot_source = self._resolve_report_snapshot(portfolio_slug=portfolio["slug"])
+        report_snapshot, report_snapshot_source = self._resolve_report_snapshot(
+            portfolio_slug=portfolio["slug"],
+            account_id=resolved_account_id,
+        )
         if self.runtime.strict_live_required(portfolio) and report_snapshot is None:
             raise self.runtime.strict_live_unavailable_error(
                 portfolio=portfolio,
@@ -442,6 +459,7 @@ class DeskAnalyticsService:
             artifact_type="daily_report",
             details={
                 "portfolio_slug": portfolio["slug"],
+                "account_id": resolved_account_id,
                 "compare_csv": str(compare_csv.resolve()),
                 "source_artifact_id": compare_artifact,
                 "snapshot_source": report_snapshot_source,
@@ -462,6 +480,7 @@ class DeskAnalyticsService:
                     details={
                         "report_markdown": str(md_path.resolve()),
                         "portfolio_slug": portfolio["slug"],
+                        "account_id": resolved_account_id,
                         "snapshot_source": report_snapshot_source,
                     },
                 )
@@ -472,6 +491,7 @@ class DeskAnalyticsService:
             object_type="daily_report",
             payload={
                 "portfolio_slug": portfolio["slug"],
+                "account_id": resolved_account_id,
                 "report_markdown": str(md_path.resolve()),
                 "compare_csv": str(compare_csv.resolve()),
                 "snapshot_source": report_snapshot_source,
@@ -482,6 +502,7 @@ class DeskAnalyticsService:
         return {
             "report_markdown": str(md_path.resolve()),
             "chart_paths": chart_paths,
+            "account_id": resolved_account_id,
         }
 
     def run_stress_test(

@@ -464,6 +464,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/mt5/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Mt5 Accounts */
+        get: operations["mt5_mt5_accounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/mt5/positions": {
         parameters: {
             query?: never;
@@ -1444,6 +1461,8 @@ export interface components {
             execution_result_id?: number | null;
             /** Portfolio Id */
             portfolio_id?: number | null;
+            /** Account Id */
+            account_id?: string | null;
             /** Symbol */
             symbol: string;
             /** Order Ticket */
@@ -1533,6 +1552,8 @@ export interface components {
             time_utc: string;
             /** Portfolio Slug */
             portfolio_slug: string;
+            /** Account Id */
+            account_id?: string | null;
             /** Symbol */
             symbol: string;
             terminal_status: components["schemas"]["MT5TerminalStatusResponse"];
@@ -1580,6 +1601,8 @@ export interface components {
         ExecutionRequest: {
             /** Portfolio Slug */
             portfolio_slug?: string | null;
+            /** Account Id */
+            account_id?: string | null;
             /** Symbol */
             symbol: string;
             /** Exposure Change */
@@ -1593,6 +1616,8 @@ export interface components {
             id?: number | null;
             /** Portfolio Id */
             portfolio_id?: number | null;
+            /** Account Id */
+            account_id?: string | null;
             /** Decision Id */
             decision_id?: number | null;
             /** Created At */
@@ -1937,8 +1962,45 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** MT5AccountListEntryResponse */
+        MT5AccountListEntryResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Label */
+            label: string;
+            /** Login */
+            login?: number | null;
+            /** Server */
+            server?: string | null;
+            /** Path */
+            path?: string | null;
+            /** Agent Base Url */
+            agent_base_url?: string | null;
+            /**
+             * Execution Enabled
+             * @default true
+             */
+            execution_enabled: boolean;
+            /**
+             * Live Enabled
+             * @default true
+             */
+            live_enabled: boolean;
+            /**
+             * Mode
+             * @default direct_terminal
+             */
+            mode: string;
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
+        };
         /** MT5AccountSnapshotResponse */
         MT5AccountSnapshotResponse: {
+            /** Account Id */
+            account_id?: string | null;
             /** Login */
             login?: number | null;
             /** Name */
@@ -1970,6 +2032,13 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** MT5AccountsResponse */
+        MT5AccountsResponse: {
+            /** Active Account Id */
+            active_account_id: string;
+            /** Accounts */
+            accounts?: components["schemas"]["MT5AccountListEntryResponse"][];
+        };
         /** MT5AnalyticsSeriesPointResponse */
         MT5AnalyticsSeriesPointResponse: {
             /** Timestamp */
@@ -1997,6 +2066,8 @@ export interface components {
             generated_at: string;
             /** Portfolio Slug */
             portfolio_slug: string;
+            /** Account Id */
+            account_id?: string | null;
             /** Window Minutes */
             window_minutes: number;
             /**
@@ -2098,6 +2169,8 @@ export interface components {
         };
         /** MT5LiveStateResponse */
         MT5LiveStateResponse: {
+            /** Account Id */
+            account_id?: string | null;
             /** Sequence */
             sequence: number;
             /** Source */
@@ -2216,6 +2289,8 @@ export interface components {
         };
         /** MT5PendingOrderResponse */
         MT5PendingOrderResponse: {
+            /** Account Id */
+            account_id?: string | null;
             /** Ticket */
             ticket?: number | null;
             /** Symbol */
@@ -2239,6 +2314,8 @@ export interface components {
         };
         /** MT5PositionResponse */
         MT5PositionResponse: {
+            /** Account Id */
+            account_id?: string | null;
             /** Ticket */
             ticket?: number | null;
             /** Symbol */
@@ -2268,6 +2345,8 @@ export interface components {
         };
         /** MT5TerminalStatusResponse */
         MT5TerminalStatusResponse: {
+            /** Account Id */
+            account_id?: string | null;
             /** Connected */
             connected: boolean;
             /** Ready */
@@ -2316,6 +2395,8 @@ export interface components {
         MarketDataSyncRequest: {
             /** Portfolio Slug */
             portfolio_slug?: string | null;
+            /** Account Id */
+            account_id?: string | null;
             /** Days */
             days?: number | null;
             /** Timeframes */
@@ -2497,6 +2578,8 @@ export interface components {
             portfolio_id?: number | null;
             /** Portfolio Slug */
             portfolio_slug?: string | null;
+            /** Account Id */
+            account_id?: string | null;
             /** Action */
             action: string;
             /** Request Id */
@@ -2968,6 +3051,8 @@ export interface components {
             report_markdown: string;
             /** Portfolio Slug */
             portfolio_slug?: string | null;
+            /** Account Id */
+            account_id?: string | null;
             /** Content */
             content: string;
             /** Chart Paths */
@@ -2979,6 +3064,8 @@ export interface components {
             report_markdown: string;
             /** Chart Paths */
             chart_paths: string[];
+            /** Account Id */
+            account_id?: string | null;
         };
         /** RiskAttributionAssetClassResponse */
         RiskAttributionAssetClassResponse: {
@@ -3320,6 +3407,8 @@ export interface components {
         RunBacktestRequest: {
             /** Portfolio Slug */
             portfolio_slug?: string | null;
+            /** Account Id */
+            account_id?: string | null;
             /** Timeframe */
             timeframe?: string | null;
             /** Days */
@@ -3345,11 +3434,15 @@ export interface components {
             compare_path?: string | null;
             /** Portfolio Slug */
             portfolio_slug?: string | null;
+            /** Account Id */
+            account_id?: string | null;
         };
         /** RunSnapshotRequest */
         RunSnapshotRequest: {
             /** Portfolio Slug */
             portfolio_slug?: string | null;
+            /** Account Id */
+            account_id?: string | null;
             /** Timeframe */
             timeframe?: string | null;
             /** Days */
@@ -3491,6 +3584,8 @@ export interface components {
         TradeProposalRequest: {
             /** Portfolio Slug */
             portfolio_slug?: string | null;
+            /** Account Id */
+            account_id?: string | null;
             /** Symbol */
             symbol: string;
             /** Exposure Change */
@@ -4342,7 +4437,9 @@ export interface operations {
     };
     mt5_mt5_status: {
         parameters: {
-            query?: never;
+            query?: {
+                account_id?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -4358,11 +4455,22 @@ export interface operations {
                     "application/json": components["schemas"]["MT5TerminalStatusResponse"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     mt5_mt5_account: {
         parameters: {
-            query?: never;
+            query?: {
+                account_id?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -4378,12 +4486,42 @@ export interface operations {
                     "application/json": components["schemas"]["MT5AccountSnapshotResponse"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mt5_mt5_accounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MT5AccountsResponse"];
+                };
+            };
         };
     };
     mt5_mt5_positions: {
         parameters: {
             query?: {
                 portfolio_slug?: string | null;
+                account_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -4415,6 +4553,7 @@ export interface operations {
         parameters: {
             query?: {
                 portfolio_slug?: string | null;
+                account_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -4446,6 +4585,7 @@ export interface operations {
         parameters: {
             query?: {
                 portfolio_slug?: string | null;
+                account_id?: string | null;
                 detail_level?: "summary" | "full" | "inspector";
             };
             header?: {
@@ -4480,6 +4620,7 @@ export interface operations {
         parameters: {
             query?: {
                 portfolio_slug?: string | null;
+                account_id?: string | null;
                 window_minutes?: number;
                 max_points?: number;
             };
@@ -4513,6 +4654,7 @@ export interface operations {
         parameters: {
             query?: {
                 portfolio_slug?: string | null;
+                account_id?: string | null;
                 after?: number;
                 limit?: number;
                 wait_seconds?: number;
@@ -4548,6 +4690,7 @@ export interface operations {
         parameters: {
             query?: {
                 portfolio_slug?: string | null;
+                account_id?: string | null;
                 detail_level?: "summary" | "full" | "inspector";
                 after?: number | null;
                 bootstrap?: boolean;
@@ -4585,6 +4728,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 portfolio_slug?: string | null;
+                account_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -4617,6 +4761,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 portfolio_slug?: string | null;
+                account_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -4933,6 +5078,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 portfolio_slug?: string | null;
+                account_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -5031,6 +5177,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 portfolio_slug?: string | null;
+                account_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -5063,6 +5210,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 portfolio_slug?: string | null;
+                account_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -5261,6 +5409,7 @@ export interface operations {
             query?: {
                 portfolio_slug?: string | null;
                 report_id?: number | null;
+                account_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -5293,6 +5442,7 @@ export interface operations {
             query?: {
                 portfolio_slug?: string | null;
                 report_id?: number | null;
+                account_id?: string | null;
             };
             header?: never;
             path: {
@@ -5327,6 +5477,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 portfolio_slug?: string | null;
+                account_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -5587,6 +5738,7 @@ export interface operations {
         parameters: {
             query?: {
                 portfolio_slug?: string | null;
+                account_id?: string | null;
                 action?: string | null;
                 status?: string[] | null;
                 status_reason?: string[] | null;

@@ -107,7 +107,20 @@ export function IncidentCenterSurface({
   initialIncidents: ReconciliationAcknowledgementResponse[];
   initialAudit: AuditEventResponse[];
 }) {
-  const { liveState, transport } = useDeskLive();
+  const { liveState, transport, accountId } = useDeskLive();
+  const withDeskQuery = useCallback((path: string, extra: Record<string, string> = {}) => {
+    const params = new URLSearchParams();
+    params.set("portfolio", portfolioSlug);
+    if (accountId) {
+      params.set("account", accountId);
+    }
+    for (const [key, value] of Object.entries(extra)) {
+      if (String(value ?? "").trim()) {
+        params.set(key, value);
+      }
+    }
+    return `${path}?${params.toString()}`;
+  }, [accountId, portfolioSlug]);
   const [reconciliationState, setReconciliationState] = useState<ReconciliationSummaryResponse | null>(
     null,
   );
@@ -244,7 +257,7 @@ export function IncidentCenterSurface({
         aside={(
           <>
             <LiveRuntimeBadgeGroup liveState={liveState} transport={transport} />
-            <ButtonLink href={`/desk/blotter?portfolio=${portfolioSlug}`} variant="secondary">
+            <ButtonLink href={withDeskQuery("/desk/blotter")} variant="secondary">
               Open blotter
             </ButtonLink>
           </>
@@ -376,11 +389,11 @@ export function IncidentCenterSurface({
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  <ButtonLink href={`/desk/blotter?portfolio=${portfolioSlug}`} variant="secondary">
+                  <ButtonLink href={withDeskQuery("/desk/blotter")} variant="secondary">
                     Open blotter context
                   </ButtonLink>
                   <ButtonLink
-                    href={`/desk/execution?portfolio=${portfolioSlug}&symbol=${selectedRow.symbol}`}
+                    href={withDeskQuery("/desk/execution", { symbol: selectedRow.symbol })}
                     variant="secondary"
                   >
                     Open execution for {selectedRow.symbol}

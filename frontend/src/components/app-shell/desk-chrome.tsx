@@ -25,13 +25,16 @@ import type {
   MT5LiveStateResponse,
   PortfolioSummary,
   WorkerStatusResponse,
+  MT5AccountsResponse,
 } from "@/lib/api/types";
 import { OperatorActions } from "@/components/app-shell/operator-actions";
 import { DeskLiveProvider, useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { deriveLiveRuntimeDiagnostics } from "@/components/app-shell/live-runtime-phase";
+import { api } from "@/lib/api/client";
 import { alertPriorityCode, dedupeOperatorAlerts, dedupePersistedAlerts } from "@/lib/alerts";
 import { cn, formatTimestamp } from "@/lib/utils";
 import { useRelativeTime } from "@/lib/use-relative-time";
+import { useQuery } from "@tanstack/react-query";
 
 const navItems = [
   { href: "/desk", label: "Overview", icon: Gauge },
@@ -55,6 +58,8 @@ const mobileNavItems = [
   { href: "/desk/execution", label: "Execute", icon: BriefcaseBusiness },
   { href: "/desk/blotter", label: "Blotter", icon: Orbit },
 ] as const;
+
+const MT5_ACCOUNT_STORAGE_KEY = "desk:active-mt5-account";
 
 function StatusDot({ status }: { status: "ok" | "warn" | "off" }) {
   const color =
@@ -125,6 +130,45 @@ function canonicalPortfolioSlug(
   return fallbackSlug;
 }
 
+function canonicalAccountId(
+  requestedAccountId: string | null,
+  rememberedAccountId: string | null,
+  accountsPayload: MT5AccountsResponse | null | undefined,
+): string | null {
+  const accounts = Array.isArray(accountsPayload?.accounts) ? accountsPayload.accounts : [];
+  if (accounts.length === 0) {
+    const fallback = requestedAccountId ?? rememberedAccountId ?? accountsPayload?.active_account_id ?? null;
+    return fallback ? fallback.trim() || null : null;
+  }
+  const normalizedByLower = new Map<string, string>();
+  for (const account of accounts) {
+    const id = String(account.account_id ?? "").trim();
+    if (!id) continue;
+    normalizedByLower.set(id.toLowerCase(), id);
+  }
+  const defaultIdRaw =
+    accountsPayload?.active_account_id
+    ?? accounts.find((account) => account.is_default)?.account_id
+    ?? accounts[0]?.account_id
+    ?? null;
+  const defaultId = String(defaultIdRaw ?? "").trim() || null;
+  const resolveCandidate = (candidate: string | null) => {
+    const normalized = String(candidate ?? "").trim();
+    if (!normalized) return null;
+    const lowered = normalized.toLowerCase();
+    if (["default", "main", "primary"].includes(lowered) && defaultId) {
+      return defaultId;
+    }
+    return normalizedByLower.get(lowered) ?? null;
+  };
+  return (
+    resolveCandidate(requestedAccountId)
+    ?? resolveCandidate(rememberedAccountId)
+    ?? resolveCandidate(defaultId)
+    ?? accounts[0].account_id
+  );
+}
+
 export function DeskChrome({
   children,
   health,
@@ -133,6 +177,7 @@ export function DeskChrome({
   recentAlerts,
   audit,
   jobsStatus,
+  initialMt5Accounts,
 }: {
   children: React.ReactNode;
   health: HealthResponse;
@@ -141,12 +186,23 @@ export function DeskChrome({
   recentAlerts: AlertSummary[];
   audit: AuditEventResponse[];
   jobsStatus: WorkerStatusResponse | null;
+  initialMt5Accounts: MT5AccountsResponse | null;
 }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const searchParamsText = searchParams.toString();
   const requestedPortfolioSlug = searchParams.get("portfolio");
+  const requestedAccountId = searchParams.get("account");
+  const [rememberedAccountId, setRememberedAccountId] = useState<string | null>(null);
+  const mt5AccountsQuery = useQuery({
+    queryKey: ["mt5-accounts"],
+    queryFn: () => api.mt5Accounts(),
+    initialData: initialMt5Accounts ?? undefined,
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
+  });
+  const mt5Accounts = mt5AccountsQuery.data ?? null;
   const portfolioSlug = useMemo(
     () =>
       canonicalPortfolioSlug(
@@ -156,23 +212,68 @@ export function DeskChrome({
       ),
     [requestedPortfolioSlug, health.portfolio_slug, portfolios],
   );
+  const activeAccountId = useMemo(
+    () => canonicalAccountId(requestedAccountId, rememberedAccountId, mt5Accounts),
+    [requestedAccountId, rememberedAccountId, mt5Accounts],
+  );
 
   useEffect(() => {
-    const current = String(requestedPortfolioSlug ?? "").trim();
-    if (!portfolioSlug || current === portfolioSlug) {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const stored = window.localStorage.getItem(MT5_ACCOUNT_STORAGE_KEY);
+    const normalized = stored && stored.trim() ? stored.trim() : null;
+    setRememberedAccountId(normalized);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !activeAccountId) {
+      return;
+    }
+    window.localStorage.setItem(MT5_ACCOUNT_STORAGE_KEY, activeAccountId);
+  }, [activeAccountId]);
+
+  useEffect(() => {
+    const normalizedPortfolio = String(requestedPortfolioSlug ?? "").trim();
+    const normalizedAccount = String(requestedAccountId ?? "").trim();
+    const needsPortfolioUpdate = Boolean(portfolioSlug) && normalizedPortfolio !== portfolioSlug;
+    const needsAccountUpdate = activeAccountId == null
+      ? normalizedAccount.length > 0
+      : normalizedAccount !== activeAccountId;
+    if (!needsPortfolioUpdate && !needsAccountUpdate) {
       return;
     }
     const params = new URLSearchParams(searchParamsText);
-    params.set("portfolio", portfolioSlug);
+    if (portfolioSlug) {
+      params.set("portfolio", portfolioSlug);
+    }
+    if (activeAccountId) {
+      params.set("account", activeAccountId);
+    } else {
+      params.delete("account");
+    }
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
-  }, [pathname, portfolioSlug, requestedPortfolioSlug, router, searchParamsText]);
+  }, [
+    activeAccountId,
+    pathname,
+    portfolioSlug,
+    requestedAccountId,
+    requestedPortfolioSlug,
+    router,
+    searchParamsText,
+  ]);
 
   return (
-    <DeskLiveProvider portfolioSlug={portfolioSlug ?? undefined}>
+    <DeskLiveProvider
+      portfolioSlug={portfolioSlug ?? undefined}
+      accountId={activeAccountId ?? undefined}
+    >
       <DeskChromeFrame
         pathname={pathname}
         portfolioSlug={portfolioSlug}
+        accountId={activeAccountId}
+        mt5Accounts={mt5Accounts}
         health={health}
         portfolios={portfolios}
         activeAlerts={activeAlerts}
@@ -190,6 +291,8 @@ function DeskChromeFrame({
   children,
   pathname,
   portfolioSlug,
+  accountId,
+  mt5Accounts,
   health,
   portfolios,
   activeAlerts,
@@ -200,6 +303,8 @@ function DeskChromeFrame({
   children: React.ReactNode;
   pathname: string;
   portfolioSlug: string;
+  accountId: string | null;
+  mt5Accounts: MT5AccountsResponse | null;
   health: HealthResponse;
   portfolios: PortfolioSummary[];
   activeAlerts: AlertSummary[];
@@ -209,7 +314,25 @@ function DeskChromeFrame({
 }) {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [portfolioDropdownOpen, setPortfolioDropdownOpen] = useState(false);
+  const [accountDropdownOpen, setAccountDropdownOpen] = useState(false);
   const { liveState, heartbeatAt, transport } = useDeskLive();
+  const accountOptions = Array.isArray(mt5Accounts?.accounts) ? mt5Accounts.accounts : [];
+  const activeAccountLabel = useMemo(() => {
+    if (!accountId) return "account";
+    const matched = accountOptions.find((item) => item.account_id === accountId);
+    return matched?.label ?? accountId;
+  }, [accountId, accountOptions]);
+  const buildDeskHref = (href: string, nextPortfolioSlug = portfolioSlug, nextAccountId = accountId) => {
+    const params = new URLSearchParams();
+    if (nextPortfolioSlug) {
+      params.set("portfolio", nextPortfolioSlug);
+    }
+    if (nextAccountId) {
+      params.set("account", nextAccountId);
+    }
+    const query = params.toString();
+    return query ? `${href}?${query}` : href;
+  };
   const liveAlerts = [...dedupeOperatorAlerts(liveState?.operator_alerts ?? [])].sort((left, right) => {
     const rankDelta = alertPriorityCode(left.code) - alertPriorityCode(right.code);
     if (rankDelta !== 0) {
@@ -277,7 +400,7 @@ function DeskChromeFrame({
             return (
               <Link
                 key={href}
-                href={`${href}?portfolio=${portfolioSlug}`}
+                href={buildDeskHref(href)}
                 title={label}
                 className={cn(
                   "group relative flex h-9 w-full items-center justify-center rounded-[var(--radius-md)] transition-colors",
@@ -324,7 +447,10 @@ function DeskChromeFrame({
             <div className="relative">
               <button
                 type="button"
-                onClick={() => setPortfolioDropdownOpen(!portfolioDropdownOpen)}
+                onClick={() => {
+                  setPortfolioDropdownOpen(!portfolioDropdownOpen);
+                  setAccountDropdownOpen(false);
+                }}
                 className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 text-xs font-medium text-[var(--color-text)] transition-colors hover:border-[var(--color-border-strong)]"
               >
                 <BriefcaseBusiness className="size-3 text-[var(--color-text-muted)]" />
@@ -341,7 +467,7 @@ function DeskChromeFrame({
                     {portfolios.map((p) => (
                       <Link
                         key={p.slug}
-                        href={`${pathname}?portfolio=${p.slug}`}
+                        href={buildDeskHref(pathname, p.slug)}
                         onClick={() => setPortfolioDropdownOpen(false)}
                         className={cn(
                           "flex items-center gap-2 px-3 py-1.5 text-xs transition-colors",
@@ -353,6 +479,59 @@ function DeskChromeFrame({
                         {p.slug}
                       </Link>
                     ))}
+                  </div>
+                </>
+              ) : null}
+            </div>
+
+            {/* MT5 account dropdown */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  setAccountDropdownOpen(!accountDropdownOpen);
+                  setPortfolioDropdownOpen(false);
+                }}
+                className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 text-xs font-medium text-[var(--color-text)] transition-colors hover:border-[var(--color-border-strong)]"
+              >
+                <Activity className="size-3 text-[var(--color-text-muted)]" />
+                <span className="hidden sm:inline">{activeAccountLabel}</span>
+                <span className="sm:hidden">{accountId ?? "account"}</span>
+                <ChevronDown className="size-3 text-[var(--color-text-muted)]" />
+              </button>
+              {accountDropdownOpen ? (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setAccountDropdownOpen(false)}
+                  />
+                  <div className="absolute left-0 top-full z-50 mt-1 min-w-[220px] rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-strong)] py-1 shadow-xl">
+                    {accountOptions.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-[var(--color-text-muted)]">
+                        No MT5 account available.
+                      </div>
+                    ) : (
+                      accountOptions.map((account) => (
+                        <Link
+                          key={account.account_id}
+                          href={buildDeskHref(pathname, portfolioSlug, account.account_id)}
+                          onClick={() => setAccountDropdownOpen(false)}
+                          className={cn(
+                            "flex items-center justify-between gap-2 px-3 py-1.5 text-xs transition-colors",
+                            account.account_id === accountId
+                              ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
+                              : "text-[var(--color-text-soft)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]",
+                          )}
+                        >
+                          <span className="truncate">{account.label}</span>
+                          {account.is_default ? (
+                            <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
+                              default
+                            </span>
+                          ) : null}
+                        </Link>
+                      ))
+                    )}
                   </div>
                 </>
               ) : null}
@@ -379,6 +558,9 @@ function DeskChromeFrame({
                 {runtimeDiagnostics.isRetrying && retryDelayLabel ? ` | retry ${retryDelayLabel}` : ""}
                 {runtimeDiagnostics.failureCount > 0 ? ` | fail ${runtimeDiagnostics.failureCount}` : ""}
               </span>
+              <span className="mono text-[10px] tabular-nums">
+                {accountId ? `acct ${accountId}` : "acct n/a"}
+              </span>
               {liveProfit != null ? (
                 <span className={cn(
                   "mono text-[11px] font-semibold tabular-nums",
@@ -400,7 +582,7 @@ function DeskChromeFrame({
 
           {/* Right: Actions + alerts */}
           <div className="flex items-center gap-2">
-            <OperatorActions portfolioSlug={portfolioSlug} />
+            <OperatorActions portfolioSlug={portfolioSlug} accountId={accountId ?? undefined} />
 
             {alertCount > 0 ? (
               <button
@@ -438,7 +620,7 @@ function DeskChromeFrame({
             return (
               <Link
                 key={href}
-                href={`${href}?portfolio=${portfolioSlug}`}
+                href={buildDeskHref(href)}
                 className={cn(
                   "flex flex-col items-center gap-0.5 px-2 py-1 text-[9px] font-medium transition-colors",
                   active

@@ -146,6 +146,7 @@ class WorkerStatusResponse(BaseModel):
 
 class RunSnapshotRequest(BaseModel):
     portfolio_slug: str | None = None
+    account_id: str | None = None
     timeframe: str | None = None
     days: int | None = None
     min_coverage: float | None = None
@@ -159,6 +160,7 @@ class RunSnapshotRequest(BaseModel):
 
 class RunBacktestRequest(BaseModel):
     portfolio_slug: str | None = None
+    account_id: str | None = None
     timeframe: str | None = None
     days: int | None = None
     min_coverage: float | None = None
@@ -173,12 +175,14 @@ class RunBacktestRequest(BaseModel):
 class RunReportRequest(BaseModel):
     compare_path: str | None = None
     portfolio_slug: str | None = None
+    account_id: str | None = None
 
 
 class OperatorRunResponse(BaseModel):
     id: int
     portfolio_id: int | None = None
     portfolio_slug: str | None = None
+    account_id: str | None = None
     action: str
     request_id: str
     status: str
@@ -208,6 +212,7 @@ class OperatorRunResponse(BaseModel):
 
 class TradeProposalRequest(ApiModel):
     portfolio_slug: str | None = None
+    account_id: str | None = None
     symbol: str
     exposure_change: float = Field(
         validation_alias=AliasChoices("exposure_change", "delta_position_eur")
@@ -225,6 +230,7 @@ class CapitalRebalanceRequest(BaseModel):
 
 class ExecutionRequest(ApiModel):
     portfolio_slug: str | None = None
+    account_id: str | None = None
     symbol: str
     exposure_change: float = Field(
         validation_alias=AliasChoices("exposure_change", "delta_position_eur")
@@ -234,6 +240,7 @@ class ExecutionRequest(ApiModel):
 
 class MarketDataSyncRequest(BaseModel):
     portfolio_slug: str | None = None
+    account_id: str | None = None
     days: int | None = None
     timeframes: list[str] | None = None
 
@@ -264,6 +271,7 @@ class BacktestRunResponse(BaseModel):
 class ReportRunResponse(BaseModel):
     report_markdown: str
     chart_paths: list[str]
+    account_id: str | None = None
 
 
 class BacktestFrameResponse(BaseModel):
@@ -276,6 +284,7 @@ class ReportContentResponse(BaseModel):
     report_id: int | None = None
     report_markdown: str
     portfolio_slug: str | None = None
+    account_id: str | None = None
     content: str
     chart_paths: list[str]
 
@@ -608,6 +617,7 @@ class AuditEventResponse(BaseModel):
 
 
 class MT5TerminalStatusResponse(BaseModel):
+    account_id: str | None = None
     connected: bool
     ready: bool
     execution_enabled: bool
@@ -623,6 +633,7 @@ class MT5TerminalStatusResponse(BaseModel):
 
 
 class MT5AccountSnapshotResponse(BaseModel):
+    account_id: str | None = None
     login: int | None = None
     name: str | None = None
     server: str | None = None
@@ -639,7 +650,26 @@ class MT5AccountSnapshotResponse(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class MT5AccountListEntryResponse(BaseModel):
+    account_id: str
+    label: str
+    login: int | None = None
+    server: str | None = None
+    path: str | None = None
+    agent_base_url: str | None = None
+    execution_enabled: bool = True
+    live_enabled: bool = True
+    mode: str = "direct_terminal"
+    is_default: bool = False
+
+
+class MT5AccountsResponse(BaseModel):
+    active_account_id: str
+    accounts: list[MT5AccountListEntryResponse] = Field(default_factory=list)
+
+
 class MT5PositionResponse(ApiModel):
+    account_id: str | None = None
     ticket: int | None = None
     symbol: str
     side: str
@@ -657,6 +687,7 @@ class MT5PositionResponse(ApiModel):
 
 
 class MT5PendingOrderResponse(BaseModel):
+    account_id: str | None = None
     ticket: int | None = None
     symbol: str
     side: str
@@ -1019,6 +1050,7 @@ class MT5LiveHealthResponse(BaseModel):
 
 
 class MT5LiveStateResponse(BaseModel):
+    account_id: str | None = None
     sequence: int
     source: str | None = None
     status: str
@@ -1095,6 +1127,7 @@ class MT5AnalyticsSeriesPointResponse(BaseModel):
 class MT5AnalyticsSeriesResponse(BaseModel):
     generated_at: str
     portfolio_slug: str
+    account_id: str | None = None
     window_minutes: int
     market_closed: bool = False
     market_reference_timestamp: str | None = None
@@ -1134,6 +1167,7 @@ class ExecutionGuardDecisionResponse(ApiModel):
 class ExecutionPreviewResponse(BaseModel):
     time_utc: str
     portfolio_slug: str
+    account_id: str | None = None
     symbol: str
     terminal_status: MT5TerminalStatusResponse
     account: MT5AccountSnapshotResponse
@@ -1156,6 +1190,7 @@ class ExecutionFillResponse(BaseModel):
     id: int | None = None
     execution_result_id: int | None = None
     portfolio_id: int | None = None
+    account_id: str | None = None
     symbol: str
     order_ticket: int | None = None
     deal_ticket: int | None = None
@@ -1180,6 +1215,7 @@ class ExecutionFillResponse(BaseModel):
 class ExecutionResultResponse(ApiModel):
     id: int | None = None
     portfolio_id: int | None = None
+    account_id: str | None = None
     decision_id: int | None = None
     created_at: str | None = None
     time_utc: str

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import os
 from pathlib import Path
 from typing import Any, Mapping
@@ -22,6 +23,7 @@ from var_project.core.settings import (
     load_risk_limits,
     load_settings,
 )
+from var_project.core.types import MT5Config
 from var_project.desk.overview import DeskDefinition
 from var_project.engine.risk_engine import RiskModelConfig
 from var_project.execution.mt5_live import ExecutionGuardDecision, MT5LiveGateway, MT5TerminalStatus
@@ -55,7 +57,10 @@ class DeskServiceRuntime:
         self.limits_config = load_risk_limits(root)
         self.data_defaults = get_data_defaults(self.raw_config)
         self.risk_defaults = get_risk_defaults(self.raw_config)
-        self.mt5_config = get_mt5_config(self.raw_config)
+        self._base_mt5_config = get_mt5_config(self.raw_config)
+        self._mt5_account_configs, self._mt5_account_order = self._build_mt5_account_configs()
+        self._mt5_default_account_id = self._resolve_default_mt5_account_id()
+        self.mt5_config = self.mt5_config_for_account(self._mt5_default_account_id)
         self.mt5_connector_factory = mt5_connector_factory or MT5Connector
         self._has_custom_mt5_factory = mt5_connector_factory is not None
         self.portfolios = get_portfolio_contexts(self.raw_config)
@@ -75,6 +80,123 @@ class DeskServiceRuntime:
         self.execution = MT5ExecutionOrchestrator(self)
         self.governance = GovernanceRecorder(self)
         self.market_data = DeskMarketDataService(self)
+
+    @staticmethod
+    def _normalize_mt5_account_id(value: Any) -> str | None:
+        if value in {None, "", "null"}:
+            return None
+        normalized = str(value).strip()
+        if not normalized or normalized.lower() in {"none", "null"}:
+            return None
+        return normalized
+
+    def _iter_raw_mt5_accounts(self) -> list[tuple[str, dict[str, Any]]]:
+        mt5_cfg = dict(self.raw_config.get("mt5") or {})
+        raw_accounts = mt5_cfg.get("accounts")
+        account_rows: list[tuple[str, dict[str, Any]]] = []
+        if isinstance(raw_accounts, Mapping):
+            for key, value in raw_accounts.items():
+                if not isinstance(value, Mapping):
+                    continue
+                account_id = self._normalize_mt5_account_id(key)
+                if account_id is None:
+                    continue
+                account_rows.append((account_id, dict(value)))
+            return account_rows
+        if isinstance(raw_accounts, list):
+            for index, value in enumerate(raw_accounts):
+                if not isinstance(value, Mapping):
+                    continue
+                payload = dict(value)
+                account_id = self._normalize_mt5_account_id(
+                    payload.get("account_id")
+                    or payload.get("id")
+                    or payload.get("slug")
+                    or payload.get("name")
+                )
+                if account_id is None:
+                    account_id = f"account_{index + 1}"
+                account_rows.append((account_id, payload))
+        return account_rows
+
+    def _build_mt5_account_configs(self) -> tuple[dict[str, MT5Config], list[str]]:
+        mt5_cfg = dict(self.raw_config.get("mt5") or {})
+        shared_mt5_cfg = dict(mt5_cfg)
+        shared_mt5_cfg.pop("accounts", None)
+        account_configs: dict[str, MT5Config] = {}
+        account_order: list[str] = []
+
+        for account_id, account_payload in self._iter_raw_mt5_accounts():
+            merged_cfg = dict(shared_mt5_cfg)
+            merged_cfg.update(dict(account_payload))
+            merged_cfg.pop("accounts", None)
+            merged_cfg["account_id"] = account_id
+            account_configs[account_id] = get_mt5_config({"mt5": merged_cfg})
+            if account_id not in account_order:
+                account_order.append(account_id)
+
+        fallback_account_id = self._normalize_mt5_account_id(self._base_mt5_config.account_id) or "default"
+        if fallback_account_id not in account_configs:
+            account_configs[fallback_account_id] = replace(self._base_mt5_config, account_id=fallback_account_id)
+            account_order.insert(0, fallback_account_id)
+
+        if not account_order:
+            account_order = [fallback_account_id]
+
+        return account_configs, account_order
+
+    def _resolve_default_mt5_account_id(self) -> str:
+        preferred = self._normalize_mt5_account_id(self._base_mt5_config.account_id)
+        if preferred is not None:
+            for candidate in self._mt5_account_order:
+                if candidate == preferred or candidate.lower() == preferred.lower():
+                    return candidate
+        if self._mt5_account_order:
+            return self._mt5_account_order[0]
+        return "default"
+
+    def resolve_mt5_account_id(self, account_id: str | None = None) -> str:
+        normalized = self._normalize_mt5_account_id(account_id)
+        if normalized is None or normalized.lower() in {"default", "main", "primary"}:
+            return self._mt5_default_account_id
+        for candidate in self._mt5_account_order:
+            if candidate == normalized or candidate.lower() == normalized.lower():
+                return candidate
+        available = ", ".join(self._mt5_account_order)
+        raise ValueError(f"Unknown MT5 account '{account_id}'. Available accounts: {available}.")
+
+    def mt5_config_for_account(self, account_id: str | None = None):
+        resolved = self.resolve_mt5_account_id(account_id)
+        return self._mt5_account_configs[resolved]
+
+    def list_mt5_accounts(self) -> list[dict[str, Any]]:
+        default_account_id = self.resolve_mt5_account_id(None)
+        accounts: list[dict[str, Any]] = []
+        for account_id in self._mt5_account_order:
+            config = self._mt5_account_configs[account_id]
+            login = config.login
+            server = config.server
+            label_parts = []
+            if login is not None:
+                label_parts.append(str(login))
+            if server:
+                label_parts.append(str(server))
+            label = " @ ".join(label_parts) if label_parts else account_id
+            accounts.append(
+                {
+                    "account_id": account_id,
+                    "label": label,
+                    "login": login,
+                    "server": server,
+                    "path": config.path,
+                    "agent_base_url": config.agent_base_url,
+                    "execution_enabled": bool(config.execution_enabled),
+                    "live_enabled": bool(config.live_enabled),
+                    "mode": "remote_agent" if config.agent_base_url else "direct_terminal",
+                    "is_default": account_id == default_account_id,
+                }
+            )
+        return accounts
 
     def _refresh_portfolio_ids_if_ready(self) -> None:
         if not self.storage_ready:
@@ -367,11 +489,11 @@ class DeskServiceRuntime:
             persist_audit=persist_audit,
         )
 
-    def _mt5_gateway(self):
-        return self.execution.mt5_gateway()
+    def _mt5_gateway(self, *, account_id: str | None = None):
+        return self.execution.mt5_gateway(account_id=account_id)
 
-    def _build_mt5_connector(self):
-        return self.execution.build_mt5_connector()
+    def _build_mt5_connector(self, *, account_id: str | None = None):
+        return self.execution.build_mt5_connector(account_id=account_id)
 
     def _load_daily_returns(self, timeframe: str, days: int, min_coverage: float):
         return self.risk.load_daily_returns(timeframe, days, min_coverage)
@@ -398,10 +520,13 @@ class DeskServiceRuntime:
         return self.governance.database_dependency()
 
     def mt5_dependency(self) -> dict[str, Any]:
-        return self.execution.mt5_dependency()
+        return self.execution.mt5_dependency(account_id=self.resolve_mt5_account_id(None))
 
     def mt5_live_dependency(self, portfolio_slug: str | None = None) -> dict[str, Any]:
-        return self.execution.mt5_live_dependency(portfolio_slug)
+        return self.execution.mt5_live_dependency(
+            portfolio_slug,
+            account_id=self.resolve_mt5_account_id(None),
+        )
 
     def _positions_json(self, positions: Mapping[str, Any] | None = None) -> str:
         return self.risk.exposures_json(positions)

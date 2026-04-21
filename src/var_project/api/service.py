@@ -574,8 +574,14 @@ class DeskApiService:
         )
         return payload[: max(int(limit), 1)]
 
-    def recent_decisions(self, *, limit: int = 25, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
-        return self.reads.recent_decisions(limit=limit, portfolio_slug=portfolio_slug)
+    def recent_decisions(
+        self,
+        *,
+        limit: int = 25,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.reads.recent_decisions(limit=limit, portfolio_slug=portfolio_slug, account_id=account_id)
 
     def latest_capital(
         self,
@@ -616,17 +622,35 @@ class DeskApiService:
     ) -> list[dict[str, Any]]:
         return self.reads.capital_history(limit=limit, source=source, portfolio_slug=portfolio_slug)
 
-    def recent_execution_results(self, *, limit: int = 25, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
-        return self.reads.recent_execution_results(limit=limit, portfolio_slug=portfolio_slug)
+    def recent_execution_results(
+        self,
+        *,
+        limit: int = 25,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.reads.recent_execution_results(limit=limit, portfolio_slug=portfolio_slug, account_id=account_id)
 
-    def recent_execution_fills(self, *, limit: int = 50, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
-        return self.reads.recent_execution_fills(limit=limit, portfolio_slug=portfolio_slug)
+    def recent_execution_fills(
+        self,
+        *,
+        limit: int = 50,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.reads.recent_execution_fills(limit=limit, portfolio_slug=portfolio_slug, account_id=account_id)
 
     def recent_audit_events(self, *, limit: int = 50, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
         return self.reads.recent_audit_events(limit=limit, portfolio_slug=portfolio_slug)
 
-    def report_decision_history(self, *, limit: int = 25, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
-        return self.reads.report_decision_history(limit=limit, portfolio_slug=portfolio_slug)
+    def report_decision_history(
+        self,
+        *,
+        limit: int = 25,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.reads.report_decision_history(limit=limit, portfolio_slug=portfolio_slug, account_id=account_id)
 
     def report_capital_history(
         self,
@@ -693,23 +717,56 @@ class DeskApiService:
     ) -> dict[str, Any] | None:
         return self.reads.latest_risk_budget(source=source, portfolio_slug=portfolio_slug)
 
-    def mt5_status(self) -> dict[str, Any]:
-        live_state = self.mt5.live_state(portfolio_slug=self.portfolio["slug"], detail_level="summary")
+    def mt5_status(self, *, account_id: str | None = None) -> dict[str, Any]:
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        live_state = self.mt5.live_state(
+            portfolio_slug=self.portfolio["slug"],
+            detail_level="summary",
+            account_id=resolved_account_id,
+        )
         if live_state.get("terminal_status") is not None:
-            return dict(live_state["terminal_status"])
-        return self.mt5.mt5_status()
+            payload = dict(live_state["terminal_status"])
+            payload["account_id"] = resolved_account_id
+            return payload
+        return self.mt5.mt5_status(account_id=resolved_account_id)
 
-    def mt5_account(self) -> dict[str, Any]:
-        live_state = self.mt5.live_state(portfolio_slug=self.portfolio["slug"], detail_level="summary")
+    def mt5_account(self, *, account_id: str | None = None) -> dict[str, Any]:
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        live_state = self.mt5.live_state(
+            portfolio_slug=self.portfolio["slug"],
+            detail_level="summary",
+            account_id=resolved_account_id,
+        )
         if live_state.get("account") is not None:
-            return dict(live_state["account"])
-        return self.mt5.mt5_account()
+            payload = dict(live_state["account"])
+            payload["account_id"] = resolved_account_id
+            return payload
+        return self.mt5.mt5_account(account_id=resolved_account_id)
 
-    def mt5_positions(self, *, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
-        return self.mt5.mt5_positions(portfolio_slug=portfolio_slug)
+    def mt5_accounts(self) -> dict[str, Any]:
+        return self.mt5.mt5_accounts()
 
-    def mt5_orders(self, *, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
-        return self.mt5.mt5_orders(portfolio_slug=portfolio_slug)
+    def mt5_positions(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.mt5.mt5_positions(
+            portfolio_slug=portfolio_slug,
+            account_id=account_id,
+        )
+
+    def mt5_orders(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.mt5.mt5_orders(
+            portfolio_slug=portfolio_slug,
+            account_id=account_id,
+        )
 
     def mt5_live_state(
         self,
@@ -717,11 +774,13 @@ class DeskApiService:
         portfolio_slug: str | None = None,
         detail_level: str = "full",
         force_refresh: bool = False,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         return self.mt5.live_state(
             portfolio_slug=portfolio_slug,
             detail_level=detail_level,
             force_refresh=force_refresh,
+            account_id=account_id,
         )
 
     def mt5_live_events(
@@ -732,6 +791,7 @@ class DeskApiService:
         limit: int = 100,
         wait_seconds: float = 15.0,
         detail_level: str = "full",
+        account_id: str | None = None,
     ) -> list[dict[str, Any]]:
         return self.mt5.live_events(
             portfolio_slug=portfolio_slug,
@@ -739,6 +799,7 @@ class DeskApiService:
             limit=limit,
             wait_seconds=wait_seconds,
             detail_level=detail_level,
+            account_id=account_id,
         )
 
     def mt5_analytics_series(
@@ -747,11 +808,13 @@ class DeskApiService:
         portfolio_slug: str | None = None,
         window_minutes: int = 240,
         max_points: int = 300,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         return self.mt5.analytics_series(
             portfolio_slug=portfolio_slug,
             window_minutes=window_minutes,
             max_points=max_points,
+            account_id=account_id,
         )
 
     def mt5_history_orders(
@@ -759,8 +822,9 @@ class DeskApiService:
         *,
         portfolio_slug: str | None = None,
         limit: int = 100,
+        account_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        live_state = self.mt5.live_state(portfolio_slug=portfolio_slug)
+        live_state = self.mt5.live_state(portfolio_slug=portfolio_slug, account_id=account_id)
         live_orders = list(live_state.get("order_history") or [])
         if live_orders:
             return live_orders[: max(int(limit), 1)]
@@ -771,8 +835,9 @@ class DeskApiService:
         *,
         portfolio_slug: str | None = None,
         limit: int = 100,
+        account_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        live_state = self.mt5.live_state(portfolio_slug=portfolio_slug)
+        live_state = self.mt5.live_state(portfolio_slug=portfolio_slug, account_id=account_id)
         live_deals = list(live_state.get("deal_history") or [])
         if live_deals:
             return live_deals[: max(int(limit), 1)]
@@ -1166,10 +1231,16 @@ class DeskApiService:
         self,
         *,
         portfolio_slug: str | None = None,
+        account_id: str | None = None,
         days: int | None = None,
         timeframes: list[str] | None = None,
     ) -> dict[str, Any]:
-        return self.market.sync_market_data(portfolio_slug=portfolio_slug, days=days, timeframes=timeframes)
+        return self.market.sync_market_data(
+            portfolio_slug=portfolio_slug,
+            account_id=account_id,
+            days=days,
+            timeframes=timeframes,
+        )
 
     def _normalize_operator_payload(
         self,
@@ -1183,6 +1254,7 @@ class DeskApiService:
             **payload,
             "portfolio_slug": portfolio["slug"],
         }
+        normalized["account_id"] = self.runtime.resolve_mt5_account_id(payload.get("account_id"))
         if action in {"sync", "snapshot", "backtest"}:
             normalized["days"] = int(normalized.get("days") or self.runtime._default_days())
         if action in {"snapshot", "backtest"}:
@@ -1281,6 +1353,7 @@ class DeskApiService:
             requested_timeframes = [payload["timeframe"]]
         return self.runtime.market_data.sync_market_data_if_stale(
             portfolio_slug=portfolio["slug"],
+            account_id=payload.get("account_id"),
             max_age_seconds=90.0,
             days=int(payload.get("days") or self.runtime._default_days()),
             timeframes=requested_timeframes,
@@ -1428,6 +1501,11 @@ class DeskApiService:
 
     def _decorate_operator_run(self, run: Mapping[str, Any]) -> dict[str, Any]:
         payload = dict(run)
+        request_payload = dict(payload.get("request_payload") or {})
+        try:
+            payload["account_id"] = self.runtime.resolve_mt5_account_id(request_payload.get("account_id"))
+        except ValueError:
+            payload["account_id"] = self.runtime.resolve_mt5_account_id(None)
         elapsed_seconds = self._operator_elapsed_seconds(payload)
         status = str(payload.get("status") or "").lower()
         action = str(payload.get("action") or "").lower()
@@ -1592,6 +1670,7 @@ class DeskApiService:
         action: str | None = None,
         statuses: list[str] | None = None,
         status_reasons: list[str] | None = None,
+        account_id: str | None = None,
     ) -> list[dict[str, Any]]:
         candidate_statuses = [str(item).lower() for item in (statuses or []) if str(item).strip()]
         if (not candidate_statuses) or any(item in {"queued", "running"} for item in candidate_statuses):
@@ -1603,7 +1682,18 @@ class DeskApiService:
             statuses=statuses,
             status_reasons=status_reasons,
         )
-        return [self._decorate_operator_run(run) for run in runs]
+        decorated = [self._decorate_operator_run(run) for run in runs]
+        if account_id in {None, "", "null"}:
+            return decorated
+        resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
+        default_account_id = self.runtime.resolve_mt5_account_id(None)
+        filtered: list[dict[str, Any]] = []
+        for run in decorated:
+            payload = dict(run.get("request_payload") or {})
+            run_account_id = self.runtime.resolve_mt5_account_id(payload.get("account_id") or default_account_id)
+            if run_account_id == resolved_account_id:
+                filtered.append(run)
+        return filtered
 
     def enqueue_operator_action(
         self,
@@ -1743,6 +1833,7 @@ class DeskApiService:
                     return self._decorate_operator_run(interrupted)
                 sync_result = self.market.sync_market_data(
                     portfolio_slug=portfolio_slug,
+                    account_id=payload.get("account_id"),
                     days=payload.get("days"),
                     timeframes=payload.get("timeframes"),
                 )
@@ -1964,6 +2055,7 @@ class DeskApiService:
         delta_position_eur: float | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
+        account_id: str | None = None,
         strict_trade_exposure_validation: bool = True,
     ) -> dict[str, Any]:
         normalized_exposure_change = self._normalize_trade_exposure_change(
@@ -1977,6 +2069,7 @@ class DeskApiService:
             delta_position_eur=None,
             note=note,
             portfolio_slug=portfolio_slug,
+            account_id=account_id,
         )
 
     def submit_execution(
@@ -1987,6 +2080,7 @@ class DeskApiService:
         delta_position_eur: float | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
+        account_id: str | None = None,
         strict_trade_exposure_validation: bool = True,
     ) -> dict[str, Any]:
         normalized_exposure_change = self._normalize_trade_exposure_change(
@@ -2000,6 +2094,7 @@ class DeskApiService:
             delta_position_eur=None,
             note=note,
             portfolio_slug=portfolio_slug,
+            account_id=account_id,
         )
 
     def evaluate_trade_decision(
@@ -2010,6 +2105,7 @@ class DeskApiService:
         delta_position_eur: float | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
+        account_id: str | None = None,
         strict_trade_exposure_validation: bool = True,
     ) -> dict[str, Any]:
         normalized_exposure_change = self._normalize_trade_exposure_change(
@@ -2023,6 +2119,7 @@ class DeskApiService:
             delta_position_eur=None,
             note=note,
             portfolio_slug=portfolio_slug,
+            account_id=account_id,
         )
 
     def run_snapshot(
@@ -2038,6 +2135,7 @@ class DeskApiService:
         df_t: int | None = None,
         seed: int | None = None,
         portfolio_slug: str | None = None,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         return self.analytics.run_snapshot(
             timeframe=timeframe,
@@ -2050,6 +2148,7 @@ class DeskApiService:
             df_t=df_t,
             seed=seed,
             portfolio_slug=portfolio_slug,
+            account_id=account_id,
         )
 
     def run_backtest(
@@ -2065,6 +2164,7 @@ class DeskApiService:
         df_t: int | None = None,
         seed: int | None = None,
         portfolio_slug: str | None = None,
+        account_id: str | None = None,
     ) -> dict[str, Any]:
         return self.analytics.run_backtest(
             timeframe=timeframe,
@@ -2077,6 +2177,7 @@ class DeskApiService:
             df_t=df_t,
             seed=seed,
             portfolio_slug=portfolio_slug,
+            account_id=account_id,
         )
 
     def run_validation(
@@ -2104,8 +2205,18 @@ class DeskApiService:
             symbol_weights=symbol_weights,
         )
 
-    def run_report(self, *, compare_path: str | None = None, portfolio_slug: str | None = None) -> dict[str, Any]:
-        return self.analytics.run_report(compare_path=compare_path, portfolio_slug=portfolio_slug)
+    def run_report(
+        self,
+        *,
+        compare_path: str | None = None,
+        portfolio_slug: str | None = None,
+        account_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.analytics.run_report(
+            compare_path=compare_path,
+            portfolio_slug=portfolio_slug,
+            account_id=account_id,
+        )
 
     def acknowledge_reconciliation_mismatch(
         self,
@@ -2271,8 +2382,13 @@ class DeskApiService:
         *,
         portfolio_slug: str | None = None,
         report_id: int | None = None,
+        account_id: str | None = None,
     ) -> dict[str, Any] | None:
-        report = self.reads.latest_report_content(portfolio_slug=portfolio_slug, report_id=report_id)
+        report = self.reads.latest_report_content(
+            portfolio_slug=portfolio_slug,
+            report_id=report_id,
+            account_id=account_id,
+        )
         if report is not None:
             return report
         if report_id is not None:
@@ -2291,8 +2407,8 @@ class DeskApiService:
                 source="mt5_live_bridge",
                 metadata=dict((live_snapshot.get("payload") or {}).get("metadata") or {}),
             )
-            report = self.reads.latest_report_content(portfolio_slug=portfolio["slug"])
+            report = self.reads.latest_report_content(portfolio_slug=portfolio["slug"], account_id=account_id)
             if report is not None:
                 return report
-        self.analytics.run_report(compare_path=str(compare_path), portfolio_slug=portfolio_slug)
-        return self.reads.latest_report_content(portfolio_slug=portfolio_slug)
+        self.analytics.run_report(compare_path=str(compare_path), portfolio_slug=portfolio_slug, account_id=account_id)
+        return self.reads.latest_report_content(portfolio_slug=portfolio_slug, account_id=account_id)

@@ -7,6 +7,7 @@ from typing import Optional, List
 
 @dataclass(frozen=True)
 class MT5Config:
+    account_id: Optional[str] = None
     login: Optional[int] = None
     password: Optional[str] = None
     server: Optional[str] = None

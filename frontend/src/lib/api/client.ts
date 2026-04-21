@@ -20,6 +20,7 @@ import type {
   MarketDataSyncStatusResponse,
   ModelComparisonResponse,
   MT5AccountSnapshotResponse,
+  MT5AccountsResponse,
   MT5LiveEventResponse,
   MT5LiveStateResponse,
   MT5PendingOrderResponse,
@@ -438,29 +439,37 @@ export const api = {
     request<RiskAttributionResponse>("/risk/contributions", {
       query: { portfolio_slug: portfolioSlug, source },
     }),
-  mt5Status: () => request<MT5TerminalStatusResponse>("/mt5/status"),
-  mt5Account: () => request<MT5AccountSnapshotResponse>("/mt5/account"),
-  mt5Positions: (portfolioSlug?: string) =>
-    request<MT5PositionResponse[]>("/mt5/positions", {
-      query: { portfolio_slug: portfolioSlug },
+  mt5Status: (accountId?: string) =>
+    request<MT5TerminalStatusResponse>("/mt5/status", {
+      query: { account_id: accountId },
     }),
-  mt5Orders: (portfolioSlug?: string) =>
+  mt5Account: (accountId?: string) =>
+    request<MT5AccountSnapshotResponse>("/mt5/account", {
+      query: { account_id: accountId },
+    }),
+  mt5Accounts: () => request<MT5AccountsResponse>("/mt5/accounts"),
+  mt5Positions: (portfolioSlug?: string, accountId?: string) =>
+    request<MT5PositionResponse[]>("/mt5/positions", {
+      query: { portfolio_slug: portfolioSlug, account_id: accountId },
+    }),
+  mt5Orders: (portfolioSlug?: string, accountId?: string) =>
     request<MT5PendingOrderResponse[]>("/mt5/orders", {
-      query: { portfolio_slug: portfolioSlug },
+      query: { portfolio_slug: portfolioSlug, account_id: accountId },
     }),
   mt5LiveState: (
     portfolioSlug?: string,
-    options?: { detailLevel?: "summary" | "full" | "inspector" },
+    options?: { detailLevel?: "summary" | "full" | "inspector"; accountId?: string },
   ) =>
     request<MT5LiveStateResponse>("/mt5/live/state", {
       query: {
         portfolio_slug: portfolioSlug,
         detail_level: options?.detailLevel,
+        account_id: options?.accountId,
       },
     }),
   mt5AnalyticsSeries: (
     portfolioSlug?: string,
-    options?: { windowMinutes?: number; maxPoints?: number },
+    options?: { windowMinutes?: number; maxPoints?: number; accountId?: string },
   ) =>
     request<{
       generated_at: string;
@@ -483,19 +492,30 @@ export const api = {
         portfolio_slug: portfolioSlug,
         window_minutes: options?.windowMinutes,
         max_points: options?.maxPoints,
+        account_id: options?.accountId,
       },
     }),
-  mt5LiveEvents: (portfolioSlug?: string, after = 0, limit = 100) =>
+  mt5LiveEvents: (
+    portfolioSlug?: string,
+    after = 0,
+    limit = 100,
+    options?: { accountId?: string },
+  ) =>
     request<MT5LiveEventResponse[]>("/mt5/live/events", {
-      query: { portfolio_slug: portfolioSlug, after, limit },
+      query: {
+        portfolio_slug: portfolioSlug,
+        after,
+        limit,
+        account_id: options?.accountId,
+      },
     }),
-  mt5HistoryOrders: (portfolioSlug?: string, limit = 100) =>
+  mt5HistoryOrders: (portfolioSlug?: string, limit = 100, accountId?: string) =>
     request<OrderHistoryEntryResponse[]>("/mt5/history/orders", {
-      query: { portfolio_slug: portfolioSlug, limit },
+      query: { portfolio_slug: portfolioSlug, limit, account_id: accountId },
     }),
-  mt5HistoryDeals: (portfolioSlug?: string, limit = 100) =>
+  mt5HistoryDeals: (portfolioSlug?: string, limit = 100, accountId?: string) =>
     request<DealHistoryEntryResponse[]>("/mt5/history/deals", {
-      query: { portfolio_slug: portfolioSlug, limit },
+      query: { portfolio_slug: portfolioSlug, limit, account_id: accountId },
     }),
   marketDataStatus: (portfolioSlug?: string) =>
     request<MarketDataSyncStatusResponse>("/market-data/status", {
@@ -521,7 +541,11 @@ export const api = {
       method: "POST",
       json: payload,
     }),
-  enqueueOperatorReport: (payload: { compare_path?: string | null; portfolio_slug?: string | null }) =>
+  enqueueOperatorReport: (payload: {
+    compare_path?: string | null;
+    portfolio_slug?: string | null;
+    account_id?: string | null;
+  }) =>
     request<OperatorRunResponse>("/operator/actions/report", {
       method: "POST",
       json: payload,
@@ -535,6 +559,7 @@ export const api = {
     }),
   operatorRuns: (options?: {
     portfolioSlug?: string;
+    accountId?: string;
     action?: string;
     statuses?: string[];
     limit?: number;
@@ -545,6 +570,7 @@ export const api = {
         action: options?.action,
         limit: options?.limit,
         status: options?.statuses,
+        account_id: options?.accountId,
       },
     }),
   instruments: (portfolioSlug?: string) =>
@@ -603,9 +629,9 @@ export const api = {
       method: "POST",
       json: payload,
     }),
-  recentDecisions: (portfolioSlug?: string, limit = 20) =>
+  recentDecisions: (portfolioSlug?: string, limit = 20, accountId?: string) =>
     request<RiskDecisionResponse[]>("/decisions/recent", {
-      query: { portfolio_slug: portfolioSlug, limit },
+      query: { portfolio_slug: portfolioSlug, limit, account_id: accountId },
     }),
   evaluateDecision: (payload: TradeProposalRequest) =>
     request<RiskDecisionResponse>("/decisions/evaluate", {
@@ -622,29 +648,30 @@ export const api = {
       method: "POST",
       json: payload,
     }),
-  recentExecutionResults: (portfolioSlug?: string, limit = 20) =>
+  recentExecutionResults: (portfolioSlug?: string, limit = 20, accountId?: string) =>
     request<ExecutionResultResponse[]>("/execution/recent", {
-      query: { portfolio_slug: portfolioSlug, limit },
+      query: { portfolio_slug: portfolioSlug, limit, account_id: accountId },
     }),
-  recentExecutionFills: (portfolioSlug?: string, limit = 50) =>
+  recentExecutionFills: (portfolioSlug?: string, limit = 50, accountId?: string) =>
     request<ExecutionFillResponse[]>("/execution/fills/recent", {
-      query: { portfolio_slug: portfolioSlug, limit },
+      query: { portfolio_slug: portfolioSlug, limit, account_id: accountId },
     }),
-  latestReport: (portfolioSlug?: string, reportId?: number) =>
+  latestReport: (portfolioSlug?: string, reportId?: number, accountId?: string) =>
     request<ReportContentResponse>("/reports/latest", {
-      query: { portfolio_slug: portfolioSlug, report_id: reportId },
+      query: { portfolio_slug: portfolioSlug, report_id: reportId, account_id: accountId },
     }),
-  runReport: (comparePath?: string, portfolioSlug?: string) =>
+  runReport: (comparePath?: string, portfolioSlug?: string, accountId?: string) =>
     request<ReportRunResponse>("/reports/run", {
       method: "POST",
       json: {
         compare_path: comparePath ?? null,
         portfolio_slug: portfolioSlug ?? null,
+        account_id: accountId ?? null,
       },
     }),
-  reportDecisionHistory: (portfolioSlug?: string, limit = 25) =>
+  reportDecisionHistory: (portfolioSlug?: string, limit = 25, accountId?: string) =>
     request<RiskDecisionResponse[]>("/reports/decision-history", {
-      query: { portfolio_slug: portfolioSlug, limit },
+      query: { portfolio_slug: portfolioSlug, limit, account_id: accountId },
     }),
   reportCapitalHistory: (portfolioSlug?: string, limit = 25, source?: string) =>
     request<CapitalUsageSnapshotResponse[]>("/reports/capital-history", {

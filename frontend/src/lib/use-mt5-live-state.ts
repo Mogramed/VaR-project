@@ -62,20 +62,34 @@ function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortS
   return signal;
 }
 
-function buildStateUrl(portfolioSlug?: string, detailLevel: LiveDetailLevel = "full") {
+function buildStateUrl(
+  portfolioSlug?: string,
+  detailLevel: LiveDetailLevel = "full",
+  accountId?: string,
+) {
   const params = new URLSearchParams();
   if (portfolioSlug) {
     params.set("portfolio_slug", portfolioSlug);
+  }
+  if (accountId) {
+    params.set("account_id", accountId);
   }
   params.set("detail_level", detailLevel);
   const query = params.toString();
   return query ? `/api/proxy/mt5/live/state?${query}` : "/api/proxy/mt5/live/state";
 }
 
-function buildStreamUrl(portfolioSlug?: string, detailLevel: LiveDetailLevel = "full") {
+function buildStreamUrl(
+  portfolioSlug?: string,
+  detailLevel: LiveDetailLevel = "full",
+  accountId?: string,
+) {
   const params = new URLSearchParams();
   if (portfolioSlug) {
     params.set("portfolio_slug", portfolioSlug);
+  }
+  if (accountId) {
+    params.set("account_id", accountId);
   }
   params.set("detail_level", detailLevel);
   const query = params.toString();
@@ -87,9 +101,11 @@ export function useMt5LiveState(
   options?: {
     initialState?: MT5LiveStateResponse | null;
     detailLevel?: LiveDetailLevel;
+    accountId?: string;
   },
 ) {
   const detailLevel = options?.detailLevel ?? "full";
+  const accountId = options?.accountId;
   const [liveState, setLiveState] = useState<MT5LiveStateResponse | null>(
     options?.initialState ?? null,
   );
@@ -114,8 +130,8 @@ export function useMt5LiveState(
   }, [liveState?.poll_interval_seconds]);
 
   useEffect(() => {
-    const stateUrl = buildStateUrl(portfolioSlug, detailLevel);
-    const streamUrl = buildStreamUrl(portfolioSlug, detailLevel);
+    const stateUrl = buildStateUrl(portfolioSlug, detailLevel, accountId);
+    const streamUrl = buildStreamUrl(portfolioSlug, detailLevel, accountId);
     etagRef.current = null;
     headerSuggestedPollMsRef.current = null;
     lastResponseAtMsRef.current = 0;
@@ -469,7 +485,7 @@ export function useMt5LiveState(
       stopPolling();
       closeStream();
     };
-  }, [detailLevel, initialGeneratedAt, portfolioSlug]);
+  }, [accountId, detailLevel, initialGeneratedAt, portfolioSlug]);
 
   return { liveState, transport, heartbeatAt };
 }

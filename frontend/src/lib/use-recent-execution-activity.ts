@@ -7,6 +7,7 @@ import type { ExecutionFillResponse, ExecutionResultResponse } from "@/lib/api/t
 
 export function useRecentExecutionActivity({
   portfolioSlug,
+  accountId,
   initialExecutions,
   initialFills,
   liveSequence,
@@ -14,6 +15,7 @@ export function useRecentExecutionActivity({
   fillLimit = 20,
 }: {
   portfolioSlug: string;
+  accountId?: string;
   initialExecutions: ExecutionResultResponse[];
   initialFills: ExecutionFillResponse[];
   liveSequence?: number;
@@ -28,8 +30,8 @@ export function useRecentExecutionActivity({
     void (async () => {
       try {
         const [nextExecutions, nextFills] = await Promise.all([
-          api.recentExecutionResults(portfolioSlug, executionLimit),
-          api.recentExecutionFills(portfolioSlug, fillLimit),
+          api.recentExecutionResults(portfolioSlug, executionLimit, accountId),
+          api.recentExecutionFills(portfolioSlug, fillLimit, accountId),
         ]);
         if (cancelled) {
           return;
@@ -45,7 +47,7 @@ export function useRecentExecutionActivity({
     return () => {
       cancelled = true;
     };
-  }, [executionLimit, fillLimit, liveSequence, portfolioSlug]);
+  }, [accountId, executionLimit, fillLimit, liveSequence, portfolioSlug]);
 
   const pushExecutionResult = useCallback(
     (result: ExecutionResultResponse) => {

@@ -31,7 +31,7 @@ export function AttributionLiveSurface({
   initialAttribution: RiskAttributionResponse | null;
   initialComparison: ModelComparisonResponse | null;
 }) {
-  const { liveState, transport } = useDeskLive();
+  const { liveState, transport, accountId } = useDeskLive();
   const attributionSource = preferredSource(liveState);
   const attributionQuery = useQuery({
     queryKey: deskArtifactQueryKey("attribution", portfolioSlug, attributionSource),
@@ -68,7 +68,13 @@ export function AttributionLiveSurface({
       {attribution ? (
         <div className="flex flex-wrap gap-1.5">
           {Object.keys(attribution.models).map((model) => (
-            <a key={model} href={`/desk/attribution?portfolio=${encodeURIComponent(portfolioSlug)}&model=${model}`}
+            <a
+              key={model}
+              href={
+                accountId
+                  ? `/desk/attribution?portfolio=${encodeURIComponent(portfolioSlug)}&account=${encodeURIComponent(accountId)}&model=${model}`
+                  : `/desk/attribution?portfolio=${encodeURIComponent(portfolioSlug)}&model=${model}`
+              }
               className={`rounded-[var(--radius-sm)] border px-2.5 py-1 text-[11px] uppercase tracking-wider transition-colors ${
                 model === selectedModel
                   ? "border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] text-[var(--color-accent)]"

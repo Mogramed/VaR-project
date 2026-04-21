@@ -40,13 +40,20 @@ function ActionButton({
   );
 }
 
-export function OperatorActions({ portfolioSlug }: { portfolioSlug: string }) {
+export function OperatorActions({
+  portfolioSlug,
+  accountId,
+}: {
+  portfolioSlug: string;
+  accountId?: string;
+}) {
   const { notifyOperatorRunCompleted } = useDeskLive();
 
   const sync = useOperatorRunAction({
     action: "sync",
     portfolioSlug,
-    enqueue: async (payload: { portfolio_slug: string }) => api.enqueueOperatorSync(payload),
+    accountId,
+    enqueue: async (payload: { portfolio_slug: string; account_id?: string }) => api.enqueueOperatorSync(payload),
     onSucceeded: async (run) => {
       notifyOperatorRunCompleted(run);
     },
@@ -54,7 +61,8 @@ export function OperatorActions({ portfolioSlug }: { portfolioSlug: string }) {
   const snapshot = useOperatorRunAction({
     action: "snapshot",
     portfolioSlug,
-    enqueue: async (payload: { portfolio_slug: string }) => api.enqueueOperatorSnapshot(payload),
+    accountId,
+    enqueue: async (payload: { portfolio_slug: string; account_id?: string }) => api.enqueueOperatorSnapshot(payload),
     onSucceeded: async (run) => {
       notifyOperatorRunCompleted(run);
     },
@@ -62,7 +70,8 @@ export function OperatorActions({ portfolioSlug }: { portfolioSlug: string }) {
   const backtest = useOperatorRunAction({
     action: "backtest",
     portfolioSlug,
-    enqueue: async (payload: { portfolio_slug: string }) => api.enqueueOperatorBacktest(payload),
+    accountId,
+    enqueue: async (payload: { portfolio_slug: string; account_id?: string }) => api.enqueueOperatorBacktest(payload),
     onSucceeded: async (run) => {
       notifyOperatorRunCompleted(run);
     },
@@ -70,7 +79,8 @@ export function OperatorActions({ portfolioSlug }: { portfolioSlug: string }) {
   const report = useOperatorRunAction({
     action: "report",
     portfolioSlug,
-    enqueue: async (payload: { portfolio_slug: string }) => api.enqueueOperatorReport(payload),
+    accountId,
+    enqueue: async (payload: { portfolio_slug: string; account_id?: string }) => api.enqueueOperatorReport(payload),
     onSucceeded: async (run) => {
       notifyOperatorRunCompleted(run);
     },
@@ -101,10 +111,10 @@ export function OperatorActions({ portfolioSlug }: { portfolioSlug: string }) {
 
   return (
     <div className="flex items-center gap-1">
-      <ActionButton icon={RefreshCw} label="Sync" pending={sync.pending} disabled={busy} onClick={() => sync.execute({ portfolio_slug: portfolioSlug })} />
-      <ActionButton icon={Activity} label="Snap" pending={snapshot.pending} disabled={busy} onClick={() => snapshot.execute({ portfolio_slug: portfolioSlug })} />
-      <ActionButton icon={Radar} label="Backtest" pending={backtest.pending} disabled={busy} onClick={() => backtest.execute({ portfolio_slug: portfolioSlug })} />
-      <ActionButton icon={FileText} label="Report" pending={report.pending} disabled={busy} accent onClick={() => report.execute({ portfolio_slug: portfolioSlug })} />
+      <ActionButton icon={RefreshCw} label="Sync" pending={sync.pending} disabled={busy} onClick={() => sync.execute({ portfolio_slug: portfolioSlug, account_id: accountId })} />
+      <ActionButton icon={Activity} label="Snap" pending={snapshot.pending} disabled={busy} onClick={() => snapshot.execute({ portfolio_slug: portfolioSlug, account_id: accountId })} />
+      <ActionButton icon={Radar} label="Backtest" pending={backtest.pending} disabled={busy} onClick={() => backtest.execute({ portfolio_slug: portfolioSlug, account_id: accountId })} />
+      <ActionButton icon={FileText} label="Report" pending={report.pending} disabled={busy} accent onClick={() => report.execute({ portfolio_slug: portfolioSlug, account_id: accountId })} />
       {activeContext ? (
         <ActionButton
           icon={Square}
