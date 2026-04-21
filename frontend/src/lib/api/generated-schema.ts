@@ -617,6 +617,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/mt5/history/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Mt5 History Transactions */
+        get: operations["mt5_mt5_history_transactions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mt5/history/transactions/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Mt5 History Transactions Export */
+        get: operations["mt5_mt5_history_transactions_export"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/market-data/status": {
         parameters: {
             query?: never;
@@ -2407,6 +2441,91 @@ export interface components {
             raw?: {
                 [key: string]: unknown;
             };
+        };
+        /** MT5TransactionHistoryEntryResponse */
+        MT5TransactionHistoryEntryResponse: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Ticket */
+            ticket?: number | null;
+            /** Order Ticket */
+            order_ticket?: number | null;
+            /** Position Id */
+            position_id?: number | null;
+            /** Symbol */
+            symbol: string;
+            /** Side */
+            side?: string | null;
+            /** Transaction Type */
+            transaction_type?: string | null;
+            /** State */
+            state?: string | null;
+            /** Volume */
+            volume?: number | null;
+            /** Price */
+            price?: number | null;
+            /** Profit */
+            profit?: number | null;
+            /** Commission */
+            commission?: number | null;
+            /** Swap */
+            swap?: number | null;
+            /** Fee */
+            fee?: number | null;
+            /** Comment */
+            comment?: string | null;
+            /**
+             * Is Manual
+             * @default false
+             */
+            is_manual: boolean;
+            /** Time Utc */
+            time_utc?: string | null;
+            /** Raw */
+            raw?: {
+                [key: string]: unknown;
+            };
+        };
+        /** MT5TransactionHistoryFiltersResponse */
+        MT5TransactionHistoryFiltersResponse: {
+            /** Date From */
+            date_from?: string | null;
+            /** Date To */
+            date_to?: string | null;
+            /** Symbol */
+            symbol?: string | null;
+            /**
+             * Type
+             * @default all
+             */
+            type: string;
+        };
+        /** MT5TransactionHistoryResponse */
+        MT5TransactionHistoryResponse: {
+            /** Generated At */
+            generated_at: string;
+            /** Portfolio Slug */
+            portfolio_slug: string;
+            /** Account Id */
+            account_id?: string | null;
+            filters: components["schemas"]["MT5TransactionHistoryFiltersResponse"];
+            /**
+             * Sort
+             * @default time_desc
+             */
+            sort: string;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Total */
+            total: number;
+            /** Has Next */
+            has_next: boolean;
+            /** Items */
+            items?: components["schemas"]["MT5TransactionHistoryEntryResponse"][];
         };
         /** MarketDataSyncRequest */
         MarketDataSyncRequest: {
@@ -4765,6 +4884,11 @@ export interface operations {
                 limit?: number;
                 portfolio_slug?: string | null;
                 account_id?: string | null;
+                /** @description UTC start datetime (ISO-8601). */
+                date_from?: string | null;
+                /** @description UTC end datetime (ISO-8601). */
+                date_to?: string | null;
+                symbol?: string | null;
             };
             header?: never;
             path?: never;
@@ -4798,6 +4922,11 @@ export interface operations {
                 limit?: number;
                 portfolio_slug?: string | null;
                 account_id?: string | null;
+                /** @description UTC start datetime (ISO-8601). */
+                date_from?: string | null;
+                /** @description UTC end datetime (ISO-8601). */
+                date_to?: string | null;
+                symbol?: string | null;
             };
             header?: never;
             path?: never;
@@ -4812,6 +4941,91 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DealHistoryEntryResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mt5_mt5_history_transactions: {
+        parameters: {
+            query?: {
+                portfolio_slug?: string | null;
+                account_id?: string | null;
+                /** @description UTC start datetime (ISO-8601). */
+                date_from?: string | null;
+                /** @description UTC end datetime (ISO-8601). */
+                date_to?: string | null;
+                symbol?: string | null;
+                /** @description all|order|deal|manual|desk */
+                type?: string | null;
+                /** @description time_desc|time_asc */
+                sort?: string;
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MT5TransactionHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mt5_mt5_history_transactions_export: {
+        parameters: {
+            query?: {
+                portfolio_slug?: string | null;
+                account_id?: string | null;
+                /** @description UTC start datetime (ISO-8601). */
+                date_from?: string | null;
+                /** @description UTC end datetime (ISO-8601). */
+                date_to?: string | null;
+                symbol?: string | null;
+                /** @description all|order|deal|manual|desk */
+                type?: string | null;
+                /** @description time_desc|time_asc */
+                sort?: string;
+                max_rows?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

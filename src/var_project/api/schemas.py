@@ -814,6 +814,48 @@ class DealHistoryEntryResponse(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class MT5TransactionHistoryEntryResponse(BaseModel):
+    id: str
+    kind: str
+    ticket: int | None = None
+    order_ticket: int | None = None
+    position_id: int | None = None
+    symbol: str
+    side: str | None = None
+    transaction_type: str | None = None
+    state: str | None = None
+    volume: float | None = None
+    price: float | None = None
+    profit: float | None = None
+    commission: float | None = None
+    swap: float | None = None
+    fee: float | None = None
+    comment: str | None = None
+    is_manual: bool = False
+    time_utc: str | None = None
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class MT5TransactionHistoryFiltersResponse(BaseModel):
+    date_from: str | None = None
+    date_to: str | None = None
+    symbol: str | None = None
+    type: str = "all"
+
+
+class MT5TransactionHistoryResponse(BaseModel):
+    generated_at: str
+    portfolio_slug: str
+    account_id: str | None = None
+    filters: MT5TransactionHistoryFiltersResponse
+    sort: str = "time_desc"
+    page: int
+    page_size: int
+    total: int
+    has_next: bool
+    items: list[MT5TransactionHistoryEntryResponse] = Field(default_factory=list)
+
+
 class OperatorAlertResponse(BaseModel):
     source: str
     severity: str
