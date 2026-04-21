@@ -6,7 +6,7 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
     CHROMIUM_PATH=/usr/bin/chromium
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends chromium ca-certificates \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends chromium ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 FROM base AS deps

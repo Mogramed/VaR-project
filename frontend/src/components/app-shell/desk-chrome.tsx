@@ -60,6 +60,7 @@ const mobileNavItems = [
 ] as const;
 
 const MT5_ACCOUNT_STORAGE_KEY = "desk:active-mt5-account";
+const EMPTY_MT5_ACCOUNTS: NonNullable<MT5AccountsResponse["accounts"]> = [];
 
 function StatusDot({ status }: { status: "ok" | "warn" | "off" }) {
   const color =
@@ -194,7 +195,14 @@ export function DeskChrome({
   const searchParamsText = searchParams.toString();
   const requestedPortfolioSlug = searchParams.get("portfolio");
   const requestedAccountId = searchParams.get("account");
-  const [rememberedAccountId, setRememberedAccountId] = useState<string | null>(null);
+  const [rememberedAccountId] = useState<string | null>(() => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    const stored = window.localStorage.getItem(MT5_ACCOUNT_STORAGE_KEY);
+    const normalized = stored && stored.trim() ? stored.trim() : null;
+    return normalized;
+  });
   const mt5AccountsQuery = useQuery({
     queryKey: ["mt5-accounts"],
     queryFn: () => api.mt5Accounts(),
@@ -216,15 +224,6 @@ export function DeskChrome({
     () => canonicalAccountId(requestedAccountId, rememberedAccountId, mt5Accounts),
     [requestedAccountId, rememberedAccountId, mt5Accounts],
   );
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    const stored = window.localStorage.getItem(MT5_ACCOUNT_STORAGE_KEY);
-    const normalized = stored && stored.trim() ? stored.trim() : null;
-    setRememberedAccountId(normalized);
-  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined" || !activeAccountId) {
@@ -316,7 +315,10 @@ function DeskChromeFrame({
   const [portfolioDropdownOpen, setPortfolioDropdownOpen] = useState(false);
   const [accountDropdownOpen, setAccountDropdownOpen] = useState(false);
   const { liveState, heartbeatAt, transport } = useDeskLive();
-  const accountOptions = Array.isArray(mt5Accounts?.accounts) ? mt5Accounts.accounts : [];
+  const accountOptions = useMemo(
+    () => (Array.isArray(mt5Accounts?.accounts) ? mt5Accounts.accounts : EMPTY_MT5_ACCOUNTS),
+    [mt5Accounts?.accounts],
+  );
   const activeAccountLabel = useMemo(() => {
     if (!accountId) return "account";
     const matched = accountOptions.find((item) => item.account_id === accountId);
