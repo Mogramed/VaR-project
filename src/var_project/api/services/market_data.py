@@ -494,6 +494,162 @@ class DeskMarketDataService:
             synced_at=_utcnow(),
         )
 
+    @staticmethod
+    def _latest_timestamp_from_payloads(
+        payloads: Iterable[Mapping[str, Any]],
+        *,
+        candidate_fields: Iterable[str],
+    ) -> datetime | None:
+        latest: datetime | None = None
+        for payload in payloads:
+            item = dict(payload or {})
+            for field in candidate_fields:
+                parsed = _coerce_utc_datetime(item.get(field))
+                if parsed is None:
+                    continue
+                if latest is None or parsed > latest:
+                    latest = parsed
+        return latest
+
+    def _history_sync_windows(
+        self,
+        *,
+        portfolio_slug: str,
+        started_at: datetime,
+        bootstrap_days: int,
+    ) -> dict[str, dict[str, Any]]:
+        overlap = timedelta(minutes=15)
+        bootstrap_start = started_at - timedelta(days=max(int(bootstrap_days), 1))
+
+        latest_order_cached = self._latest_timestamp_from_payloads(
+            self.runtime.storage.recent_mt5_order_history(limit=1, portfolio_slug=portfolio_slug),
+            candidate_fields=("time_done_utc", "time_setup_utc", "time_utc", "synced_at"),
+        )
+        latest_deal_cached = self._latest_timestamp_from_payloads(
+            self.runtime.storage.recent_mt5_deal_history(limit=1, portfolio_slug=portfolio_slug),
+            candidate_fields=("time_utc", "time_done_utc", "time_setup_utc", "synced_at"),
+        )
+
+        def _window(latest_cached: datetime | None) -> tuple[datetime, str]:
+            if latest_cached is None:
+                return bootstrap_start, "bootstrap"
+            since = latest_cached - overlap
+            if since >= started_at:
+                since = started_at - overlap
+            return since, "incremental"
+
+        orders_since, orders_mode = _window(latest_order_cached)
+        deals_since, deals_mode = _window(latest_deal_cached)
+        return {
+            "orders": {
+                "mode": orders_mode,
+                "since": orders_since,
+                "latest_cached_at": latest_order_cached,
+                "latest_fetched_at": None,
+            },
+            "deals": {
+                "mode": deals_mode,
+                "since": deals_since,
+                "latest_cached_at": latest_deal_cached,
+                "latest_fetched_at": None,
+            },
+        }
+
+    @staticmethod
+    def _history_sync_window_payload(window: Mapping[str, Any]) -> dict[str, Any]:
+        def _to_iso(value: Any) -> str | None:
+            parsed = _coerce_utc_datetime(value)
+            return None if parsed is None else parsed.isoformat()
+
+        return {
+            "mode": str(window.get("mode") or "bootstrap"),
+            "since": _to_iso(window.get("since")),
+            "latest_cached_at": _to_iso(window.get("latest_cached_at")),
+            "latest_fetched_at": _to_iso(window.get("latest_fetched_at")),
+        }
+
+    @staticmethod
+    def _resume_hint_from_latest_sync(latest_sync: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if latest_sync is None:
+            return None
+        status = str(latest_sync.get("status") or "").lower()
+        if status not in {"running", "incomplete"}:
+            return None
+        details = dict(latest_sync.get("details") or {})
+        checkpoint = dict(details.get("checkpoint") or {})
+        hint: dict[str, Any] = {
+            "status": status,
+            "synced_at": latest_sync.get("synced_at"),
+            "checkpoint_stage": str(checkpoint.get("stage") or "unknown"),
+            "checkpoint_updated_at": checkpoint.get("updated_at"),
+            "completed_stages": list(checkpoint.get("completed_stages") or []),
+        }
+        try:
+            if latest_sync.get("id") is not None:
+                hint["sync_run_id"] = int(latest_sync["id"])
+        except Exception:
+            pass
+        cursor = checkpoint.get("cursor")
+        if isinstance(cursor, Mapping):
+            hint["cursor"] = dict(cursor)
+        return hint
+
+    @staticmethod
+    def _build_sync_stage_event(
+        *,
+        stage: str,
+        started_at: datetime,
+        finished_at: datetime,
+        status: str,
+        metrics: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        duration_ms = max((finished_at - started_at).total_seconds() * 1000.0, 0.0)
+        event = {
+            "stage": str(stage),
+            "status": str(status),
+            "started_at": started_at.isoformat(),
+            "finished_at": finished_at.isoformat(),
+            "duration_ms": round(float(duration_ms), 3),
+        }
+        if metrics is not None:
+            event["metrics"] = dict(metrics)
+        return event
+
+    def _persist_running_sync_progress(
+        self,
+        *,
+        sync_run_id: int,
+        details: dict[str, Any],
+        stage: str,
+        completed_stages: Iterable[str],
+        stage_status: str = "running",
+        cursor: Mapping[str, Any] | None = None,
+        metrics: Mapping[str, Any] | None = None,
+        stage_event: Mapping[str, Any] | None = None,
+    ) -> None:
+        checkpoint = dict(details.get("checkpoint") or {})
+        checkpoint["stage"] = str(stage)
+        checkpoint["status"] = str(stage_status)
+        checkpoint["updated_at"] = _utcnow().isoformat()
+        checkpoint["completed_stages"] = [str(item) for item in completed_stages]
+        if cursor is not None:
+            checkpoint["cursor"] = dict(cursor)
+        if metrics is not None:
+            checkpoint["metrics"] = dict(metrics)
+        details["checkpoint"] = checkpoint
+
+        if stage_event is not None:
+            events = list(details.get("stage_events") or [])
+            events.append(dict(stage_event))
+            details["stage_events"] = events[-100:]
+
+        self.runtime.storage.update_market_data_sync(
+            sync_run_id,
+            status="running",
+            details=details,
+            synced_at=_utcnow(),
+        )
+
     def live_holdings(self, *, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         if not self.should_use_mt5_market_data(portfolio):
@@ -550,6 +706,21 @@ class DeskMarketDataService:
         self.sync_market_data(portfolio_slug=portfolio["slug"])
         refreshed = self.market_data_status(portfolio_slug=portfolio["slug"])
         return self.runtime.storage.list_instruments(symbols=refreshed["symbols"])
+
+    def market_data_sync_runs(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        statuses: Iterable[str] | None = None,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        self._close_stale_running_sync(portfolio_slug=portfolio["slug"])
+        return self.runtime.storage.list_market_data_sync_runs(
+            portfolio_slug=portfolio["slug"],
+            statuses=statuses,
+            limit=max(int(limit), 1),
+        )
 
     def market_data_status(
         self,
@@ -730,23 +901,52 @@ class DeskMarketDataService:
             requested_days=requested_days,
             now=started_at,
         )
+        history_bootstrap_days = max(int(stored_history_days), int(history_reconciliation_days), 1)
         market_closed = _is_fx_weekend_closed(started_at)
+        latest_sync_before = self.runtime.storage.latest_market_data_sync(portfolio_slug=portfolio["slug"])
+        resume_hint = self._resume_hint_from_latest_sync(latest_sync_before)
+        history_windows = self._history_sync_windows(
+            portfolio_slug=portfolio["slug"],
+            started_at=started_at,
+            bootstrap_days=history_bootstrap_days,
+        )
+        tracked_symbols = self._portfolio_symbols_from_details(portfolio)
+        running_details = {
+            "symbols": tracked_symbols,
+            "timeframes": selected_timeframes,
+            "requested_days": requested_days,
+            "stored_history_days": stored_history_days,
+            "history_reconciliation_days": history_reconciliation_days,
+            "retention_tiers": timeframe_days,
+            "market_closed": market_closed,
+            "sync_strategy": "incremental",
+            "account_id": resolved_account_id,
+            "sync_started_at": started_at.isoformat(),
+            "history_windows": {
+                "orders": self._history_sync_window_payload(history_windows["orders"]),
+                "deals": self._history_sync_window_payload(history_windows["deals"]),
+            },
+        }
+        if resume_hint is not None:
+            running_details["resume_from"] = resume_hint
+        running_details["checkpoint"] = {
+            "stage": "starting",
+            "status": "running",
+            "updated_at": started_at.isoformat(),
+            "completed_stages": [],
+            "cursor": {
+                "orders_since": self._history_sync_window_payload(history_windows["orders"]).get("since"),
+                "deals_since": self._history_sync_window_payload(history_windows["deals"]).get("since"),
+            },
+        }
+        running_details["stage_events"] = []
+
         sync_run_id = self.runtime.storage.record_market_data_sync(
             portfolio_id=portfolio_id,
             portfolio_slug=portfolio["slug"],
             mode=str(portfolio.get("mode") or "live_mt5"),
             status="running",
-            details={
-                "symbols": self._portfolio_symbols_from_details(portfolio),
-                "timeframes": selected_timeframes,
-                "requested_days": requested_days,
-                "stored_history_days": stored_history_days,
-                "history_reconciliation_days": history_reconciliation_days,
-                "retention_tiers": timeframe_days,
-                "market_closed": market_closed,
-                "sync_strategy": "incremental",
-                "account_id": resolved_account_id,
-            },
+            details=running_details,
         )
 
         errors: list[dict[str, Any]] = []
@@ -757,15 +957,70 @@ class DeskMarketDataService:
         pending_orders: list[dict[str, Any]] = []
         coverage: dict[str, dict[str, Any]] = {}
         tick_archives: list[dict[str, Any]] = []
-        tracked_symbols = self._portfolio_symbols_from_details(portfolio)
         fatal_exception: Exception | None = None
+        completed_stages: list[str] = []
+        stage_started_at: dict[str, datetime] = {}
+
+        def _history_windows_payload() -> dict[str, dict[str, Any]]:
+            return {
+                "orders": self._history_sync_window_payload(history_windows["orders"]),
+                "deals": self._history_sync_window_payload(history_windows["deals"]),
+            }
+
+        def _start_stage(
+            stage: str,
+            *,
+            metrics: Mapping[str, Any] | None = None,
+            cursor: Mapping[str, Any] | None = None,
+        ) -> None:
+            stage_started_at[stage] = _utcnow()
+            self._persist_running_sync_progress(
+                sync_run_id=sync_run_id,
+                details=running_details,
+                stage=stage,
+                completed_stages=completed_stages,
+                stage_status="running",
+                cursor=cursor,
+                metrics=metrics,
+            )
+
+        def _finish_stage(
+            stage: str,
+            *,
+            metrics: Mapping[str, Any] | None = None,
+            cursor: Mapping[str, Any] | None = None,
+            status: str = "ok",
+        ) -> None:
+            started = stage_started_at.pop(stage, _utcnow())
+            finished = _utcnow()
+            normalized_status = "ok" if str(status).lower() == "ok" else "incomplete"
+            if normalized_status == "ok" and stage not in completed_stages:
+                completed_stages.append(stage)
+            event = self._build_sync_stage_event(
+                stage=stage,
+                started_at=started,
+                finished_at=finished,
+                status=normalized_status,
+                metrics=metrics,
+            )
+            self._persist_running_sync_progress(
+                sync_run_id=sync_run_id,
+                details=running_details,
+                stage=stage,
+                completed_stages=completed_stages,
+                stage_status="running",
+                cursor=cursor,
+                metrics=metrics,
+                stage_event=event,
+            )
 
         try:
+            _start_stage("mt5_connect", metrics={"account_id": resolved_account_id})
             with self.runtime._mt5_gateway(account_id=resolved_account_id) as live:
+                _finish_stage("mt5_connect", metrics={"account_id": resolved_account_id}, status="ok")
+                _start_stage("capture_state")
                 open_positions = [item.to_dict() for item in live.holdings(symbols=None)]
                 pending_orders = [item.to_dict() for item in live.pending_orders(symbols=None)]
-                date_from = started_at - timedelta(days=history_reconciliation_days)
-
                 tracked_symbols = self._portfolio_symbols_from_details(
                     portfolio,
                     {
@@ -780,7 +1035,23 @@ class DeskMarketDataService:
                     )
                     for timeframe in selected_timeframes
                 }
+                _finish_stage(
+                    "capture_state",
+                    metrics={
+                        "open_positions": len(open_positions),
+                        "pending_orders": len(pending_orders),
+                        "tracked_symbols": len(tracked_symbols),
+                    },
+                    cursor={"tracked_symbols": tracked_symbols},
+                    status="ok",
+                )
 
+                stage_errors_before = len(errors)
+                _start_stage(
+                    "sync_instruments_bars",
+                    metrics={"symbols": len(tracked_symbols), "timeframes": len(selected_timeframes)},
+                    cursor={"tracked_symbols": tracked_symbols},
+                )
                 for symbol in tracked_symbols:
                     try:
                         instrument = live.instrument_definition(symbol).to_dict()
@@ -908,29 +1179,111 @@ class DeskMarketDataService:
                                     "range_start": None if range_start is None else range_start.isoformat(),
                                     "range_end": started_at.isoformat(),
                                 }
+                        self._persist_running_sync_progress(
+                            sync_run_id=sync_run_id,
+                            details=running_details,
+                            stage="sync_instruments_bars",
+                            completed_stages=completed_stages,
+                            stage_status="running",
+                            cursor={"symbol": symbol, "timeframe": timeframe},
+                            metrics={
+                                "instrument_rows": len(instrument_payloads),
+                                "coverage_symbols": len(coverage),
+                            },
+                        )
 
+                _finish_stage(
+                    "sync_instruments_bars",
+                    metrics={
+                        "instrument_rows": len(instrument_payloads),
+                        "coverage_symbols": len(coverage),
+                    },
+                    cursor={"tracked_symbols": tracked_symbols},
+                    status="ok" if len(errors) == stage_errors_before else "incomplete",
+                )
+
+                stage_errors_before = len(errors)
+                order_window = history_windows["orders"]
+                order_since = _coerce_utc_datetime(order_window.get("since")) or (
+                    started_at - timedelta(days=history_bootstrap_days)
+                )
+                _start_stage(
+                    "sync_order_history",
+                    cursor={
+                        "mode": str(order_window.get("mode") or "bootstrap"),
+                        "since": order_since.isoformat(),
+                    },
+                )
                 try:
-                    order_payloads = [item.to_dict() for item in live.order_history(date_from=date_from, date_to=started_at, symbols=None)]
+                    order_payloads = [
+                        item.to_dict()
+                        for item in live.order_history(
+                            date_from=order_since,
+                            date_to=started_at,
+                            symbols=None,
+                        )
+                    ]
                     self.runtime.storage.sync_mt5_order_history(
                         order_payloads,
                         sync_run_id=sync_run_id,
                         portfolio_id=portfolio_id,
                         source="mt5",
                     )
+                    order_window["latest_fetched_at"] = self._latest_timestamp_from_payloads(
+                        order_payloads,
+                        candidate_fields=("time_done_utc", "time_setup_utc", "synced_at"),
+                    )
                 except Exception as exc:
                     errors.append({"scope": "history_orders", "detail": str(exc)})
+                _finish_stage(
+                    "sync_order_history",
+                    metrics={"rows": len(order_payloads)},
+                    cursor=self._history_sync_window_payload(order_window),
+                    status="ok" if len(errors) == stage_errors_before else "incomplete",
+                )
 
+                stage_errors_before = len(errors)
+                deal_window = history_windows["deals"]
+                deal_since = _coerce_utc_datetime(deal_window.get("since")) or (
+                    started_at - timedelta(days=history_bootstrap_days)
+                )
+                _start_stage(
+                    "sync_deal_history",
+                    cursor={
+                        "mode": str(deal_window.get("mode") or "bootstrap"),
+                        "since": deal_since.isoformat(),
+                    },
+                )
                 try:
-                    deal_payloads = [item.to_dict() for item in live.deal_history(date_from=date_from, date_to=started_at, symbols=None)]
+                    deal_payloads = [
+                        item.to_dict()
+                        for item in live.deal_history(
+                            date_from=deal_since,
+                            date_to=started_at,
+                            symbols=None,
+                        )
+                    ]
                     self.runtime.storage.sync_mt5_deal_history(
                         deal_payloads,
                         sync_run_id=sync_run_id,
                         portfolio_id=portfolio_id,
                         source="mt5",
                     )
+                    deal_window["latest_fetched_at"] = self._latest_timestamp_from_payloads(
+                        deal_payloads,
+                        candidate_fields=("time_utc", "time_done_utc", "time_setup_utc", "synced_at"),
+                    )
                 except Exception as exc:
                     errors.append({"scope": "history_deals", "detail": str(exc)})
+                _finish_stage(
+                    "sync_deal_history",
+                    metrics={"rows": len(deal_payloads)},
+                    cursor=self._history_sync_window_payload(deal_window),
+                    status="ok" if len(errors) == stage_errors_before else "incomplete",
+                )
 
+                stage_errors_before = len(errors)
+                _start_stage("sync_ticks_and_snapshot", cursor={"tracked_symbols": tracked_symbols})
                 try:
                     tracked_symbols = self._portfolio_symbols_from_details(
                         portfolio=portfolio,
@@ -974,6 +1327,18 @@ class DeskMarketDataService:
                             )
                         except Exception as exc:
                             errors.append({"scope": "ticks", "symbol": symbol, "detail": str(exc)})
+                        self._persist_running_sync_progress(
+                            sync_run_id=sync_run_id,
+                            details=running_details,
+                            stage="sync_ticks_and_snapshot",
+                            completed_stages=completed_stages,
+                            stage_status="running",
+                            cursor={"symbol": symbol},
+                            metrics={
+                                "tick_symbols": len(tick_archives),
+                                "tracked_symbols": len(tracked_symbols),
+                            },
+                        )
                     bundle = self.runtime._compute_portfolio_state_for_holdings(
                         portfolio={**dict(portfolio), "watchlist_symbols": tracked_symbols, "symbols": tracked_symbols},
                         holdings=open_positions,
@@ -989,11 +1354,28 @@ class DeskMarketDataService:
                     self.runtime._persist_live_bundle(bundle=bundle, portfolio_id=portfolio_id, source="mt5_live")
                 except Exception as exc:
                     errors.append({"scope": "live_snapshot", "detail": str(exc)})
+                _finish_stage(
+                    "sync_ticks_and_snapshot",
+                    metrics={
+                        "tick_symbols": len(tick_archives),
+                        "open_positions": len(open_positions),
+                    },
+                    cursor={"tracked_symbols": tracked_symbols},
+                    status="ok" if len(errors) == stage_errors_before else "incomplete",
+                )
         except Exception as exc:
             fatal_exception = exc
             errors.append({"scope": "sync_market_data", "detail": str(exc)})
+            if stage_started_at:
+                for stage_name in list(stage_started_at):
+                    _finish_stage(
+                        stage_name,
+                        metrics={"error_count": len(errors), "fatal_exception": exc.__class__.__name__},
+                        status="incomplete",
+                    )
 
         completed_status = "ok" if not errors else "incomplete"
+        completed_at = _utcnow()
         final_details = {
             "symbols": tracked_symbols,
             "timeframes": selected_timeframes,
@@ -1004,6 +1386,26 @@ class DeskMarketDataService:
             "retention_tiers": timeframe_days,
             "market_closed": market_closed,
             "sync_strategy": "incremental",
+            "account_id": resolved_account_id,
+            "sync_started_at": started_at.isoformat(),
+            "sync_completed_at": completed_at.isoformat(),
+            "history_windows": _history_windows_payload(),
+            "checkpoint": {
+                "stage": "completed",
+                "status": completed_status,
+                "updated_at": completed_at.isoformat(),
+                "completed_stages": completed_stages,
+                "cursor": _history_windows_payload(),
+                "metrics": {
+                    "error_count": len(errors),
+                    "instruments": len(instrument_payloads),
+                    "orders": len(order_payloads),
+                    "deals": len(deal_payloads),
+                    "tick_symbols": len(tick_archives),
+                    "coverage_symbols": len(coverage),
+                },
+            },
+            "stage_events": list(running_details.get("stage_events") or []),
             "instruments": len(instrument_payloads),
             "orders": len(order_payloads),
             "deals": len(deal_payloads),
@@ -1018,6 +1420,9 @@ class DeskMarketDataService:
             "deal_history": deal_payloads[:200],
             "errors": errors,
         }
+        if resume_hint is not None:
+            final_details["resume_from"] = resume_hint
+
         updated_sync = self.runtime.storage.update_market_data_sync(
             sync_run_id,
             status=completed_status,
@@ -1031,7 +1436,7 @@ class DeskMarketDataService:
                 mode=str(portfolio.get("mode") or "live_mt5"),
                 status=completed_status,
                 details=final_details,
-        )
+            )
         if fatal_exception is not None:
             raise fatal_exception
         return self.market_data_status(

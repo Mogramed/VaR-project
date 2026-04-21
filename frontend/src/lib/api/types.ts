@@ -46,6 +46,7 @@ export type MT5PositionResponse = ApiSchemas["MT5PositionResponse"];
 export type MT5TerminalStatusResponse = ApiSchemas["MT5TerminalStatusResponse"];
 export type MT5TickResponse = ApiSchemas["MT5TickResponse"];
 export type MarketDataSyncRequest = ApiSchemas["MarketDataSyncRequest"];
+export type MarketDataSyncRunResponse = ApiSchemas["MarketDataSyncRunResponse"];
 export type MarketDataSyncStatusResponse = ApiSchemas["MarketDataSyncStatusResponse"];
 export type ModelCapitalBudgetResponse = ApiSchemas["ModelCapitalBudgetResponse"];
 export type ModelComparisonResponse = ApiSchemas["ModelComparisonResponse"];

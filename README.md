@@ -162,6 +162,9 @@ Main endpoints:
 - `GET /mt5/account`
 - `GET /mt5/positions`
 - `GET /mt5/orders`
+- `GET /market-data/status`
+- `POST /market-data/sync`
+- `GET /market-data/sync/runs`
 - `POST /execution/preview`
 - `POST /execution/submit`
 - `GET /execution/recent`
@@ -208,6 +211,7 @@ Notes:
 The internal MT5 acceptance recipe and soak checklist live in:
 
 - [`docs/mt5_v1_acceptance_runbook.md`](docs/mt5_v1_acceptance_runbook.md)
+- [`docs/mt5_sync_pipeline.md`](docs/mt5_sync_pipeline.md)
 
 ## Demo Docs
 

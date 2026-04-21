@@ -924,6 +924,16 @@ class MarketDataSyncStatusResponse(BaseModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class MarketDataSyncRunResponse(BaseModel):
+    id: int
+    portfolio_id: int | None = None
+    portfolio_slug: str | None = None
+    mode: str
+    status: str
+    synced_at: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
 class ReconciliationMismatchResponse(BaseModel):
     symbol: str
     asset_class: str | None = None

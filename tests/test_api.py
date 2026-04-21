@@ -1525,6 +1525,130 @@ def test_market_data_sync_backfills_richer_history_for_var(tmp_path: Path):
     assert status["tick_archive"]["row_count"] >= 1
 
 
+class HistoryWindowTrackingConnector(FakeMT5Connector):
+    order_history_calls: list[dict[str, str]] = []
+    deal_history_calls: list[dict[str, str]] = []
+
+    @classmethod
+    def reset(cls) -> None:
+        super().reset()
+        cls.order_history_calls = []
+        cls.deal_history_calls = []
+
+    def history_orders_get(
+        self,
+        date_from,
+        date_to,
+        *,
+        symbol: str | None = None,
+        ticket: int | None = None,
+        position: int | None = None,
+    ):
+        type(self).order_history_calls.append(
+            {
+                "date_from": pd.to_datetime(date_from, utc=True).isoformat(),
+                "date_to": pd.to_datetime(date_to, utc=True).isoformat(),
+            }
+        )
+        return super().history_orders_get(
+            date_from,
+            date_to,
+            symbol=symbol,
+            ticket=ticket,
+            position=position,
+        )
+
+    def history_deals_get(
+        self,
+        date_from,
+        date_to,
+        *,
+        symbol: str | None = None,
+        ticket: int | None = None,
+        position: int | None = None,
+    ):
+        type(self).deal_history_calls.append(
+            {
+                "date_from": pd.to_datetime(date_from, utc=True).isoformat(),
+                "date_to": pd.to_datetime(date_to, utc=True).isoformat(),
+            }
+        )
+        return super().history_deals_get(
+            date_from,
+            date_to,
+            symbol=symbol,
+            ticket=ticket,
+            position=position,
+        )
+
+
+class FailDealHistoryOnceConnector(FakeMT5Connector):
+    fail_deal_history_once: bool = True
+
+    @classmethod
+    def reset(cls) -> None:
+        super().reset()
+        cls.fail_deal_history_once = True
+
+    def history_deals_get(
+        self,
+        date_from,
+        date_to,
+        *,
+        symbol: str | None = None,
+        ticket: int | None = None,
+        position: int | None = None,
+    ):
+        if type(self).fail_deal_history_once:
+            type(self).fail_deal_history_once = False
+            raise RuntimeError("simulated-deal-history-outage")
+        return super().history_deals_get(
+            date_from,
+            date_to,
+            symbol=symbol,
+            ticket=ticket,
+            position=position,
+        )
+
+
+def test_market_data_sync_records_checkpoint_and_stage_events(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5", market_history_days=365)
+    FakeMT5Connector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+    portfolio_slug = service.runtime.portfolio["slug"]
+
+    service.runtime.market_data.sync_market_data(
+        portfolio_slug=portfolio_slug,
+        days=60,
+        timeframes=["H1"],
+    )
+    latest_sync = service.runtime.storage.latest_market_data_sync(portfolio_slug=portfolio_slug)
+    assert latest_sync is not None
+    details = dict(latest_sync.get("details") or {})
+    checkpoint = dict(details.get("checkpoint") or {})
+    stage_events = list(details.get("stage_events") or [])
+
+    assert checkpoint.get("stage") == "completed"
+    assert checkpoint.get("status") == "ok"
+    completed = set(checkpoint.get("completed_stages") or [])
+    assert {
+        "mt5_connect",
+        "capture_state",
+        "sync_instruments_bars",
+        "sync_order_history",
+        "sync_deal_history",
+        "sync_ticks_and_snapshot",
+    }.issubset(completed)
+    assert details.get("sync_started_at") is not None
+    assert details.get("sync_completed_at") is not None
+    assert details["history_windows"]["orders"]["mode"] == "bootstrap"
+    assert details["history_windows"]["deals"]["mode"] == "bootstrap"
+    assert len(stage_events) >= 6
+    assert all(event.get("duration_ms") is not None for event in stage_events)
+
+
 def test_market_data_sync_defaults_to_operational_timeframes(tmp_path: Path):
     root = tmp_path
     _write_settings(root, portfolio_mode="live_mt5", market_history_days=365)
@@ -1607,3 +1731,183 @@ def test_market_data_status_closes_stale_running_sync(tmp_path: Path):
     assert latest_sync["status"] == "incomplete"
     errors = list(dict(latest_sync.get("details") or {}).get("errors") or [])
     assert any(str(item.get("code") or "") == "stale_market_sync_run" for item in errors)
+
+
+def test_market_data_sync_runs_endpoint_lists_and_filters_recent_runs(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5", market_history_days=365)
+    FailDealHistoryOnceConnector.reset()
+
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=FailDealHistoryOnceConnector, bootstrap_storage=True))
+    first_sync = client.post("/market-data/sync", json={"days": 60, "timeframes": ["H1"]})
+    second_sync = client.post("/market-data/sync", json={"days": 60, "timeframes": ["H1"]})
+    assert first_sync.status_code == 200
+    assert second_sync.status_code == 200
+
+    runs_resp = client.get("/market-data/sync/runs", params={"limit": 5})
+    assert runs_resp.status_code == 200
+    runs = runs_resp.json()
+    assert len(runs) >= 2
+    assert all("checkpoint" in dict(item.get("details") or {}) for item in runs)
+    assert any(str(item.get("status")) == "incomplete" for item in runs)
+    assert any(str(item.get("status")) == "ok" for item in runs)
+
+    only_ok_resp = client.get("/market-data/sync/runs", params=[("status", "ok"), ("limit", "5")])
+    assert only_ok_resp.status_code == 200
+    only_ok_runs = only_ok_resp.json()
+    assert only_ok_runs
+    assert all(str(item.get("status")) == "ok" for item in only_ok_runs)
+
+    only_ok_upper_resp = client.get("/market-data/sync/runs", params=[("status", "OK"), ("limit", "5")])
+    assert only_ok_upper_resp.status_code == 200
+    only_ok_upper_runs = only_ok_upper_resp.json()
+    assert only_ok_upper_runs
+    assert all(str(item.get("status")) == "ok" for item in only_ok_upper_runs)
+
+    limited_resp = client.get("/market-data/sync/runs", params={"limit": 1})
+    assert limited_resp.status_code == 200
+    assert len(limited_resp.json()) == 1
+
+    blank_filter_resp = client.get("/market-data/sync/runs", params=[("status", "")])
+    assert blank_filter_resp.status_code == 200
+    assert blank_filter_resp.json() == []
+
+
+def test_market_data_sync_uses_incremental_history_windows_after_bootstrap(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5", market_history_days=365)
+    HistoryWindowTrackingConnector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=HistoryWindowTrackingConnector, bootstrap_storage=True)
+    portfolio_slug = service.runtime.portfolio["slug"]
+
+    service.runtime.market_data.sync_market_data(
+        portfolio_slug=portfolio_slug,
+        days=60,
+        timeframes=["H1"],
+    )
+    service.runtime.market_data.sync_market_data(
+        portfolio_slug=portfolio_slug,
+        days=60,
+        timeframes=["H1"],
+    )
+
+    assert len(HistoryWindowTrackingConnector.order_history_calls) >= 2
+    assert len(HistoryWindowTrackingConnector.deal_history_calls) >= 2
+    first_order_from = pd.to_datetime(HistoryWindowTrackingConnector.order_history_calls[-2]["date_from"], utc=True)
+    second_order_from = pd.to_datetime(HistoryWindowTrackingConnector.order_history_calls[-1]["date_from"], utc=True)
+    first_deal_from = pd.to_datetime(HistoryWindowTrackingConnector.deal_history_calls[-2]["date_from"], utc=True)
+    second_deal_from = pd.to_datetime(HistoryWindowTrackingConnector.deal_history_calls[-1]["date_from"], utc=True)
+
+    assert second_order_from > first_order_from
+    assert second_deal_from > first_deal_from
+
+    latest_sync = service.runtime.storage.latest_market_data_sync(portfolio_slug=portfolio_slug)
+    assert latest_sync is not None
+    details = dict(latest_sync.get("details") or {})
+    assert details["history_windows"]["orders"]["mode"] == "incremental"
+    assert details["history_windows"]["deals"]["mode"] == "incremental"
+
+
+def test_market_data_sync_bootstrap_history_honors_reconciliation_window(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5", market_history_days=365)
+    HistoryWindowTrackingConnector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=HistoryWindowTrackingConnector, bootstrap_storage=True)
+    portfolio_slug = service.runtime.portfolio["slug"]
+    portfolio_id = service.runtime._resolve_portfolio_id(portfolio_slug)
+    unresolved_created_at = utcnow() - timedelta(days=14, hours=6)
+
+    service.runtime.storage.record_execution_result(
+        {
+            "created_at": unresolved_created_at.isoformat(),
+            "time_utc": unresolved_created_at.isoformat(),
+            "portfolio_slug": portfolio_slug,
+            "symbol": "EURUSD",
+            "status": "EXECUTED",
+            "reconciliation_status": "pending_broker",
+            "requested_exposure_change": 1_000.0,
+            "approved_exposure_change": 1_000.0,
+            "executed_exposure_change": 0.0,
+            "mt5_result": {"order": 91_000_001, "deal": 81_000_001},
+        },
+        portfolio_id=portfolio_id,
+    )
+
+    service.runtime.market_data.sync_market_data(
+        portfolio_slug=portfolio_slug,
+        days=1,
+        timeframes=["H1"],
+    )
+    latest_sync = service.runtime.storage.latest_market_data_sync(portfolio_slug=portfolio_slug)
+
+    assert latest_sync is not None
+    assert HistoryWindowTrackingConnector.order_history_calls
+    assert HistoryWindowTrackingConnector.deal_history_calls
+
+    details = dict(latest_sync.get("details") or {})
+    sync_started = pd.to_datetime(details["sync_started_at"], utc=True).to_pydatetime()
+    expected_reconciliation_days = max(
+        7,
+        min(
+            int(max((sync_started - unresolved_created_at).total_seconds(), 0.0) // 86400) + 1,
+            30,
+        ),
+    )
+
+    last_order_call = HistoryWindowTrackingConnector.order_history_calls[-1]
+    last_deal_call = HistoryWindowTrackingConnector.deal_history_calls[-1]
+    order_from = pd.to_datetime(last_order_call["date_from"], utc=True).to_pydatetime()
+    order_to = pd.to_datetime(last_order_call["date_to"], utc=True).to_pydatetime()
+    deal_from = pd.to_datetime(last_deal_call["date_from"], utc=True).to_pydatetime()
+    deal_to = pd.to_datetime(last_deal_call["date_to"], utc=True).to_pydatetime()
+
+    order_lookback_days = (order_to - order_from).total_seconds() / 86400.0
+    deal_lookback_days = (deal_to - deal_from).total_seconds() / 86400.0
+    assert order_lookback_days >= float(expected_reconciliation_days) - 0.01
+    assert deal_lookback_days >= float(expected_reconciliation_days) - 0.01
+    assert int(details.get("history_reconciliation_days") or 0) >= expected_reconciliation_days
+
+
+def test_market_data_sync_recovers_after_partial_history_failure_without_duplicates(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5", market_history_days=365)
+    FailDealHistoryOnceConnector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=FailDealHistoryOnceConnector, bootstrap_storage=True)
+    portfolio_slug = service.runtime.portfolio["slug"]
+
+    first_status = service.runtime.market_data.sync_market_data(
+        portfolio_slug=portfolio_slug,
+        days=60,
+        timeframes=["H1"],
+    )
+    assert first_status["status"] == "incomplete"
+    first_sync = service.runtime.storage.latest_market_data_sync(portfolio_slug=portfolio_slug)
+    assert first_sync is not None
+    first_details = dict(first_sync.get("details") or {})
+    assert any(item.get("scope") == "history_deals" for item in list(first_details.get("errors") or []))
+
+    with service.runtime.storage.engine.connect() as connection:
+        first_orders = int(connection.execute(text("SELECT COUNT(*) FROM mt5_order_history")).scalar_one())
+        first_deals = int(connection.execute(text("SELECT COUNT(*) FROM mt5_deal_history")).scalar_one())
+
+    second_status = service.runtime.market_data.sync_market_data(
+        portfolio_slug=portfolio_slug,
+        days=60,
+        timeframes=["H1"],
+    )
+    second_sync = service.runtime.storage.latest_market_data_sync(portfolio_slug=portfolio_slug)
+    assert second_sync is not None
+    second_details = dict(second_sync.get("details") or {})
+
+    with service.runtime.storage.engine.connect() as connection:
+        second_orders = int(connection.execute(text("SELECT COUNT(*) FROM mt5_order_history")).scalar_one())
+        second_deals = int(connection.execute(text("SELECT COUNT(*) FROM mt5_deal_history")).scalar_one())
+
+    assert second_status["status"] == "ok"
+    assert second_orders == first_orders
+    assert second_deals >= first_deals
+    resume_from = dict(second_details.get("resume_from") or {})
+    assert resume_from.get("status") == "incomplete"

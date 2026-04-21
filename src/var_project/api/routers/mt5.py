@@ -15,6 +15,7 @@ from var_project.api.schemas import (
     HoldingSnapshotResponse,
     InstrumentDefinitionResponse,
     MarketDataSyncRequest,
+    MarketDataSyncRunResponse,
     MarketDataSyncStatusResponse,
     MT5AccountSnapshotResponse,
     MT5AccountsResponse,
@@ -565,6 +566,27 @@ def sync_market_data(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return MarketDataSyncStatusResponse.model_validate(result)
+
+
+@router.get("/market-data/sync/runs", response_model=list[MarketDataSyncRunResponse])
+def list_market_data_sync_runs(
+    portfolio_slug: str | None = Query(default=None, description="Portfolio slug. Defaults to active portfolio."),
+    status: list[str] | None = Query(
+        default=None,
+        description="Optional status filter. Repeat query param for multiple values (e.g. status=ok&status=incomplete).",
+    ),
+    limit: int = Query(default=25, ge=1, le=200, description="Maximum number of runs to return."),
+    service: DeskApiService = Depends(get_service),
+) -> list[MarketDataSyncRunResponse]:
+    try:
+        payload = service.market_data_sync_runs(
+            portfolio_slug=portfolio_slug,
+            status=status,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return [MarketDataSyncRunResponse.model_validate(item) for item in payload]
 
 
 @router.get("/instruments", response_model=list[InstrumentDefinitionResponse])

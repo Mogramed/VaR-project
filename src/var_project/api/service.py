@@ -1242,6 +1242,33 @@ class DeskApiService:
             timeframes=timeframes,
         )
 
+    def market_data_sync_runs(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        status: str | list[str] | None = None,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        raw_statuses: list[str] | None
+        if status is None:
+            raw_statuses = None
+        elif isinstance(status, str):
+            raw_statuses = [status]
+        else:
+            raw_statuses = [str(item) for item in status]
+        statuses = (
+            [item.strip() for item in raw_statuses if item.strip()]
+            if raw_statuses is not None
+            else None
+        )
+        if raw_statuses is not None and not statuses:
+            return []
+        return self.market.market_data_sync_runs(
+            portfolio_slug=portfolio_slug,
+            statuses=statuses,
+            limit=limit,
+        )
+
     def _normalize_operator_payload(
         self,
         *,
