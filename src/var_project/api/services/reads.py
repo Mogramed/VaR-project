@@ -129,8 +129,12 @@ class DeskReadService:
         portfolio_slug: str | None = None,
     ) -> list[dict[str, Any]]:
         candidate_limit = self._account_filter_candidate_limit(limit)
-        scan_limit = min(max(candidate_limit * 4, 200), 2000)
-        events = self.runtime.storage.recent_audit_events(limit=scan_limit, portfolio_slug=portfolio_slug)
+        scan_limit = max(candidate_limit * 4, 200)
+        events = self.runtime.storage.recent_audit_events(
+            limit=scan_limit,
+            portfolio_slug=portfolio_slug,
+            object_type="risk_decision",
+        )
         records: list[dict[str, Any]] = []
         for event in events:
             if not self._decision_audit_action_supported(str(event.get("action_type") or "")):

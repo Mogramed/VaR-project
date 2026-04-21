@@ -408,8 +408,18 @@ class AppStorage:
     def recent_execution_fills(self, *, limit: int = 50, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
         return self.reads.recent_execution_fills(limit=limit, portfolio_slug=portfolio_slug)
 
-    def recent_audit_events(self, *, limit: int = 50, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
-        return self.reads.recent_audit_events(limit=limit, portfolio_slug=portfolio_slug)
+    def recent_audit_events(
+        self,
+        *,
+        limit: int = 50,
+        portfolio_slug: str | None = None,
+        object_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.reads.recent_audit_events(
+            limit=limit,
+            portfolio_slug=portfolio_slug,
+            object_type=object_type,
+        )
 
     def create_operator_run(
         self,

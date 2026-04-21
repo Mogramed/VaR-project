@@ -21,6 +21,7 @@ from var_project.execution.mt5_bridge import (
     _is_fx_weekend_closed,
     collect_live_state_from_connector,
 )
+from var_project.storage.models import AuditRecord
 
 
 def _write_settings(
@@ -1008,6 +1009,72 @@ def test_decision_history_filters_by_account_id(tmp_path: Path):
     invalid_history = client.get("/reports/decision-history", params={"limit": 5, "account_id": "unknown_account"})
     assert invalid_history.status_code == 400
     assert "Unknown MT5 account" in str(invalid_history.json().get("detail") or "")
+
+
+def test_live_report_decision_history_reads_audit_decisions(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+    FakeMT5Connector.reset()
+
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True))
+
+    submit = client.post(
+        "/execution/submit",
+        json={"symbol": "EURUSD", "exposure_change": 1_000.0, "note": "report-audit-sentinel"},
+    )
+    assert submit.status_code == 200
+
+    backtest = client.post("/backtests/run", json={})
+    assert backtest.status_code == 200
+
+    report = client.get("/reports/latest")
+    assert report.status_code == 200
+    content = str(report.json().get("content") or "")
+    assert "## Decision History" in content
+    assert "No persisted trade decisions yet." not in content
+    assert "EURUSD ->" in content
+
+
+def test_recent_decisions_remain_available_with_large_non_decision_audit_noise(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+    FakeMT5Connector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+    portfolio_slug = service.runtime.portfolio["slug"]
+    portfolio_id = service.runtime._resolve_portfolio_id(portfolio_slug)
+
+    decision = service.evaluate_trade_decision(
+        symbol="EURUSD",
+        exposure_change=1_000.0,
+        note="audit-noise-sentinel",
+        portfolio_slug=portfolio_slug,
+    )
+    assert str(decision.get("decision") or "") in {"ACCEPT", "REDUCE", "REJECT"}
+
+    with service.runtime.storage.session_factory() as session:
+        session.add_all(
+            [
+                AuditRecord(
+                    portfolio_id=portfolio_id,
+                    actor="api",
+                    action_type="report.run",
+                    object_type="daily_report",
+                    object_id=None,
+                    payload_json={"noise_index": index},
+                )
+                for index in range(2205)
+            ]
+        )
+        session.commit()
+
+    recent_decisions = service.recent_decisions(limit=5, portfolio_slug=portfolio_slug)
+    assert recent_decisions
+    assert any(str(item.get("note") or "") == "audit-noise-sentinel" for item in recent_decisions)
 
 
 def test_mt5_preview_rows_are_excluded_from_reconciliation_accounting(tmp_path: Path):

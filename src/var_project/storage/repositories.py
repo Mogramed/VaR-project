@@ -1161,7 +1161,13 @@ class StorageReadRepository:
             ).all()
             return [execution_fill_to_dict(record) for record in records]
 
-    def recent_audit_events(self, *, limit: int = 50, portfolio_slug: str | None = None) -> list[dict[str, Any]]:
+    def recent_audit_events(
+        self,
+        *,
+        limit: int = 50,
+        portfolio_slug: str | None = None,
+        object_type: str | None = None,
+    ) -> list[dict[str, Any]]:
         with self.session_factory() as session:
             stmt = select(AuditRecord)
             if portfolio_slug:
@@ -1169,6 +1175,8 @@ class StorageReadRepository:
                 if portfolio_id is None:
                     return []
                 stmt = stmt.where(AuditRecord.portfolio_id == portfolio_id)
+            if object_type not in {None, "", "null"}:
+                stmt = stmt.where(AuditRecord.object_type == str(object_type))
             records = session.scalars(stmt.order_by(AuditRecord.created_at.desc(), AuditRecord.id.desc()).limit(int(limit))).all()
             return [audit_to_dict(record) for record in records]
 
