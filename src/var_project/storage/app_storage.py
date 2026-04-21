@@ -325,6 +325,9 @@ class AppStorage:
             portfolio_id=portfolio_id,
         )
 
+    def purge_old_audit_events(self, *, ttl_days: int) -> int:
+        return self.writes.purge_old_audit_events(ttl_days=ttl_days)
+
     def upsert_reconciliation_acknowledgement(
         self,
         *,

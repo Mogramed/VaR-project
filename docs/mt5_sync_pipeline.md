@@ -82,3 +82,18 @@ It no longer depends on local business-history tables for the operator-facing hi
 - `GET /mt5/history/transactions/export`
   - same filter query parameters
   - `max_rows` controls CSV row cap (default `5000`, max `10000`)
+
+## Decision Persistence Policy (VAR-011)
+
+Live-mode persistence now follows:
+
+- MT5 = business source of truth.
+- Local DB = technical audit/ops traces.
+
+Concretely for `live_mt5` portfolios:
+
+- new decision writes to `risk_decisions` are disabled;
+- decision history endpoints are sourced from `audit_events` (with legacy fallback);
+- technical audit logs are retained under a TTL policy.
+
+See [`ADR-0011`](./adr/ADR-0011-single-source-of-truth-mt5.md) for full rationale and migration notes.

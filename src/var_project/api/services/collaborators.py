@@ -374,10 +374,12 @@ class DecisionPolicyEngine:
         exposure_change: float | None = None,
         delta_position_eur: float | None = None,
         note: str | None,
+        account_id: str | None = None,
         persist: bool,
         audit_action: str = "decision.evaluate",
     ) -> dict[str, Any]:
         portfolio = dict(bundle["portfolio"])
+        portfolio_context = self.runtime._resolve_portfolio_context(portfolio.get("slug"))
         exposure_by_symbol = dict(bundle["exposure_by_symbol"])
         sample = bundle["sample"]
         sample_symbols = list(bundle.get("portfolio_symbols") or portfolio["symbols"])
@@ -395,6 +397,7 @@ class DecisionPolicyEngine:
             "time_utc": now.isoformat(),
             "decision_mode": self.decision_settings()["decision_mode"],
             "portfolio_slug": portfolio["slug"],
+            "account_id": account_id,
             "timeframe": bundle["timeframe"],
             "days": bundle["days"],
             "window": bundle["window"],
@@ -427,18 +430,27 @@ class DecisionPolicyEngine:
             return payload
 
         portfolio_id = self.runtime._resolve_portfolio_id(portfolio["slug"])
-        decision_id = self.runtime.storage.record_decision(payload, portfolio_id=portfolio_id)
-        payload["id"] = decision_id
         payload["created_at"] = now.isoformat()
+        should_persist_local = self.runtime.persist_business_decisions_locally(portfolio_context)
+        decision_id: int | None = None
+        if should_persist_local:
+            decision_id = self.runtime.storage.record_decision(payload, portfolio_id=portfolio_id)
+            payload["id"] = decision_id
+        else:
+            payload.pop("id", None)
         decision_alerts = alerts_from_risk_decision(payload)
         if decision_alerts:
             self.runtime.storage.record_alerts(decision_alerts, portfolio_id=portfolio_id)
+        audit_payload = dict(payload)
+        if decision_id is not None:
+            audit_payload["id"] = decision_id
+        audit_payload["decision_storage_mode"] = "local_db" if should_persist_local else "audit_only"
         self.runtime.storage.record_audit_event(
             actor="api",
             action_type=audit_action,
             object_type="risk_decision",
             object_id=decision_id,
-            payload=payload,
+            payload=audit_payload,
             portfolio_id=portfolio_id,
         )
         return payload

@@ -962,50 +962,27 @@ def test_decision_history_filters_by_account_id(tmp_path: Path):
 
     service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
     portfolio_slug = service.runtime.portfolio["slug"]
-    portfolio_id = service.runtime._resolve_portfolio_id(portfolio_slug)
-    base_decision = service.evaluate_trade_decision(
+    service.submit_execution(
         symbol="EURUSD",
         exposure_change=1_000.0,
-        note="seed-decision",
+        note="alpha-sentinel",
+        portfolio_slug=portfolio_slug,
+        account_id="alpha",
     )
-
-    def _build_seed_decision(*, account_id: str, symbol: str, note: str, approved_exposure_change: float) -> dict[str, object]:
-        payload = json.loads(json.dumps(base_decision))
-        now_iso = datetime.now(timezone.utc).isoformat()
-        payload.update(
-            {
-                "time_utc": now_iso,
-                "created_at": now_iso,
-                "portfolio_slug": portfolio_slug,
-                "account_id": account_id,
-                "symbol": symbol,
-                "requested_exposure_change": 1_000.0,
-                "approved_exposure_change": approved_exposure_change,
-                "decision": "ACCEPT" if approved_exposure_change >= 1_000.0 else "REDUCE",
-                "model_used": "hist",
-                "note": note,
-            }
-        )
-        payload.pop("id", None)
-        return payload
-
-    service.storage.record_decision(
-        _build_seed_decision(
-            account_id="alpha",
-            symbol="EURUSD",
-            note="alpha-sentinel",
-            approved_exposure_change=1_000.0,
-        ),
-        portfolio_id=portfolio_id,
+    service.submit_execution(
+        symbol="USDJPY",
+        exposure_change=1_000.0,
+        note="beta-sentinel",
+        portfolio_slug=portfolio_slug,
+        account_id="beta",
     )
-    service.storage.record_decision(
-        _build_seed_decision(
-            account_id="beta",
-            symbol="USDJPY",
-            note="beta-sentinel",
-            approved_exposure_change=500.0,
-        ),
-        portfolio_id=portfolio_id,
+    assert service.runtime.storage.recent_decisions(limit=20, portfolio_slug=portfolio_slug) == []
+    audit_events = service.runtime.storage.recent_audit_events(limit=30, portfolio_slug=portfolio_slug)
+    execution_guard_events = [item for item in audit_events if str(item.get("action_type") or "") == "execution.guard"]
+    assert execution_guard_events
+    assert any(
+        str(event.get("decision_storage_mode") or "") == "audit_only"
+        for event in execution_guard_events
     )
 
     client = TestClient(create_app(repo_root=root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True))
