@@ -16,6 +16,7 @@ export interface ReportHeading {
 }
 
 type ValidationVerdict = "PASS" | "WARN" | "FAIL" | "N/A";
+type ValidationConfidenceLevel = "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
 
 interface ValidationAcademicRow {
   model: string;
@@ -44,6 +45,9 @@ interface ValidationAcademicHorizonRow {
   warnCount: number;
   failCount: number;
   totalPoints: number;
+  confidenceScore: number | null;
+  confidenceLevel: ValidationConfidenceLevel;
+  confidenceReason: string | null;
 }
 
 interface ValidationAcademicBlock {
@@ -64,6 +68,9 @@ interface ValidationAcademicBlock {
   coverageFailCount: number;
   independenceFailCount: number;
   conditionalFailCount: number;
+  confidenceScore: number | null;
+  confidenceLevel: ValidationConfidenceLevel;
+  confidenceReason: string | null;
   horizonRows: ValidationAcademicHorizonRow[];
   rows: ValidationAcademicRow[];
 }
@@ -137,6 +144,14 @@ function normalizeValidationVerdict(value: unknown): ValidationVerdict | null {
   return null;
 }
 
+function normalizeConfidenceLevel(value: unknown): ValidationConfidenceLevel {
+  const normalized = toUpper(value);
+  if (normalized === "HIGH" || normalized === "MEDIUM" || normalized === "LOW") {
+    return normalized;
+  }
+  return "UNKNOWN";
+}
+
 function buildValidationAcademicBlock(args: {
   comparison: unknown;
   validation: unknown;
@@ -161,6 +176,12 @@ function buildValidationAcademicBlock(args: {
   const coverageFailCount = toInteger(governance.coverage_fail_count) ?? 0;
   const independenceFailCount = toInteger(governance.independence_fail_count) ?? 0;
   const conditionalFailCount = toInteger(governance.conditional_fail_count) ?? 0;
+  const confidenceScore = toNumber(governance.confidence_score);
+  const confidenceLevel = normalizeConfidenceLevel(governance.confidence_level);
+  const confidenceReasonRaw = typeof governance.confidence_reason === "string"
+    ? governance.confidence_reason.trim()
+    : "";
+  const confidenceReason = confidenceReasonRaw || null;
   const globalVerdict =
     normalizeValidationVerdict(governance.verdict)
     ?? normalizeValidationVerdict(horizonGovernance.overall_verdict)
@@ -189,6 +210,9 @@ function buildValidationAcademicBlock(args: {
     const rowVerdict =
       normalizeValidationVerdict(row.verdict)
       ?? (rowFailCount > 0 ? "FAIL" : rowWarnCount > 0 ? "WARN" : rowPassCount > 0 ? "PASS" : "N/A");
+    const rowConfidenceLevel = normalizeConfidenceLevel(row.confidence_level);
+    const rowConfidenceScore = toNumber(row.confidence_score);
+    const rowConfidenceReasonRaw = typeof row.confidence_reason === "string" ? row.confidence_reason.trim() : "";
     return {
       horizonDays,
       championModel: toUpper(row.champion_model),
@@ -198,6 +222,9 @@ function buildValidationAcademicBlock(args: {
       warnCount: rowWarnCount,
       failCount: rowFailCount,
       totalPoints: rowTotalPoints,
+      confidenceScore: rowConfidenceScore,
+      confidenceLevel: rowConfidenceLevel,
+      confidenceReason: rowConfidenceReasonRaw || null,
     };
   });
 
@@ -250,6 +277,9 @@ function buildValidationAcademicBlock(args: {
     coverageFailCount,
     independenceFailCount,
     conditionalFailCount,
+    confidenceScore,
+    confidenceLevel,
+    confidenceReason,
     horizonRows,
     rows,
   };

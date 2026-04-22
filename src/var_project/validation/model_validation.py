@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional
+import math
 import re
 
 import numpy as np
@@ -20,6 +21,13 @@ ES_ACERBI_WARN_PVALUE = 0.05
 ES_ACERBI_BREACH_PVALUE = 0.01
 VALIDATION_SURFACE_MIN_OBSERVATIONS = 60
 VALIDATION_SURFACE_MIN_EXPECTED_EXCEPTIONS = 5.0
+VALIDATION_SURFACE_MIN_OBSERVATIONS_BY_HORIZON_DAYS = {
+    1: 60,
+    5: 80,
+    10: 120,
+}
+VALIDATION_CONFIDENCE_HIGH_MIN = 0.80
+VALIDATION_CONFIDENCE_MEDIUM_MIN = 0.60
 
 
 @dataclass(frozen=True)
@@ -533,16 +541,53 @@ def _pvalue_pass(value: float) -> bool | None:
     return bool(float(numeric) >= P_VALUE_SIGNIFICANCE_LEVEL)
 
 
-def _surface_min_required_observations(expected_rate: float) -> int:
+def _surface_horizon_observation_floor(horizon_days: int | None) -> int:
+    if horizon_days is None:
+        return int(VALIDATION_SURFACE_MIN_OBSERVATIONS)
+    resolved_horizon = int(horizon_days)
+    if resolved_horizon <= 0:
+        return int(VALIDATION_SURFACE_MIN_OBSERVATIONS)
+
+    floor_map = {
+        int(key): int(value)
+        for key, value in dict(VALIDATION_SURFACE_MIN_OBSERVATIONS_BY_HORIZON_DAYS).items()
+        if int(key) > 0
+    }
+    if not floor_map:
+        return int(VALIDATION_SURFACE_MIN_OBSERVATIONS)
+
+    ordered_horizons = sorted(floor_map.keys())
+    for key in reversed(ordered_horizons):
+        if resolved_horizon >= key:
+            return int(max(int(VALIDATION_SURFACE_MIN_OBSERVATIONS), floor_map[key]))
+
+    max_key = ordered_horizons[-1]
+    max_floor = int(floor_map[max_key])
+    # For longer horizons, increase the minimum linearly by +20 obs every extra 5 days.
+    extra_steps = int(math.ceil(max((resolved_horizon - max_key), 0) / 5.0))
+    return int(max(int(VALIDATION_SURFACE_MIN_OBSERVATIONS), max_floor + extra_steps * 20))
+
+
+def _surface_min_required_observations(
+    expected_rate: float,
+    *,
+    horizon_days: int | None = None,
+) -> int:
     expected_rate_safe = max(float(expected_rate), 1e-9)
     expected_exception_floor = int(
         np.ceil(float(VALIDATION_SURFACE_MIN_EXPECTED_EXCEPTIONS) / expected_rate_safe)
     )
-    return int(max(int(VALIDATION_SURFACE_MIN_OBSERVATIONS), expected_exception_floor))
+    horizon_floor = _surface_horizon_observation_floor(horizon_days)
+    return int(max(int(VALIDATION_SURFACE_MIN_OBSERVATIONS), int(horizon_floor), expected_exception_floor))
 
 
-def _surface_has_sufficient_observations(n: int, expected_rate: float) -> bool:
-    required = _surface_min_required_observations(expected_rate)
+def _surface_has_sufficient_observations(
+    n: int,
+    expected_rate: float,
+    *,
+    horizon_days: int | None = None,
+) -> bool:
+    required = _surface_min_required_observations(expected_rate, horizon_days=horizon_days)
     return int(n) >= int(required)
 
 
@@ -550,11 +595,16 @@ def _surface_statistical_status(
     *,
     n: int,
     expected_rate: float,
+    horizon_days: int,
     coverage_pass: bool,
     independence_pass: bool | None,
     conditional_pass: bool | None,
 ) -> str:
-    if not _surface_has_sufficient_observations(n=n, expected_rate=expected_rate):
+    if not _surface_has_sufficient_observations(
+        n=n,
+        expected_rate=expected_rate,
+        horizon_days=horizon_days,
+    ):
         return VALIDATION_STATUS_WARN
     if not coverage_pass or conditional_pass is False:
         return VALIDATION_STATUS_FAIL
@@ -563,6 +613,81 @@ def _surface_statistical_status(
     if coverage_pass and (conditional_pass in {None, True}) and (independence_pass in {None, True}):
         return VALIDATION_STATUS_PASS
     return VALIDATION_STATUS_WARN
+
+
+def _surface_sample_confidence(*, n: int, expected_rate: float, horizon_days: int) -> float:
+    required = _surface_min_required_observations(expected_rate, horizon_days=horizon_days)
+    if required <= 0:
+        return 0.0
+    ratio = float(max(min(float(n) / float(required), 1.0), 0.0))
+    # Penalize sub-threshold samples so near-miss points are clearly marked lower confidence.
+    if int(n) < int(required):
+        ratio *= 0.5
+    return float(max(min(ratio, 1.0), 0.0))
+
+
+def _confidence_level_from_ratio(ratio: float | None) -> str:
+    if ratio is None:
+        return "unknown"
+    if float(ratio) >= float(VALIDATION_CONFIDENCE_HIGH_MIN):
+        return "high"
+    if float(ratio) >= float(VALIDATION_CONFIDENCE_MEDIUM_MIN):
+        return "medium"
+    return "low"
+
+
+def _surface_confidence_summary(points: list[ValidationSurfacePoint]) -> dict[str, Any]:
+    total_points = int(len(points))
+    if total_points <= 0:
+        return {
+            "confidence_score": None,
+            "confidence_level": "unknown",
+            "confidence_reason": "No validation points available to score sample confidence.",
+        }
+
+    point_scores = [
+        _surface_sample_confidence(
+            n=int(point.n),
+            expected_rate=float(point.expected_rate),
+            horizon_days=int(point.horizon_days),
+        )
+        for point in points
+    ]
+    confidence_ratio = float(sum(point_scores) / max(total_points, 1))
+    insufficient_sample_count = int(
+        sum(
+            1
+            for point in points
+            if not _surface_has_sufficient_observations(
+                n=int(point.n),
+                expected_rate=float(point.expected_rate),
+                horizon_days=int(point.horizon_days),
+            )
+        )
+    )
+    confidence_level = _confidence_level_from_ratio(confidence_ratio)
+    if insufficient_sample_count > 0 and confidence_level == "high":
+        confidence_level = "medium"
+    if insufficient_sample_count >= int(math.ceil(total_points / 2.0)):
+        confidence_level = "low"
+
+    if insufficient_sample_count > 0:
+        confidence_reason = (
+            f"Insufficient observations on {insufficient_sample_count}/{total_points} "
+            "validation points."
+        )
+    elif confidence_level == "high":
+        confidence_reason = "All validation points satisfy the configured sample-size floors."
+    elif confidence_level == "medium":
+        confidence_reason = "Most validation points satisfy sample-size floors, but margin is limited."
+    else:
+        confidence_reason = "Sample coverage is too thin for a robust statistical interpretation."
+
+    return {
+        "confidence_score": round(float(confidence_ratio * 100.0), 1),
+        "confidence_level": confidence_level,
+        "confidence_reason": confidence_reason,
+    }
 
 
 def _surface_slice_validation_summary(points: list[ValidationSurfacePoint]) -> dict[str, Any] | None:
@@ -589,7 +714,11 @@ def _surface_slice_validation_summary(points: list[ValidationSurfacePoint]) -> d
         sum(
             1
             for point in points
-            if not _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+            if not _surface_has_sufficient_observations(
+                n=int(point.n),
+                expected_rate=float(point.expected_rate),
+                horizon_days=int(point.horizon_days),
+            )
         )
     )
     effective_points = int(len(points) - insufficient_sample_count)
@@ -598,7 +727,11 @@ def _surface_slice_validation_summary(points: list[ValidationSurfacePoint]) -> d
             1
             for point in points
             if point.coverage_pass is False
-            and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+            and _surface_has_sufficient_observations(
+                n=int(point.n),
+                expected_rate=float(point.expected_rate),
+                horizon_days=int(point.horizon_days),
+            )
         )
     )
     independence_fail_count = int(
@@ -606,7 +739,11 @@ def _surface_slice_validation_summary(points: list[ValidationSurfacePoint]) -> d
             1
             for point in points
             if point.independence_pass is False
-            and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+            and _surface_has_sufficient_observations(
+                n=int(point.n),
+                expected_rate=float(point.expected_rate),
+                horizon_days=int(point.horizon_days),
+            )
         )
     )
     conditional_fail_count = int(
@@ -614,9 +751,15 @@ def _surface_slice_validation_summary(points: list[ValidationSurfacePoint]) -> d
             1
             for point in points
             if point.conditional_pass is False
-            and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+            and _surface_has_sufficient_observations(
+                n=int(point.n),
+                expected_rate=float(point.expected_rate),
+                horizon_days=int(point.horizon_days),
+            )
         )
     )
+    confidence = _surface_confidence_summary(points)
+    horizon_days = int(points[0].horizon_days)
 
     leader = ordered[0]
     total_points = int(len(points))
@@ -646,6 +789,14 @@ def _surface_slice_validation_summary(points: list[ValidationSurfacePoint]) -> d
         "pvalue_threshold": float(P_VALUE_SIGNIFICANCE_LEVEL),
         "min_observations_floor": int(VALIDATION_SURFACE_MIN_OBSERVATIONS),
         "min_expected_exceptions": float(VALIDATION_SURFACE_MIN_EXPECTED_EXCEPTIONS),
+        "horizon_observation_floor": _surface_horizon_observation_floor(horizon_days),
+        "min_observations_by_horizon_days": {
+            str(int(key)): int(value)
+            for key, value in dict(VALIDATION_SURFACE_MIN_OBSERVATIONS_BY_HORIZON_DAYS).items()
+        },
+        "confidence_score": confidence["confidence_score"],
+        "confidence_level": confidence["confidence_level"],
+        "confidence_reason": confidence["confidence_reason"],
         "coverage_fail_count": coverage_fail_count,
         "independence_fail_count": independence_fail_count,
         "conditional_fail_count": conditional_fail_count,
@@ -672,7 +823,11 @@ def _surface_governance_summary(points: list[ValidationSurfacePoint]) -> dict[st
         sum(
             1
             for point in points
-            if not _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+            if not _surface_has_sufficient_observations(
+                n=int(point.n),
+                expected_rate=float(point.expected_rate),
+                horizon_days=int(point.horizon_days),
+            )
         )
     )
     effective_points = int(total_points - insufficient_sample_count)
@@ -681,7 +836,11 @@ def _surface_governance_summary(points: list[ValidationSurfacePoint]) -> dict[st
             1
             for point in points
             if point.coverage_pass is False
-            and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+            and _surface_has_sufficient_observations(
+                n=int(point.n),
+                expected_rate=float(point.expected_rate),
+                horizon_days=int(point.horizon_days),
+            )
         )
     )
     independence_fail_count = int(
@@ -689,7 +848,11 @@ def _surface_governance_summary(points: list[ValidationSurfacePoint]) -> dict[st
             1
             for point in points
             if point.independence_pass is False
-            and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+            and _surface_has_sufficient_observations(
+                n=int(point.n),
+                expected_rate=float(point.expected_rate),
+                horizon_days=int(point.horizon_days),
+            )
         )
     )
     conditional_fail_count = int(
@@ -697,9 +860,14 @@ def _surface_governance_summary(points: list[ValidationSurfacePoint]) -> dict[st
             1
             for point in points
             if point.conditional_pass is False
-            and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+            and _surface_has_sufficient_observations(
+                n=int(point.n),
+                expected_rate=float(point.expected_rate),
+                horizon_days=int(point.horizon_days),
+            )
         )
     )
+    confidence = _surface_confidence_summary(points)
 
     pass_count = int(status_counts.get(VALIDATION_STATUS_PASS, 0))
     warn_count = int(status_counts.get(VALIDATION_STATUS_WARN, 0))
@@ -730,6 +898,13 @@ def _surface_governance_summary(points: list[ValidationSurfacePoint]) -> dict[st
         "non_fail_rate": (None if total_points <= 0 else float(non_fail_count / total_points)),
         "min_observations_floor": int(VALIDATION_SURFACE_MIN_OBSERVATIONS),
         "min_expected_exceptions": float(VALIDATION_SURFACE_MIN_EXPECTED_EXCEPTIONS),
+        "min_observations_by_horizon_days": {
+            str(int(key)): int(value)
+            for key, value in dict(VALIDATION_SURFACE_MIN_OBSERVATIONS_BY_HORIZON_DAYS).items()
+        },
+        "confidence_score": confidence["confidence_score"],
+        "confidence_level": confidence["confidence_level"],
+        "confidence_reason": confidence["confidence_reason"],
     }
 
 
@@ -763,7 +938,11 @@ def _surface_horizon_governance_summary(
             sum(
                 1
                 for point in horizon_points
-                if not _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+                if not _surface_has_sufficient_observations(
+                    n=int(point.n),
+                    expected_rate=float(point.expected_rate),
+                    horizon_days=int(point.horizon_days),
+                )
             )
         )
         effective_points = int(total_points - insufficient_sample_count)
@@ -807,7 +986,11 @@ def _surface_horizon_governance_summary(
                     1
                     for point in horizon_points
                     if point.coverage_pass is False
-                    and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+                    and _surface_has_sufficient_observations(
+                        n=int(point.n),
+                        expected_rate=float(point.expected_rate),
+                        horizon_days=int(point.horizon_days),
+                    )
                 )
             ),
             "independence_fail_count": int(
@@ -815,7 +998,11 @@ def _surface_horizon_governance_summary(
                     1
                     for point in horizon_points
                     if point.independence_pass is False
-                    and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+                    and _surface_has_sufficient_observations(
+                        n=int(point.n),
+                        expected_rate=float(point.expected_rate),
+                        horizon_days=int(point.horizon_days),
+                    )
                 )
             ),
             "conditional_fail_count": int(
@@ -823,7 +1010,11 @@ def _surface_horizon_governance_summary(
                     1
                     for point in horizon_points
                     if point.conditional_pass is False
-                    and _surface_has_sufficient_observations(n=int(point.n), expected_rate=float(point.expected_rate))
+                    and _surface_has_sufficient_observations(
+                        n=int(point.n),
+                        expected_rate=float(point.expected_rate),
+                        horizon_days=int(point.horizon_days),
+                    )
                 )
             ),
             "traffic_lights": traffic_lights,
@@ -845,7 +1036,16 @@ def _surface_horizon_governance_summary(
             "pvalue_threshold": float(P_VALUE_SIGNIFICANCE_LEVEL),
             "min_observations_floor": int(VALIDATION_SURFACE_MIN_OBSERVATIONS),
             "min_expected_exceptions": float(VALIDATION_SURFACE_MIN_EXPECTED_EXCEPTIONS),
+            "horizon_observation_floor": _surface_horizon_observation_floor(int(horizon_days)),
+            "min_observations_by_horizon_days": {
+                str(int(key)): int(value)
+                for key, value in dict(VALIDATION_SURFACE_MIN_OBSERVATIONS_BY_HORIZON_DAYS).items()
+            },
         }
+        confidence = _surface_confidence_summary(horizon_points)
+        horizon_payload[f"h{int(horizon_days)}"]["confidence_score"] = confidence["confidence_score"]
+        horizon_payload[f"h{int(horizon_days)}"]["confidence_level"] = confidence["confidence_level"]
+        horizon_payload[f"h{int(horizon_days)}"]["confidence_reason"] = confidence["confidence_reason"]
 
     overall_verdict = VALIDATION_STATUS_PASS
     for payload in horizon_payload.values():
@@ -906,6 +1106,7 @@ def validate_compare_surface(
                 statistical_status = _surface_statistical_status(
                     n=int(uc["n"]),
                     expected_rate=expected_rate,
+                    horizon_days=int(horizon_days),
                     coverage_pass=coverage_pass,
                     independence_pass=independence_pass,
                     conditional_pass=conditional_pass,

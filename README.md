@@ -84,6 +84,20 @@ Operator stale TTLs are configurable per action:
 
 Worker monitoring (`GET /jobs/status`) now includes `operator_runs` counters (`status_counts`, `stale_closed_total`, `stale_reason_counts`, `recent_stale`) for stale-cleanup observability.
 
+## Backtest Confidence Guardrails (VAR-015)
+
+Backtest validation now includes sample-size guardrails and an explicit confidence score:
+
+- Minimum observation floors are applied per horizon (`1d=60`, `5d=80`, `10d=120`, then +20 every extra 5 days) and combined with the expected-exception floor.
+- Under-sized samples are marked as low confidence in:
+  - validation governance payloads (`confidence_score`, `confidence_level`, `confidence_reason`)
+  - generated markdown reports (`Model Governance Surface` + `Multi-Horizon Validation`)
+  - frontend model/report surfaces (confidence badges and explanatory text)
+- Interpretation:
+  - `HIGH`: sample size is sufficient across points.
+  - `MEDIUM`: mostly sufficient, but with reduced margin.
+  - `LOW`: insufficient observations; results should be treated as indicative only.
+
 Frontend:
 
 ```bash
