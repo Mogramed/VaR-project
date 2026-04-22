@@ -181,7 +181,11 @@ export function OperatorActions({
       ["sync", "snapshot", "backtest", "report"].includes(String(run.action ?? ""))).slice(0, 5),
     [runsQuery.data],
   );
-  const retryDisabled = !failingContext || failingContext.hook.pending || failingContext.hook.canInterrupt;
+  const retryDisabled =
+    !failingContext
+    || busy
+    || failingContext.hook.pending
+    || failingContext.hook.canInterrupt;
 
   return (
     <div className="flex flex-col gap-1.5">

@@ -81,6 +81,15 @@ export function TradeDecisionPanel({
 
   useEffect(() => () => clearTimeout(successTimerRef.current), []);
 
+  const runEvaluate = useCallback(() => {
+    if (!validate()) {
+      return false;
+    }
+    setShowSuccess(false);
+    mutation.mutate();
+    return true;
+  }, [mutation, validate]);
+
   const result = mutation.data;
   const actionableError = (() => {
     if (!mutation.error) {
@@ -105,7 +114,10 @@ export function TradeDecisionPanel({
       {/* Form */}
       <form
         className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4"
-        onSubmit={(e) => { e.preventDefault(); if (validate()) { setShowSuccess(false); mutation.mutate(); } }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          runEvaluate();
+        }}
       >
         <div className="flex items-center justify-between">
           <h3 className="text-[13px] font-semibold text-[var(--color-text)]">Advisory Decision</h3>
@@ -160,7 +172,7 @@ export function TradeDecisionPanel({
           {mutation.error && !mutation.isPending ? (
             <button
               type="button"
-              onClick={() => mutation.mutate()}
+              onClick={runEvaluate}
               className="h-7 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2.5 text-[11px] font-medium text-[var(--color-text)] transition hover:bg-[var(--color-surface-hover)]"
             >
               Retry
