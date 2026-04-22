@@ -2889,11 +2889,19 @@ class DeskApiService:
         portfolio_slug: str | None = None,
         account_id: str | None = None,
     ) -> dict[str, Any]:
-        return self.analytics.run_report(
+        result = self.analytics.run_report(
             compare_path=compare_path,
             portfolio_slug=portfolio_slug,
             account_id=account_id,
         )
+        latest = self.reads.latest_report_content(portfolio_slug=portfolio_slug, account_id=account_id)
+        if latest is None:
+            return result
+        if str(latest.get("report_markdown") or "") != str(result.get("report_markdown") or ""):
+            return result
+        enriched = dict(result)
+        enriched["report_contract"] = latest.get("report_contract")
+        return enriched
 
     def acknowledge_reconciliation_mismatch(
         self,

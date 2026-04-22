@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 import pandas as pd
 
+from var_project.core.model_registry import infer_model_names_from_columns, ordered_model_names
 from var_project.api.services.runtime import DeskServiceRuntime
 from var_project.desk.overview import build_desk_snapshot
 from var_project.jobs import build_worker_status
@@ -195,6 +196,209 @@ class DeskReadService:
             return float(value)
         except (TypeError, ValueError):
             return float(default)
+
+    @staticmethod
+    def _safe_optional_float(value: Any) -> float | None:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not pd.notna(parsed):
+            return None
+        return float(parsed)
+
+    @staticmethod
+    def _format_money_display(value: float | None, *, decimals: int = 2) -> str:
+        if value is None:
+            return "n/a"
+        try:
+            return f"{float(value):,.{int(max(decimals, 0))}f}"
+        except (TypeError, ValueError):
+            return "n/a"
+
+    @staticmethod
+    def _coerce_utc_iso(value: Any) -> str | None:
+        if value in {None, "", "null"}:
+            return None
+        if isinstance(value, datetime):
+            timestamp = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return timestamp.isoformat()
+        try:
+            parsed = pd.to_datetime(value, utc=True, errors="coerce")
+        except Exception:
+            return None
+        if parsed is None or pd.isna(parsed):
+            return None
+        if isinstance(parsed, pd.Timestamp):
+            return parsed.to_pydatetime().astimezone(timezone.utc).isoformat()
+        return None
+
+    def _resolve_report_snapshot_record(
+        self,
+        *,
+        details: Mapping[str, Any],
+        portfolio_slug: str,
+    ) -> dict[str, Any] | None:
+        snapshot_source_raw = details.get("snapshot_source")
+        snapshot_source = (
+            None if snapshot_source_raw in {None, "", "null"} else str(snapshot_source_raw).strip().lower()
+        )
+        snapshot_id: int | None = None
+        try:
+            if details.get("snapshot_id") not in {None, "", "null"}:
+                snapshot_id = int(details.get("snapshot_id"))
+        except (TypeError, ValueError):
+            snapshot_id = None
+
+        candidates = self.runtime.storage.recent_snapshots(
+            limit=200,
+            source=snapshot_source,
+            portfolio_slug=portfolio_slug,
+        )
+        if snapshot_id is not None:
+            for candidate in candidates:
+                try:
+                    candidate_id = int(candidate.get("id"))
+                except (TypeError, ValueError):
+                    continue
+                if candidate_id == snapshot_id:
+                    return dict(candidate)
+        if candidates:
+            return dict(candidates[0])
+        if snapshot_source:
+            latest = self.runtime.storage.latest_snapshot(source=snapshot_source, portfolio_slug=portfolio_slug)
+            if latest is not None:
+                return dict(latest)
+        latest_any = self.runtime.storage.latest_snapshot(portfolio_slug=portfolio_slug)
+        return None if latest_any is None else dict(latest_any)
+
+    def _build_report_contract(
+        self,
+        *,
+        artifact: Mapping[str, Any],
+        details: Mapping[str, Any],
+        portfolio_slug: str,
+        account_id: str | None,
+    ) -> dict[str, Any]:
+        money_decimals = 2
+        percent_decimals = 1
+        selected_model: str | None = None
+        latest_pnl_value: float | None = None
+        latest_pnl_timestamp: str | None = None
+        compare_var_value: float | None = None
+        compare_es_value: float | None = None
+
+        comparison = self.latest_model_comparison(portfolio_slug=portfolio_slug)
+        if comparison is not None:
+            champion_raw = comparison.get("champion_model")
+            if champion_raw not in {None, "", "null"}:
+                selected_model = str(champion_raw).strip().lower() or None
+
+        compare_csv_raw = details.get("compare_csv")
+        compare_csv_path = Path(str(compare_csv_raw)).expanduser() if compare_csv_raw not in {None, "", "null"} else None
+        if compare_csv_path is not None and compare_csv_path.exists():
+            try:
+                compare_frame = pd.read_csv(compare_csv_path)
+            except Exception:
+                compare_frame = pd.DataFrame()
+            if not compare_frame.empty:
+                models = infer_model_names_from_columns(compare_frame.columns)
+                if selected_model not in models:
+                    selected_model = models[0] if models else selected_model
+
+                latest_row = compare_frame.iloc[-1]
+                latest_pnl_value = self._safe_optional_float(latest_row.get("pnl"))
+                for timeline_column in ("date", "time", "time_utc", "timestamp"):
+                    if timeline_column not in compare_frame.columns:
+                        continue
+                    latest_pnl_timestamp = self._coerce_utc_iso(latest_row.get(timeline_column))
+                    if latest_pnl_timestamp is not None:
+                        break
+
+                if selected_model:
+                    compare_var_value = self._safe_optional_float(latest_row.get(f"var_{selected_model}"))
+                    compare_es_value = self._safe_optional_float(latest_row.get(f"es_{selected_model}"))
+
+        snapshot = self._resolve_report_snapshot_record(details=details, portfolio_slug=portfolio_slug)
+        snapshot_payload = {} if snapshot is None else dict(snapshot.get("payload") or snapshot)
+        snapshot_source = str(
+            details.get("snapshot_source")
+            or snapshot_payload.get("source")
+            or (snapshot or {}).get("source")
+            or "unknown"
+        ).strip() or "unknown"
+        snapshot_timestamp = (
+            self._coerce_utc_iso((snapshot or {}).get("created_at"))
+            or self._coerce_utc_iso(snapshot_payload.get("snapshot_timestamp"))
+            or self._coerce_utc_iso(snapshot_payload.get("time_utc"))
+        )
+
+        var_map_raw = snapshot_payload.get("var")
+        es_map_raw = snapshot_payload.get("es")
+        var_map = dict(var_map_raw) if isinstance(var_map_raw, Mapping) else {}
+        es_map = dict(es_map_raw) if isinstance(es_map_raw, Mapping) else {}
+        available_models = ordered_model_names(set(var_map.keys()) | set(es_map.keys()))
+        if selected_model not in available_models and available_models:
+            selected_model = available_models[0]
+
+        var_value = None if selected_model is None else self._safe_optional_float(var_map.get(selected_model))
+        es_value = None if selected_model is None else self._safe_optional_float(es_map.get(selected_model))
+        if var_value is None:
+            for model_name in available_models:
+                candidate = self._safe_optional_float(var_map.get(model_name))
+                if candidate is not None:
+                    var_value = candidate
+                    selected_model = selected_model or model_name
+                    break
+        if es_value is None:
+            for model_name in available_models:
+                candidate = self._safe_optional_float(es_map.get(model_name))
+                if candidate is not None:
+                    es_value = candidate
+                    selected_model = selected_model or model_name
+                    break
+        if var_value is None:
+            var_value = compare_var_value
+        if es_value is None:
+            es_value = compare_es_value
+
+        generated_at = (
+            self._coerce_utc_iso(artifact.get("updated_at"))
+            or self._coerce_utc_iso(artifact.get("created_at"))
+            or datetime.now(timezone.utc).isoformat()
+        )
+
+        return {
+            "version": "report.v1",
+            "timezone": "UTC",
+            "generated_at_utc": generated_at,
+            "portfolio_slug": portfolio_slug,
+            "account_id": account_id,
+            "selected_model": selected_model,
+            "snapshot_source": snapshot_source,
+            "snapshot_timestamp_utc": snapshot_timestamp,
+            "rounding": {
+                "money_decimals": money_decimals,
+                "percent_decimals": percent_decimals,
+            },
+            "metrics": {
+                "var": {
+                    "value": var_value,
+                    "display": self._format_money_display(var_value, decimals=money_decimals),
+                    "as_of_utc": snapshot_timestamp,
+                },
+                "es": {
+                    "value": es_value,
+                    "display": self._format_money_display(es_value, decimals=money_decimals),
+                    "as_of_utc": snapshot_timestamp,
+                },
+                "pnl": {
+                    "value": latest_pnl_value,
+                    "display": self._format_money_display(latest_pnl_value, decimals=money_decimals),
+                    "as_of_utc": latest_pnl_timestamp or snapshot_timestamp,
+                },
+            },
+        }
 
     @staticmethod
     def _expected_portfolio_symbols(portfolio: dict[str, Any]) -> set[str]:
@@ -881,4 +1085,10 @@ class DeskReadService:
             "account_id": resolved_account_id,
             "content": report_path.read_text(encoding="utf-8"),
             "chart_paths": chart_paths,
+            "report_contract": self._build_report_contract(
+                artifact=artifact,
+                details=details,
+                portfolio_slug=str(details.get("portfolio_slug") or portfolio_slug or ""),
+                account_id=resolved_account_id,
+            ),
         }

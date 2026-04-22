@@ -300,6 +300,8 @@ def test_api_runs_snapshot_backtest_and_report(tmp_path: Path):
     assert report.status_code == 200
     report_body = report.json()
     assert Path(report_body["report_markdown"]).exists()
+    assert report_body["report_contract"]["version"] == "report.v1"
+    assert report_body["report_contract"]["timezone"] == "UTC"
 
     latest_report_payload = client.get("/reports/latest")
     assert latest_report_payload.status_code == 200
@@ -315,6 +317,23 @@ def test_api_runs_snapshot_backtest_and_report(tmp_path: Path):
     assert "## Decision History" in latest_report_payload.json()["content"]
     assert "## Capital History" in latest_report_payload.json()["content"]
     assert "## Audit Trail" in latest_report_payload.json()["content"]
+    contract = latest_report_payload.json()["report_contract"]
+    assert contract["version"] == "report.v1"
+    assert contract["timezone"] == "UTC"
+    assert contract["rounding"]["money_decimals"] == 2
+    assert contract["selected_model"] in {"hist", "param", "mc", "ewma", "garch", "fhs", None}
+    var_metric = contract["metrics"]["var"]
+    es_metric = contract["metrics"]["es"]
+    pnl_metric = contract["metrics"]["pnl"]
+    assert isinstance(var_metric["display"], str) and var_metric["display"]
+    assert isinstance(es_metric["display"], str) and es_metric["display"]
+    assert isinstance(pnl_metric["display"], str) and pnl_metric["display"]
+    if var_metric["value"] is not None:
+        assert float(str(var_metric["display"]).replace(",", "")) == pytest.approx(float(var_metric["value"]), abs=0.01)
+    if es_metric["value"] is not None:
+        assert float(str(es_metric["display"]).replace(",", "")) == pytest.approx(float(es_metric["value"]), abs=0.01)
+    if pnl_metric["value"] is not None:
+        assert float(str(pnl_metric["display"]).replace(",", "")) == pytest.approx(float(pnl_metric["value"]), abs=0.01)
     if report_body["chart_paths"]:
         chart_name = Path(report_body["chart_paths"][0]).name
         chart_asset = client.get(f"/reports/charts/{chart_name}")
@@ -1795,6 +1814,9 @@ def test_live_state_backfills_market_data_without_manual_sync(tmp_path: Path):
     assert live_report.status_code == 200
     assert "Preferred snapshot source: **mt5_live_bridge**" in live_report.json()["content"]
     assert "## Portfolio Snapshot" in live_report.json()["content"]
+    live_contract = live_report.json()["report_contract"]
+    assert live_contract["version"] == "report.v1"
+    assert live_contract["snapshot_source"] == "mt5_live_bridge"
     latest_live_report_artifact = client.get("/artifacts/latest/daily_report")
     assert latest_live_report_artifact.status_code == 200
     assert latest_live_report_artifact.json()["details"]["auto_generated"] is True

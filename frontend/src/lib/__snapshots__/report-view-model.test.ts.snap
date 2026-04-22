@@ -1,0 +1,36 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`report contract parity > prioritizes API contract values for report metrics and export parity 1`] = `
+[
+  {
+    "copy": "Canonical report contract value as of 22 Apr 2026, 09:55 UTC.",
+    "label": "VaR / HIST",
+    "tone": "accent",
+    "value": "1,234.56",
+  },
+  {
+    "copy": "Canonical report contract value as of 22 Apr 2026, 09:55 UTC.",
+    "label": "ES / HIST",
+    "tone": "warning",
+    "value": "2,345.67",
+  },
+  {
+    "copy": "Latest available PnL point captured at 22 Apr 2026, 09:50 UTC.",
+    "label": "Latest PnL",
+    "tone": "neutral",
+    "value": "-45.67",
+  },
+  {
+    "copy": "Remaining 10,000.00 before hitting current budget boundaries.",
+    "label": "Capital headroom",
+    "tone": "success",
+    "value": "25%",
+  },
+  {
+    "copy": "Advisory decisions approved versus requested exposure changes over recent runs.",
+    "label": "Average fill ratio",
+    "tone": "neutral",
+    "value": "n/a",
+  },
+]
+`;

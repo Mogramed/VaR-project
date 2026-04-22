@@ -30,7 +30,7 @@ import {
   type DeskReportViewModel,
   loadDeskReportViewModel,
 } from "@/lib/report-view-model";
-import { formatCurrency, formatPercent, formatSourceLabel } from "@/lib/utils";
+import { formatCurrency, formatPercent, formatSourceLabel, formatTimestamp } from "@/lib/utils";
 import {
   averageDecisionFillRatio,
   buildCapitalHistorySeries,
@@ -106,17 +106,10 @@ export function ReportsLiveSurface({
   const capitalHistory = view.capitalHistory;
   const audit = view.audit;
   const liveCapital = resolved?.capital_usage ?? view.capital;
-  const selectedModel = resolved?.risk_summary?.reference_model ?? view.selectedModel;
-  const varValue = Number(
-    resolved?.risk_summary?.var?.[selectedModel]
-      ?? Object.values(resolved?.risk_summary?.var ?? {})[0]
-      ?? view.varValue,
-  );
-  const esValue = Number(
-    resolved?.risk_summary?.es?.[selectedModel]
-      ?? Object.values(resolved?.risk_summary?.es ?? {})[0]
-      ?? view.esValue,
-  );
+  const selectedModel = view.selectedModel;
+  const varValue = Number(view.varValue);
+  const esValue = Number(view.esValue);
+  const pnlValue = Number(view.pnlValue);
   const fillRatio = averageDecisionFillRatio(decisions);
   const capitalSeries = buildCapitalHistorySeries(capitalHistory);
   const decisionSeries = buildDecisionDeltaComparison(decisions);
@@ -155,16 +148,22 @@ export function ReportsLiveSurface({
 
       <LiveOperatorAlerts alerts={resolved?.operator_alerts ?? []} />
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <MetricBlock
           label={`VaR / ${selectedModel.toUpperCase()}`}
-          value={formatCurrency(varValue)}
+          value={view.varDisplay ?? formatCurrency(varValue, view.meta.moneyDecimals)}
           tone="accent"
         />
         <MetricBlock
           label={`ES / ${selectedModel.toUpperCase()}`}
-          value={formatCurrency(esValue)}
+          value={view.esDisplay ?? formatCurrency(esValue, view.meta.moneyDecimals)}
           tone="warning"
+        />
+        <MetricBlock
+          label="Latest PnL"
+          value={view.pnlDisplay ?? formatCurrency(pnlValue, view.meta.moneyDecimals)}
+          hint={view.pnlTimestamp ? `As of ${formatTimestamp(view.pnlTimestamp)}` : "Latest report dataset point"}
+          tone={pnlValue < 0 ? "warning" : "neutral"}
         />
         <MetricBlock
           label="Headroom"

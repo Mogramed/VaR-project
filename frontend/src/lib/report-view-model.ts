@@ -1,5 +1,5 @@
 import { api } from "@/lib/api/client";
-import type { MT5LiveStateResponse } from "@/lib/api/types";
+import type { MT5LiveStateResponse, ReportContentResponse } from "@/lib/api/types";
 import { formatCurrency, formatPercent, formatTimestamp, slugifyHeading } from "@/lib/utils";
 import {
   averageDecisionFillRatio,
@@ -17,6 +17,28 @@ export interface ReportHeading {
 
 type ValidationVerdict = "PASS" | "WARN" | "FAIL" | "N/A";
 type ValidationConfidenceLevel = "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
+
+interface ResolvedReportContractMetric {
+  value: number | null;
+  display: string | null;
+  asOfUtc: string | null;
+}
+
+export interface ResolvedReportContract {
+  version: string | null;
+  timezone: string;
+  generatedAtUtc: string | null;
+  selectedModel: string | null;
+  snapshotSource: string | null;
+  snapshotTimestampUtc: string | null;
+  moneyDecimals: number;
+  percentDecimals: number;
+  metrics: {
+    var: ResolvedReportContractMetric;
+    es: ResolvedReportContractMetric;
+    pnl: ResolvedReportContractMetric;
+  };
+}
 
 interface ValidationAcademicRow {
   model: string;
@@ -108,6 +130,61 @@ function toUpper(value: unknown): string | null {
   }
   const normalized = value.trim().toUpperCase();
   return normalized || null;
+}
+
+function normalizeDecimalSetting(value: unknown, fallback: number) {
+  const parsed = toInteger(value);
+  if (parsed == null || parsed < 0 || parsed > 8) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function resolveContractMetric(value: unknown): ResolvedReportContractMetric {
+  const record = toRecord(value);
+  const display = typeof record.display === "string" && record.display.trim()
+    ? record.display.trim()
+    : null;
+  const asOfUtc = typeof record.as_of_utc === "string" && record.as_of_utc.trim()
+    ? record.as_of_utc.trim()
+    : null;
+  return {
+    value: toNumber(record.value),
+    display,
+    asOfUtc,
+  };
+}
+
+export function resolveReportContract(report: Pick<ReportContentResponse, "report_contract"> | null | undefined): ResolvedReportContract | null {
+  const contract = toRecord(report?.report_contract);
+  if (!Object.keys(contract).length) {
+    return null;
+  }
+  const rounding = toRecord(contract.rounding);
+  const metrics = toRecord(contract.metrics);
+  return {
+    version: typeof contract.version === "string" && contract.version.trim() ? contract.version.trim() : null,
+    timezone: typeof contract.timezone === "string" && contract.timezone.trim() ? contract.timezone.trim() : "UTC",
+    generatedAtUtc: typeof contract.generated_at_utc === "string" && contract.generated_at_utc.trim()
+      ? contract.generated_at_utc.trim()
+      : null,
+    selectedModel: typeof contract.selected_model === "string" && contract.selected_model.trim()
+      ? contract.selected_model.trim()
+      : null,
+    snapshotSource: typeof contract.snapshot_source === "string" && contract.snapshot_source.trim()
+      ? contract.snapshot_source.trim()
+      : null,
+    snapshotTimestampUtc: typeof contract.snapshot_timestamp_utc === "string" && contract.snapshot_timestamp_utc.trim()
+      ? contract.snapshot_timestamp_utc.trim()
+      : null,
+    moneyDecimals: normalizeDecimalSetting(rounding.money_decimals, 2),
+    percentDecimals: normalizeDecimalSetting(rounding.percent_decimals, 1),
+    metrics: {
+      var: resolveContractMetric(metrics.var),
+      es: resolveContractMetric(metrics.es),
+      pnl: resolveContractMetric(metrics.pnl),
+    },
+  };
 }
 
 function inferValidationVerdict({
@@ -356,7 +433,10 @@ export async function loadDeskReportViewModel(
     snapshot = await api.latestSnapshot(resolvedPortfolio, "auto").catch(() => null);
   }
 
+  const reportContract = resolveReportContract(report);
+  const contractModel = reportContract?.selectedModel ?? null;
   const selectedModel =
+    contractModel ??
     liveState?.risk_summary?.reference_model ??
     comparison?.champion_model ??
     capital?.reference_model ??
@@ -370,20 +450,50 @@ export async function loadDeskReportViewModel(
     var?: Record<string, number>;
     es?: Record<string, number>;
   };
+  const contractVar = reportContract?.metrics.var.value ?? null;
+  const contractEs = reportContract?.metrics.es.value ?? null;
   const varValue = Number(
-    liveState?.risk_summary?.var?.[selectedModel] ??
+    contractVar ??
+      liveState?.risk_summary?.var?.[selectedModel] ??
       Object.values(liveState?.risk_summary?.var ?? {})[0] ??
       payload.var?.[selectedModel] ??
       Object.values(payload.var ?? {})[0] ??
       0,
   );
   const esValue = Number(
-    liveState?.risk_summary?.es?.[selectedModel] ??
+    contractEs ??
+      liveState?.risk_summary?.es?.[selectedModel] ??
       Object.values(liveState?.risk_summary?.es ?? {})[0] ??
       payload.es?.[selectedModel] ??
       Object.values(payload.es ?? {})[0] ??
       0,
   );
+  const backtestRows = Array.isArray(frame?.rows) ? frame.rows : [];
+  let latestBacktestPnl: number | null = null;
+  let latestBacktestPnlTimestamp: string | null = null;
+  for (let index = backtestRows.length - 1; index >= 0; index -= 1) {
+    const row = toRecord(backtestRows[index]);
+    const candidatePnl = toNumber(row.pnl);
+    if (candidatePnl == null) {
+      continue;
+    }
+    latestBacktestPnl = candidatePnl;
+    const candidateTimestamp = [
+      row.time_utc,
+      row.timestamp,
+      row.time,
+      row.date,
+      row.label,
+    ].find((value) => typeof value === "string" && value.trim()) as string | undefined;
+    latestBacktestPnlTimestamp = candidateTimestamp?.trim() ?? null;
+    break;
+  }
+  const pnlValue = Number(reportContract?.metrics.pnl.value ?? latestBacktestPnl ?? 0);
+  const pnlTimestamp = reportContract?.metrics.pnl.asOfUtc ?? latestBacktestPnlTimestamp;
+  const moneyDecimals = reportContract?.moneyDecimals ?? 2;
+  const varDisplay = reportContract?.metrics.var.display ?? formatCurrency(varValue, moneyDecimals);
+  const esDisplay = reportContract?.metrics.es.display ?? formatCurrency(esValue, moneyDecimals);
+  const pnlDisplay = reportContract?.metrics.pnl.display ?? formatCurrency(pnlValue, moneyDecimals);
   const fillRatio = averageDecisionFillRatio(decisions);
   const decisionSizeSeries = buildDecisionDeltaComparison(decisions);
   const capitalSeries = buildCapitalHistorySeries(capitalHistory);
@@ -395,25 +505,37 @@ export async function loadDeskReportViewModel(
   const executiveSummary = [
     executiveSignal(
       `VaR / ${selectedModel.toUpperCase()}`,
-      formatCurrency(varValue),
-      liveState?.risk_summary?.latest_observation
-        ? `Live selected-model risk level from the MT5 bridge sample ending ${formatTimestamp(liveState.risk_summary.latest_observation)}.`
-        : "Current selected model risk level for the latest persisted portfolio snapshot.",
+      varDisplay,
+      reportContract?.metrics.var.asOfUtc
+        ? `Canonical report contract value as of ${formatTimestamp(reportContract.metrics.var.asOfUtc)}.`
+        : liveState?.risk_summary?.latest_observation
+          ? `Live selected-model risk level from the MT5 bridge sample ending ${formatTimestamp(liveState.risk_summary.latest_observation)}.`
+          : "Current selected model risk level for the latest persisted portfolio snapshot.",
       "accent",
     ),
     executiveSignal(
       `ES / ${selectedModel.toUpperCase()}`,
-      formatCurrency(esValue),
-      liveState?.risk_summary
-        ? "Tail-loss expectation derived from the live bridge risk summary."
-        : "Tail-loss expectation carried into the report baseline.",
+      esDisplay,
+      reportContract?.metrics.es.asOfUtc
+        ? `Canonical report contract value as of ${formatTimestamp(reportContract.metrics.es.asOfUtc)}.`
+        : liveState?.risk_summary
+          ? "Tail-loss expectation derived from the live bridge risk summary."
+          : "Tail-loss expectation carried into the report baseline.",
       "warning",
+    ),
+    executiveSignal(
+      "Latest PnL",
+      pnlDisplay,
+      pnlTimestamp
+        ? `Latest available PnL point captured at ${formatTimestamp(pnlTimestamp)}.`
+        : "Latest available PnL point from the report dataset.",
+      "neutral",
     ),
     executiveSignal(
       "Capital headroom",
       capital ? formatPercent(capital.headroom_ratio ?? 0, 0) : "n/a",
       capital
-        ? `Remaining ${formatCurrency(capital.total_capital_remaining_eur)} before hitting current budget boundaries.`
+        ? `Remaining ${formatCurrency(capital.total_capital_remaining_eur, moneyDecimals)} before hitting current budget boundaries.`
         : "No persisted capital snapshot yet.",
       "success",
     ),
@@ -429,10 +551,12 @@ export async function loadDeskReportViewModel(
     `Champion model: ${(comparison?.champion_model ?? selectedModel).toUpperCase()} with a score gap of ${
       comparison?.score_gap != null ? comparison.score_gap.toFixed(1) : "n/a"
     }.`,
+    `Latest report PnL point: ${pnlDisplay}${pnlTimestamp ? ` at ${formatTimestamp(pnlTimestamp)}` : ""}.`,
     capital
       ? `Capital posture remains ${capital.status.toLowerCase()} with ${formatCurrency(
           capital.total_capital_consumed_eur,
-        )} consumed from ${formatCurrency(capital.total_capital_budget_eur)}.`
+          moneyDecimals,
+        )} consumed from ${formatCurrency(capital.total_capital_budget_eur, moneyDecimals)}.`
       : "Capital posture is not yet available.",
     decisions.length
       ? `${decisions.length} recent decisions are persisted, with an average fill ratio of ${
@@ -462,6 +586,11 @@ export async function loadDeskReportViewModel(
     selectedModel,
     varValue,
     esValue,
+    pnlValue,
+    varDisplay,
+    esDisplay,
+    pnlDisplay,
+    pnlTimestamp,
     fillRatio,
     decisionSizeSeries,
     capitalSeries,
@@ -474,13 +603,19 @@ export async function loadDeskReportViewModel(
     meta: {
       reportTimestamp: latestReportEvent?.created_at
         ? formatTimestamp(latestReportEvent.created_at)
+        : reportContract?.generatedAtUtc
+          ? formatTimestamp(reportContract.generatedAtUtc)
         : report
           ? "report available"
           : "report pending",
       reportPath: report?.report_markdown ?? "",
       chartCount: report?.chart_paths?.length ?? 0,
       baseCurrency: capital?.base_currency ?? "EUR",
-      preferredSnapshotSource,
+      preferredSnapshotSource: reportContract?.snapshotSource ?? preferredSnapshotSource,
+      reportContractVersion: reportContract?.version ?? null,
+      reportTimezone: reportContract?.timezone ?? "UTC",
+      moneyDecimals,
+      percentDecimals: reportContract?.percentDecimals ?? 1,
     },
     derived: {
       backtestSeries: frame ? buildBacktestSeries(frame) : [],

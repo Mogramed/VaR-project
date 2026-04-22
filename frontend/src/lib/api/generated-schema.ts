@@ -3347,6 +3347,62 @@ export interface components {
             content: string;
             /** Chart Paths */
             chart_paths: string[];
+            report_contract?: components["schemas"]["ReportContractResponse"] | null;
+        };
+        /** ReportContractMetricResponse */
+        ReportContractMetricResponse: {
+            /** Value */
+            value?: number | null;
+            /**
+             * Display
+             * @default n/a
+             */
+            display: string;
+            /** As Of Utc */
+            as_of_utc?: string | null;
+        };
+        /** ReportContractMetricsResponse */
+        ReportContractMetricsResponse: {
+            var?: components["schemas"]["ReportContractMetricResponse"] | null;
+            es?: components["schemas"]["ReportContractMetricResponse"] | null;
+            pnl?: components["schemas"]["ReportContractMetricResponse"] | null;
+        };
+        /** ReportContractResponse */
+        ReportContractResponse: {
+            /** Version */
+            version: string;
+            /**
+             * Timezone
+             * @default UTC
+             */
+            timezone: string;
+            /** Generated At Utc */
+            generated_at_utc?: string | null;
+            /** Portfolio Slug */
+            portfolio_slug?: string | null;
+            /** Account Id */
+            account_id?: string | null;
+            /** Selected Model */
+            selected_model?: string | null;
+            /** Snapshot Source */
+            snapshot_source?: string | null;
+            /** Snapshot Timestamp Utc */
+            snapshot_timestamp_utc?: string | null;
+            rounding?: components["schemas"]["ReportContractRoundingResponse"];
+            metrics?: components["schemas"]["ReportContractMetricsResponse"];
+        };
+        /** ReportContractRoundingResponse */
+        ReportContractRoundingResponse: {
+            /**
+             * Money Decimals
+             * @default 2
+             */
+            money_decimals: number;
+            /**
+             * Percent Decimals
+             * @default 1
+             */
+            percent_decimals: number;
         };
         /** ReportRunResponse */
         ReportRunResponse: {
@@ -3356,6 +3412,7 @@ export interface components {
             chart_paths: string[];
             /** Account Id */
             account_id?: string | null;
+            report_contract?: components["schemas"]["ReportContractResponse"] | null;
         };
         /** RiskAttributionAssetClassResponse */
         RiskAttributionAssetClassResponse: {
