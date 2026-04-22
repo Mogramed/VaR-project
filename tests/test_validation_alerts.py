@@ -184,6 +184,64 @@ def test_validation_surface_sample_guardrails_above_threshold():
     assert float(governance["confidence_score"]) >= 99.0
 
 
+def test_validation_surface_sample_guardrails_apply_extrapolated_floor_for_long_horizon():
+    frame = _surface_frame_with_observations(n=139, alpha_token="90", horizon_days=15)
+
+    surface = validate_compare_surface(frame, alphas=[0.90], horizons=[15])
+    governance = surface["governance_summary"]
+    horizon_payload = surface["horizon_governance"]["horizons"]["h15"]
+
+    assert horizon_payload["horizon_observation_floor"] == 140
+    assert governance["insufficient_sample_count"] == 1
+    assert horizon_payload["insufficient_sample_count"] == 1
+    assert surface["points"][0]["statistical_status"] == "WARN"
+
+
+def test_validation_alerts_long_horizon_fallback_counts_preserve_sample_thin_signal():
+    summary = ValidationSummary(
+        alpha=0.90,
+        expected_rate=0.10,
+        model_results={},
+        best_model=None,
+        surface={
+            "governance_summary": {
+                "total_points": 1,
+                "status_counts": {"PASS": 0, "WARN": 1, "FAIL": 0},
+            },
+            "points": [
+                {
+                    "model": "hist",
+                    "alpha": 0.90,
+                    "horizon_days": 15,
+                    "n": 130,
+                    "expected_rate": 0.10,
+                }
+            ],
+            "horizon_governance": {
+                "horizon_order": [15],
+                "overall_verdict": "WARN",
+                "horizons": {
+                    "h15": {
+                        "horizon_days": 15,
+                        "total_points": 1,
+                        "status_counts": {"PASS": 0, "WARN": 1, "FAIL": 0},
+                        "pass_rate": 0.0,
+                        "verdict": "WARN",
+                        "champion_model": "hist",
+                    }
+                },
+            },
+        },
+    )
+
+    alerts = alerts_from_validation_summary(summary)
+    codes = {alert.code for alert in alerts}
+
+    assert "VALIDATION_SURFACE_SAMPLE_THIN" in codes
+    assert "VALIDATION_HORIZON_SAMPLE_THIN" in codes
+    assert "VALIDATION_HORIZON_WARN" not in codes
+
+
 def test_validation_surface_exposes_horizon_governance_rollup():
     frame = _compare_frame().assign(
         var_hist_a95_h5=[11] * 10,

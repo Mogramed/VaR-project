@@ -557,15 +557,18 @@ def _surface_horizon_observation_floor(horizon_days: int | None) -> int:
         return int(VALIDATION_SURFACE_MIN_OBSERVATIONS)
 
     ordered_horizons = sorted(floor_map.keys())
+    max_key = ordered_horizons[-1]
+    if resolved_horizon > max_key:
+        max_floor = int(floor_map[max_key])
+        # For longer horizons, increase the minimum linearly by +20 obs every extra 5 days.
+        extra_steps = int(math.ceil((resolved_horizon - max_key) / 5.0))
+        return int(max(int(VALIDATION_SURFACE_MIN_OBSERVATIONS), max_floor + extra_steps * 20))
+
     for key in reversed(ordered_horizons):
         if resolved_horizon >= key:
             return int(max(int(VALIDATION_SURFACE_MIN_OBSERVATIONS), floor_map[key]))
 
-    max_key = ordered_horizons[-1]
-    max_floor = int(floor_map[max_key])
-    # For longer horizons, increase the minimum linearly by +20 obs every extra 5 days.
-    extra_steps = int(math.ceil(max((resolved_horizon - max_key), 0) / 5.0))
-    return int(max(int(VALIDATION_SURFACE_MIN_OBSERVATIONS), max_floor + extra_steps * 20))
+    return int(VALIDATION_SURFACE_MIN_OBSERVATIONS)
 
 
 def _surface_min_required_observations(
