@@ -3,6 +3,7 @@
 import { startTransition, useEffect, useState } from "react";
 
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
+import { DashboardActiveFilters } from "@/components/app-shell/dashboard-active-filters";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { deriveLiveRuntimeDiagnostics } from "@/components/app-shell/live-runtime-phase";
 import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
@@ -21,6 +22,7 @@ import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
 import { CHART_PALETTE } from "@/lib/chart-options";
+import { useDashboardPrefs } from "@/lib/dashboard-preferences-context";
 import { formatCurrency, formatPercent, formatTimestamp, formatTimestampWithSource } from "@/lib/utils";
 
 type AnalyticsPoint = {
@@ -116,14 +118,56 @@ function coerceNumber(value: unknown): number | null {
   return null;
 }
 
+const ANALYTICS_WINDOW_MS = 240 * 60 * 1_000; // 4 hours
+const ANALYTICS_MAX_ACCUMULATED = 480;
+
+function mergeAnalyticsPoints(
+  existing: AnalyticsPoint[],
+  incoming: AnalyticsPoint[],
+): AnalyticsPoint[] {
+  const byTimestamp = new Map<string, AnalyticsPoint>();
+  for (const point of existing) {
+    byTimestamp.set(point.timestamp, point);
+  }
+  for (const point of incoming) {
+    byTimestamp.set(point.timestamp, point);
+  }
+  const cutoff = new Date(Date.now() - ANALYTICS_WINDOW_MS).toISOString();
+  const merged = [...byTimestamp.values()]
+    .filter((point) => point.timestamp >= cutoff)
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  if (merged.length > ANALYTICS_MAX_ACCUMULATED) {
+    return merged.slice(merged.length - ANALYTICS_MAX_ACCUMULATED);
+  }
+  return merged;
+}
+
 export function Mt5LiveOpsFeed() {
   const { liveState, heartbeatAt, transport, accountId } = useDeskLive();
+  const { matchesSymbol } = useDashboardPrefs();
   const ls = liveState;
   const [analyticsPoints, setAnalyticsPoints] = useState<AnalyticsPoint[]>([]);
   const analyticsRefreshMs = Math.max(
     1_000,
     Math.round((Number(ls?.poll_interval_seconds ?? 1) || 1) * 1_000),
   );
+
+  // Accumulate a live point from each liveState update so the chart
+  // grows over time even when the backend returns only 1 snapshot point.
+  useEffect(() => {
+    if (!ls?.account) return;
+    const livePoint: AnalyticsPoint = {
+      timestamp: ls.account.timestamp_utc ?? ls.generated_at,
+      balance: ls.account.balance,
+      equity: ls.account.equity,
+      margin_free: ls.account.margin_free,
+      margin_level: ls.account.margin_level,
+      profit: ls.account.profit,
+      avg_spread_bps: coerceNumber(ls.microstructure?.avg_spread_bps),
+      tick_age_seconds: null,
+    };
+    setAnalyticsPoints((prev) => mergeAnalyticsPoints(prev, [livePoint]));
+  }, [ls?.account, ls?.generated_at, ls?.microstructure?.avg_spread_bps]);
 
   useEffect(() => {
     const activePortfolioSlug = ls?.portfolio_slug ?? undefined;
@@ -139,8 +183,9 @@ export function Mt5LiveOpsFeed() {
           accountId,
         });
         if (!cancelled) {
+          const incoming = Array.isArray(payload.points) ? payload.points : [];
           startTransition(() => {
-            setAnalyticsPoints(Array.isArray(payload.points) ? payload.points : []);
+            setAnalyticsPoints((prev) => mergeAnalyticsPoints(prev, incoming));
           });
         }
       } catch {
@@ -173,10 +218,16 @@ export function Mt5LiveOpsFeed() {
   }
 
   const reconciliation = ls.reconciliation;
-  const holdings = ls.holdings ?? [];
-  const pendingOrders = ls.pending_orders ?? [];
-  const orderHistory = ls.order_history ?? [];
-  const dealHistory = ls.deal_history ?? [];
+  const holdings = (ls.holdings ?? []).filter((row) => matchesSymbol(row.symbol));
+  const pendingOrders = (ls.pending_orders ?? []).filter((row) => matchesSymbol(row.symbol));
+  const orderHistory = (ls.order_history ?? []).filter((row) => matchesSymbol(row.symbol));
+  const dealHistory = (ls.deal_history ?? []).filter((row) => matchesSymbol(row.symbol));
+  const reconciliationRows = (reconciliation?.mismatches ?? []).filter((row) =>
+    matchesSymbol(row.symbol),
+  );
+  const executionRows = (reconciliation?.recent_execution_attempts ?? []).filter((row) =>
+    matchesSymbol(row.symbol),
+  );
   const pollIntervalSeconds = Number(ls.poll_interval_seconds);
   const pollHint = Number.isFinite(pollIntervalSeconds) && pollIntervalSeconds > 0
     ? `Poll ${pollIntervalSeconds.toFixed(1)}s`
@@ -253,7 +304,6 @@ export function Mt5LiveOpsFeed() {
       tick_age_seconds: null,
     }
     : null;
-
   const seriesPoints = analyticsPoints.length > 0
     ? analyticsPoints
     : (fallbackPoint ? [fallbackPoint] : []);
@@ -312,6 +362,7 @@ export function Mt5LiveOpsFeed() {
           />
         )}
       />
+      <DashboardActiveFilters showHorizon={false} showModel={false} />
       <LivePostureBanner liveState={ls} transport={transport} />
       {reconciliation?.market_closed ? (
         <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-[11px] text-[var(--color-text-soft)]">
@@ -456,7 +507,7 @@ export function Mt5LiveOpsFeed() {
 
       <div className="space-y-2">
         <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Reconciliation</h4>
-        <ReconciliationTable rows={reconciliation?.mismatches ?? []} />
+        <ReconciliationTable rows={reconciliationRows} />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
@@ -472,7 +523,7 @@ export function Mt5LiveOpsFeed() {
 
       <div className="space-y-2">
         <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Execution trail</h4>
-        <ExecutionHistoryTable rows={reconciliation?.recent_execution_attempts ?? []} />
+        <ExecutionHistoryTable rows={executionRows} />
       </div>
     </div>
   );

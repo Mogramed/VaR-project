@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
+import { DashboardActiveFilters } from "@/components/app-shell/dashboard-active-filters";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
 import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
@@ -17,6 +18,7 @@ import {
   deskArtifactQueryKey,
   deskArtifactQueryOptions,
 } from "@/components/app-shell/desk-artifact-query";
+import { useDashboardPrefs } from "@/lib/dashboard-preferences-context";
 import { preferredHeadlineRisk } from "@/lib/risk-surface";
 import { formatCurrency, formatPercent, formatTimestamp, joinLabelParts } from "@/lib/utils";
 import { buildBacktestSeries, buildModelScoreSeries } from "@/lib/view-models";
@@ -51,6 +53,7 @@ export function ModelsLiveSurface({
   initialFrame: BacktestFrameResponse | null;
 }) {
   const { liveState, transport } = useDeskLive();
+  const { preferredHorizonDays, resolvePreferredModel } = useDashboardPrefs();
   const comparisonQuery = useQuery({
     queryKey: deskArtifactQueryKey("models", "comparison", portfolioSlug),
     queryFn: () => api.latestModelComparison(portfolioSlug),
@@ -76,9 +79,10 @@ export function ModelsLiveSurface({
   const ranking = comparison?.ranking ?? [];
   const backtestSeries = frame ? buildBacktestSeries(frame) : [];
   const scoreSeries = comparison ? buildModelScoreSeries(comparison) : [];
-  const selectedModel = liveState?.risk_summary?.reference_model ?? comparison?.champion_model ?? validation?.best_model ?? "hist";
-  const liveRisk95 = preferredHeadlineRisk(liveState?.risk_summary?.headline_risk, ["live_1d_95"]);
-  const liveRisk99 = preferredHeadlineRisk(liveState?.risk_summary?.headline_risk, ["live_1d_99"]);
+  const fallbackSelectedModel = liveState?.risk_summary?.reference_model ?? comparison?.champion_model ?? validation?.best_model ?? "hist";
+  const selectedModel = resolvePreferredModel(fallbackSelectedModel) ?? fallbackSelectedModel;
+  const liveRisk95 = preferredHeadlineRisk(liveState?.risk_summary?.headline_risk, [`live_${preferredHorizonDays}d_95`, "live_1d_95"]);
+  const liveRisk99 = preferredHeadlineRisk(liveState?.risk_summary?.headline_risk, [`live_${preferredHorizonDays}d_99`, "live_1d_99"]);
   const liveCapital = liveState?.capital_usage ?? null;
   const validationSurface = (comparison?.validation_surface ?? null) as {
     points?: unknown[];
@@ -186,6 +190,7 @@ export function ModelsLiveSurface({
           <LiveRuntimeBadgeGroup liveState={liveState} transport={transport} showBridge={false} />
         </>}
       />
+      <DashboardActiveFilters showSymbol={false} />
       <LivePostureBanner liveState={liveState} transport={transport} />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-8">
@@ -257,7 +262,7 @@ export function ModelsLiveSurface({
           }
         />
         <MetricBlock
-          label="Live VaR / ES"
+          label={`Live VaR / ES (${preferredHorizonDays}d)`}
           value={liveRisk95 == null ? "n/a" : formatCurrency(liveRisk95.var)}
           hint={liveRisk99 ? `99% ES ${formatCurrency(liveRisk99.es)}` : liveState?.risk_summary?.latest_observation ? formatTimestamp(liveState.risk_summary.latest_observation) : undefined}
           tone="warning"
@@ -371,7 +376,7 @@ export function ModelsLiveSurface({
                       <span className="mono text-[var(--color-text-soft)]">
                         {row.passCount}/{row.totalPoints}
                         {row.passRate == null ? "" : ` ${formatPercent(row.passRate, 0)}`}
-                        {row.confidenceScore == null ? "" : ` • ${row.confidenceLevel} ${row.confidenceScore.toFixed(0)}/100`}
+                        {row.confidenceScore == null ? "" : ` | ${row.confidenceLevel} ${row.confidenceScore.toFixed(0)}/100`}
                       </span>
                       <StatusBadge label={row.verdict} tone={verdictTone(row.verdict)} />
                     </div>

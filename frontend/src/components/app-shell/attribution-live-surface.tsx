@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
+import { DashboardActiveFilters } from "@/components/app-shell/dashboard-active-filters";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
 import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
@@ -17,6 +18,7 @@ import {
   deskArtifactQueryKey,
   deskArtifactQueryOptions,
 } from "@/components/app-shell/desk-artifact-query";
+import { useDashboardPrefs } from "@/lib/dashboard-preferences-context";
 import { formatCurrency, formatTimestamp } from "@/lib/utils";
 import { flattenAttribution } from "@/lib/view-models";
 
@@ -32,6 +34,7 @@ export function AttributionLiveSurface({
   initialComparison: ModelComparisonResponse | null;
 }) {
   const { liveState, transport, accountId } = useDeskLive();
+  const { matchesSymbol, resolvePreferredModel } = useDashboardPrefs();
   const attributionSource = preferredSource(liveState);
   const attributionQuery = useQuery({
     queryKey: deskArtifactQueryKey("attribution", portfolioSlug, attributionSource),
@@ -48,8 +51,9 @@ export function AttributionLiveSurface({
   const attribution = attributionQuery.data ?? initialAttribution;
   const comparison = comparisonQuery.data ?? initialComparison;
 
-  const selectedModel = preferredModel ?? liveState?.risk_budget?.preferred_model ?? liveState?.risk_summary?.reference_model ?? comparison?.champion_model ?? (attribution ? Object.keys(attribution.models)[0] : undefined) ?? "hist";
-  const rows = attribution ? flattenAttribution(attribution, selectedModel) : [];
+  const fallbackModel = preferredModel ?? liveState?.risk_budget?.preferred_model ?? liveState?.risk_summary?.reference_model ?? comparison?.champion_model ?? (attribution ? Object.keys(attribution.models)[0] : undefined) ?? "hist";
+  const selectedModel = resolvePreferredModel(fallbackModel) ?? fallbackModel;
+  const rows = (attribution ? flattenAttribution(attribution, selectedModel) : []).filter((row) => matchesSymbol(row.symbol));
   const primaryContributor = rows[0];
   const diversifier = rows.slice().sort((a, b) => a.componentVar - b.componentVar).find((r) => r.componentVar < 0) ?? null;
 
@@ -62,6 +66,7 @@ export function AttributionLiveSurface({
           <LiveRuntimeBadgeGroup liveState={liveState} transport={transport} showBridge={false} />
         </>}
       />
+      <DashboardActiveFilters showHorizon={false} />
       <LivePostureBanner liveState={liveState} transport={transport} />
 
       {/* Model selector */}

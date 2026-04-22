@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
 import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
 import { PageHeader } from "@/components/app-shell/page-header";
+import { DashboardActiveFilters } from "@/components/app-shell/dashboard-active-filters";
 import {
   deskArtifactQueryKey,
   deskArtifactQueryOptions,
@@ -23,6 +24,7 @@ import type {
 import { buildInstrumentClassCounts } from "@/lib/view-models";
 import { formatTimestamp } from "@/lib/utils";
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
+import { useDashboardPrefs } from "@/lib/dashboard-preferences-context";
 
 export function UniverseLiveSurface({
   portfolioSlug,
@@ -36,6 +38,7 @@ export function UniverseLiveSurface({
   initialMt5Status: MT5TerminalStatusResponse | null;
 }) {
   const { liveState, transport, accountId } = useDeskLive();
+  const { matchesSymbol } = useDashboardPrefs();
   const instrumentsQuery = useQuery({
     queryKey: deskArtifactQueryKey("universe", "instruments", portfolioSlug),
     queryFn: () => api.instruments(portfolioSlug),
@@ -55,14 +58,14 @@ export function UniverseLiveSurface({
     ...deskArtifactQueryOptions,
   });
 
-  const instruments = instrumentsQuery.data ?? initialInstruments;
+  const instruments = (instrumentsQuery.data ?? initialInstruments).filter((row) => matchesSymbol(row.symbol));
   const marketStatus = marketStatusQuery.data ?? initialMarketStatus;
   const mt5Status = mt5StatusQuery.data ?? initialMt5Status;
 
   const classCounts = buildInstrumentClassCounts(instruments);
-  const missingSymbols = marketStatus?.missing_symbols ?? [];
-  const missingBars = marketStatus?.missing_bars ?? [];
-  const trackedSymbols = marketStatus?.symbols ?? [];
+  const missingSymbols = (marketStatus?.missing_symbols ?? []).filter((symbol) => matchesSymbol(symbol));
+  const missingBars = (marketStatus?.missing_bars ?? []).filter((symbol) => matchesSymbol(symbol));
+  const trackedSymbols = (marketStatus?.symbols ?? []).filter((symbol) => matchesSymbol(symbol));
   const syncedSymbols = instruments.length - missingSymbols.length;
   const retentionTiers = marketStatus?.retention_tiers ?? {};
   const tickArchive = marketStatus?.tick_archive ?? null;
@@ -92,6 +95,7 @@ export function UniverseLiveSurface({
           </>
         )}
       />
+      <DashboardActiveFilters showHorizon={false} showModel={false} />
       <LivePostureBanner liveState={liveState} transport={transport} />
 
       <section className="grid gap-4 xl:grid-cols-6">

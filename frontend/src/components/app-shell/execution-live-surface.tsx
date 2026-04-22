@@ -1,6 +1,7 @@
 "use client";
 
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
+import { DashboardActiveFilters } from "@/components/app-shell/dashboard-active-filters";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
 import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
@@ -10,6 +11,7 @@ import { ExecutionPanel } from "@/components/forms/execution-panel";
 import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import type { ExecutionFillResponse, ExecutionResultResponse, MT5TerminalStatusResponse } from "@/lib/api/types";
+import { useDashboardPrefs } from "@/lib/dashboard-preferences-context";
 import { useRecentExecutionActivity } from "@/lib/use-recent-execution-activity";
 
 
@@ -25,6 +27,7 @@ export function ExecutionLiveSurface({
   initialSide?: "buy" | "sell";
 }) {
   const { liveState, transport, accountId } = useDeskLive();
+  const { matchesSymbol } = useDashboardPrefs();
   const { executions, fills, pushExecutionResult } = useRecentExecutionActivity({
     portfolioSlug,
     accountId,
@@ -34,9 +37,11 @@ export function ExecutionLiveSurface({
     executionLimit: 12,
     fillLimit: 12,
   });
+  const filteredExecutions = executions.filter((row) => matchesSymbol(row.symbol));
+  const filteredFills = fills.filter((row) => matchesSymbol(row.symbol));
   const status = liveState?.terminal_status ?? initialTerminalStatus;
-  const executedCount = executions.filter((i) => ["EXECUTED", "PLACED"].includes(i.status)).length;
-  const blockedCount = executions.filter((i) => ["BLOCKED", "REJECTED", "FAILED"].includes(i.status)).length;
+  const executedCount = filteredExecutions.filter((i) => ["EXECUTED", "PLACED"].includes(i.status)).length;
+  const blockedCount = filteredExecutions.filter((i) => ["BLOCKED", "REJECTED", "FAILED"].includes(i.status)).length;
 
   return (
     <div className="desk-page space-y-4">
@@ -46,6 +51,7 @@ export function ExecutionLiveSurface({
           <LiveRuntimeBadgeGroup liveState={liveState} transport={transport} showBridge={false} />
         </>}
       />
+      <DashboardActiveFilters showHorizon={false} showModel={false} />
       <LivePostureBanner liveState={liveState} transport={transport} />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -70,11 +76,11 @@ export function ExecutionLiveSurface({
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
         <div className="space-y-2">
           <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Execution attempts</h4>
-          <ExecutionHistoryTable rows={executions} />
+          <ExecutionHistoryTable rows={filteredExecutions} />
         </div>
         <div className="space-y-2">
           <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Recent fills</h4>
-          <ExecutionFillsTable rows={fills} />
+          <ExecutionFillsTable rows={filteredFills} />
         </div>
       </section>
     </div>
