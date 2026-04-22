@@ -16,6 +16,7 @@ import type {
   ExecutionFillResponse,
   ExecutionResultResponse,
   MT5TransactionHistoryResponse,
+  ReconciliationHistoryEntryResponse,
   ReconciliationSummaryResponse,
 } from "@/lib/api/types";
 import { buildIncidentTimeline } from "@/lib/incidents";
@@ -97,6 +98,8 @@ export function Mt5BlotterLiveSurface({
   const [historyState, setHistoryState] = useState<MT5TransactionHistoryResponse | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [reconciliationHistory, setReconciliationHistory] = useState<ReconciliationHistoryEntryResponse[]>([]);
+  const [reconciliationError, setReconciliationError] = useState<string | null>(null);
 
   useEffect(() => {
     setReconciliationState(liveState?.reconciliation ?? null);
@@ -149,13 +152,26 @@ export function Mt5BlotterLiveSurface({
   );
 
   const refreshReconciliation = useCallback(async () => {
-    const [summary, audit] = await Promise.all([
-      api.reconciliationSummary(portfolioSlug),
-      api.recentAudit(portfolioSlug, 120),
-    ]);
-    setReconciliationState(summary);
-    setAuditState(audit);
+    setReconciliationError(null);
+    try {
+      const [summary, audit, history] = await Promise.all([
+        api.reconciliationSummary(portfolioSlug),
+        api.recentAudit(portfolioSlug, 120),
+        api.reconciliationHistory({ portfolioSlug, limit: 20 }),
+      ]);
+      setReconciliationState(summary);
+      setAuditState(audit);
+      setReconciliationHistory(history);
+    } catch (error) {
+      setReconciliationError(
+        error instanceof Error ? error.message : "Unable to refresh reconciliation diagnostics.",
+      );
+    }
   }, [portfolioSlug]);
+
+  useEffect(() => {
+    void refreshReconciliation();
+  }, [refreshReconciliation]);
 
   const handleManage = useCallback((symbol: string) => {
     setSelectedSymbol(symbol);
@@ -313,6 +329,15 @@ export function Mt5BlotterLiveSurface({
             <span>
               Resolved incidents: {resolvedIncidentCount}
             </span>
+            <span>
+              Severity: {reconciliation.summary_severity ?? "ok"}
+            </span>
+            <span>
+              Critical: {reconciliation.critical_mismatch_count ?? 0}
+            </span>
+            <span>
+              Warning: {reconciliation.warning_mismatch_count ?? 0}
+            </span>
             {autoResolvedCount > 0 ? (
               <span>
                 Auto-resolved this cycle: {autoResolvedCount}
@@ -323,6 +348,58 @@ export function Mt5BlotterLiveSurface({
       ) : null}
 
       <div className="space-y-2">
+        {reconciliationError ? (
+          <FormError message={reconciliationError} />
+        ) : null}
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+              Reconciliation history
+            </h4>
+            <StatusBadge
+              label={reconciliation?.summary_severity ?? "unknown"}
+              tone={
+                (reconciliation?.summary_severity ?? "ok") === "critical"
+                  ? "danger"
+                  : (reconciliation?.summary_severity ?? "ok") === "warn"
+                    ? "warning"
+                    : "success"
+              }
+            />
+          </div>
+          <div className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)]/95 p-3 shadow-[var(--shadow-soft)]">
+            {reconciliationHistory.length > 0 ? (
+              <div className="space-y-2">
+                {reconciliationHistory.slice(0, 6).map((entry) => (
+                  <div key={`${entry.id ?? "history"}:${entry.created_at ?? "ts"}`} className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StatusBadge
+                        label={entry.summary_severity}
+                        tone={entry.summary_severity === "critical" ? "danger" : entry.summary_severity === "warn" ? "warning" : "success"}
+                      />
+                      <span className="text-[12px] font-medium text-[var(--color-text)]">
+                        {entry.critical_mismatch_count ?? 0} critical | {entry.warning_mismatch_count ?? 0} warning
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-[var(--color-text-muted)]">
+                      {formatTimestamp(entry.created_at)} | unmatched executions: {entry.unmatched_execution_count ?? 0}
+                    </div>
+                    {entry.top_symbols?.length ? (
+                      <div className="mt-1 text-[11px] text-[var(--color-text-soft)]">
+                        Top symbols: {entry.top_symbols.join(", ")}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[12px] text-[var(--color-text-soft)]">
+                Reconciliation history will appear after the first divergence snapshots are recorded.
+              </p>
+            )}
+          </div>
+        </div>
+
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
             MT5 transaction history (read-only)

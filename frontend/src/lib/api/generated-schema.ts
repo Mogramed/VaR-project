@@ -770,6 +770,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/reconciliation/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reconciliation History */
+        get: operations["mt5_reconciliation_history"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/alerts": {
         parameters: {
             query?: never;
@@ -3003,6 +3020,64 @@ export interface components {
             /** Updated At */
             updated_at?: string | null;
         };
+        /** ReconciliationHistoryEntryResponse */
+        ReconciliationHistoryEntryResponse: {
+            /** Id */
+            id?: number | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Portfolio Slug */
+            portfolio_slug?: string | null;
+            /**
+             * Summary Severity
+             * @default ok
+             */
+            summary_severity: string;
+            /**
+             * Active Incident Count
+             * @default 0
+             */
+            active_incident_count: number;
+            /**
+             * Resolved Incident Count
+             * @default 0
+             */
+            resolved_incident_count: number;
+            /**
+             * Critical Mismatch Count
+             * @default 0
+             */
+            critical_mismatch_count: number;
+            /**
+             * Warning Mismatch Count
+             * @default 0
+             */
+            warning_mismatch_count: number;
+            /**
+             * Unmatched Execution Count
+             * @default 0
+             */
+            unmatched_execution_count: number;
+            /**
+             * History Window Expired Execution Count
+             * @default 0
+             */
+            history_window_expired_execution_count: number;
+            /** Diagnostic Code */
+            diagnostic_code?: string | null;
+            /** Top Symbols */
+            top_symbols?: string[];
+            /** Status Counts */
+            status_counts?: {
+                [key: string]: number;
+            };
+            /** Severity Counts */
+            severity_counts?: {
+                [key: string]: number;
+            };
+            /** Source */
+            source?: string | null;
+        };
         /** ReconciliationIncidentResponse */
         ReconciliationIncidentResponse: {
             /** Id */
@@ -3040,10 +3115,30 @@ export interface components {
             live_exposure_eur: number;
             /** Difference Eur */
             difference_eur: number;
+            /** Exposure Difference Abs Eur */
+            exposure_difference_abs_eur?: number | null;
+            /** Exposure Difference Relative */
+            exposure_difference_relative?: number | null;
             /** Desk Volume Lots */
             desk_volume_lots?: number | null;
             /** Live Volume Lots */
             live_volume_lots?: number | null;
+            /** Volume Difference Lots */
+            volume_difference_lots?: number | null;
+            /** Volume Difference Abs Lots */
+            volume_difference_abs_lots?: number | null;
+            /** Volume Difference Relative */
+            volume_difference_relative?: number | null;
+            /** Desk Pnl Eur */
+            desk_pnl_eur?: number | null;
+            /** Live Pnl Eur */
+            live_pnl_eur?: number | null;
+            /** Pnl Difference Eur */
+            pnl_difference_eur?: number | null;
+            /** Pnl Difference Abs Eur */
+            pnl_difference_abs_eur?: number | null;
+            /** Pnl Difference Relative */
+            pnl_difference_relative?: number | null;
             /** Order Ticket */
             order_ticket?: number | null;
             /** Deal Ticket */
@@ -3054,6 +3149,10 @@ export interface components {
             reason?: string | null;
             /** Status */
             status: string;
+            /** Severity */
+            severity?: string | null;
+            /** Probable Cause */
+            probable_cause?: string | null;
             /**
              * Acknowledged
              * @default false
@@ -3145,6 +3244,25 @@ export interface components {
              * @default 0
              */
             autoresolved_count: number;
+            /**
+             * Summary Severity
+             * @default ok
+             */
+            summary_severity: string;
+            /**
+             * Critical Mismatch Count
+             * @default 0
+             */
+            critical_mismatch_count: number;
+            /**
+             * Warning Mismatch Count
+             * @default 0
+             */
+            warning_mismatch_count: number;
+            /** Severity Counts */
+            severity_counts?: {
+                [key: string]: number;
+            };
             /** Bridge Connected */
             bridge_connected?: boolean | null;
             /** Live Base Ready */
@@ -5250,6 +5368,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReconciliationSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mt5_reconciliation_history: {
+        parameters: {
+            query?: {
+                portfolio_slug?: string | null;
+                severity?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationHistoryEntryResponse"][];
                 };
             };
             /** @description Validation Error */

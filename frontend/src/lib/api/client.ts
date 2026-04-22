@@ -31,6 +31,7 @@ import type {
   OrderHistoryEntryResponse,
   PortfolioExposureResponse,
   PortfolioSummary,
+  ReconciliationHistoryEntryResponse,
   ReconciliationSummaryResponse,
   ReconciliationAcknowledgementResponse,
   ReportContentResponse,
@@ -625,6 +626,18 @@ export const api = {
   reconciliationSummary: (portfolioSlug?: string) =>
     request<ReconciliationSummaryResponse>("/reconciliation/summary", {
       query: { portfolio_slug: portfolioSlug },
+    }),
+  reconciliationHistory: (options?: {
+    portfolioSlug?: string;
+    severity?: "ok" | "warn" | "critical";
+    limit?: number;
+  }) =>
+    request<ReconciliationHistoryEntryResponse[]>("/reconciliation/history", {
+      query: {
+        portfolio_slug: options?.portfolioSlug,
+        severity: options?.severity,
+        limit: options?.limit,
+      },
     }),
   liveHoldings: (portfolioSlug?: string) =>
     request<HoldingSnapshotResponse[]>("/portfolio/live-holdings", {

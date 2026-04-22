@@ -28,6 +28,7 @@ from var_project.api.schemas import (
     MT5TerminalStatusResponse,
     OrderHistoryEntryResponse,
     PortfolioExposureResponse,
+    ReconciliationHistoryEntryResponse,
     ReconciliationSummaryResponse,
 )
 from var_project.api.service import DeskApiService
@@ -730,3 +731,21 @@ def reconciliation_summary(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ReconciliationSummaryResponse.model_validate(payload)
+
+
+@router.get("/reconciliation/history", response_model=list[ReconciliationHistoryEntryResponse])
+def reconciliation_history(
+    portfolio_slug: str | None = Query(default=None),
+    severity: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    service: DeskApiService = Depends(get_service),
+) -> list[ReconciliationHistoryEntryResponse]:
+    try:
+        payload = service.reconciliation_history(
+            portfolio_slug=portfolio_slug,
+            severity=severity,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return [ReconciliationHistoryEntryResponse.model_validate(item) for item in payload]

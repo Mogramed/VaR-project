@@ -538,6 +538,7 @@ class DeskApiService:
                 or "VALIDATION_ES_BREACH_RATE_BREACH" in normalized
                 or "BROKER_REJECTION" in normalized
                 or "DESK_BROKER_DRIFT" in normalized
+                or "PNL_DRIFT" in normalized
                 or "ORPHAN_LIVE_POSITION" in normalized
                 or "OVERFILL_OR_VOLUME_DRIFT" in normalized
             ):
@@ -2419,6 +2420,19 @@ class DeskApiService:
                 portfolio_slug=portfolio_slug,
             )
         return self.market.reconciliation_summary(portfolio_slug=portfolio_slug)
+
+    def reconciliation_history(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        severity: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        return self.market.reconciliation_history(
+            portfolio_slug=portfolio_slug,
+            severity=severity,
+            limit=limit,
+        )
 
     @staticmethod
     def _normalize_trade_exposure_change(

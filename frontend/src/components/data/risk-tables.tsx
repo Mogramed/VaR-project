@@ -201,6 +201,8 @@ export function ReconciliationTable({
     { accessorKey: "live_exposure_eur", header: "Live", cell: ({ row }) => <span className="mono text-[var(--color-text)]">{formatCurrency(row.original.live_exposure_eur)}</span> },
     { accessorKey: "difference_eur", header: "Drift", cell: ({ row }) => <span className="mono">{formatCurrency(row.original.difference_eur)}</span> },
     { accessorKey: "status", header: "Status", cell: ({ row }) => <StatusBadge label={row.original.status} tone={tone(row.original.status)} /> },
+    { accessorKey: "severity", header: "Severity", cell: ({ row }) => <StatusBadge label={row.original.severity ?? "ok"} tone={tone(row.original.severity ?? "ok")} /> },
+    { accessorKey: "probable_cause", header: "Probable cause", cell: ({ row }) => <span className="text-[11px] text-[var(--color-text-soft)]">{humanize(row.original.probable_cause ?? "none")}</span> },
     { accessorKey: "incident_status", header: "Incident", cell: ({ row }) => row.original.incident_status ? <StatusBadge label={row.original.incident_status} tone={tone(row.original.incident_status)} /> : <StatusBadge label="new" tone="neutral" /> },
     ...(onManage ? [{
       id: "action", header: "Manage",
