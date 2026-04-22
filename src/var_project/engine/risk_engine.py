@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from math import isfinite
 from typing import Any, Dict, Iterable, Mapping, Sequence
 
 import numpy as np
@@ -140,6 +141,9 @@ class RiskDataQuality:
     latest_observation: str | None = None
     horizon_observations: Dict[str, int] = field(default_factory=dict)
     symbol_count: int = 0
+    gross_exposure_base_ccy: float | None = None
+    gross_exposure_epsilon_base_ccy: float | None = None
+    no_exposure_epsilon_by_symbol: Dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -151,6 +155,9 @@ class RiskDataQuality:
             "latest_observation": self.latest_observation,
             "horizon_observations": dict(self.horizon_observations),
             "symbol_count": self.symbol_count,
+            "gross_exposure_base_ccy": self.gross_exposure_base_ccy,
+            "gross_exposure_epsilon_base_ccy": self.gross_exposure_epsilon_base_ccy,
+            "no_exposure_epsilon_by_symbol": dict(self.no_exposure_epsilon_by_symbol),
         }
 
 
@@ -310,6 +317,8 @@ class RiskEngine:
         holdings_or_exposure: Mapping[str, Any] | Iterable[Mapping[str, Any] | PortfolioHolding],
         *,
         base_currency: str = "EUR",
+        no_exposure_epsilon_by_symbol: Mapping[str, Any] | None = None,
+        default_no_exposure_epsilon: float = 1.0,
     ):
         self.base_currency = str(base_currency).upper()
         self.holdings = normalize_holdings(holdings_or_exposure, base_currency=self.base_currency)
@@ -320,6 +329,59 @@ class RiskEngine:
             asset_class = str(holding.asset_class or "unknown").lower()
             if symbol not in self.asset_class_by_symbol:
                 self.asset_class_by_symbol[symbol] = asset_class
+        try:
+            default_epsilon = float(default_no_exposure_epsilon)
+        except (TypeError, ValueError):
+            default_epsilon = 1.0
+        if not isfinite(default_epsilon) or default_epsilon < 0.0:
+            default_epsilon = 1.0
+        self.default_no_exposure_epsilon = default_epsilon
+        raw_epsilons = {
+            str(symbol).upper(): value
+            for symbol, value in dict(no_exposure_epsilon_by_symbol or {}).items()
+            if symbol not in {None, ""}
+        }
+        normalized_epsilons: dict[str, float] = {}
+        for symbol in self.exposure_by_symbol:
+            key = str(symbol).upper()
+            raw_value = raw_epsilons.get(key)
+            try:
+                parsed = float(raw_value) if raw_value is not None else default_epsilon
+            except (TypeError, ValueError):
+                parsed = default_epsilon
+            if not isfinite(parsed) or parsed < 0.0:
+                parsed = default_epsilon
+            normalized_epsilons[key] = parsed
+        self.no_exposure_epsilon_by_symbol = normalized_epsilons
+
+    def _exposure_epsilon_for_symbol(self, symbol: str) -> float:
+        normalized_symbol = str(symbol).upper()
+        epsilon = float(self.no_exposure_epsilon_by_symbol.get(normalized_symbol, self.default_no_exposure_epsilon))
+        if not isfinite(epsilon) or epsilon < 0.0:
+            return 0.0
+        return epsilon
+
+    def _no_exposure_quality(
+        self,
+        *,
+        symbols: Sequence[str] | None = None,
+    ) -> tuple[bool, float, float, dict[str, float]]:
+        normalized_symbols = [str(symbol).upper() for symbol in (symbols or self.exposure_by_symbol.keys())]
+        if not normalized_symbols:
+            return True, 0.0, 0.0, {}
+        gross_exposure = 0.0
+        gross_epsilon = 0.0
+        epsilon_by_symbol: dict[str, float] = {}
+        no_exposure = True
+        for symbol in normalized_symbols:
+            exposure = abs(float(self.exposure_by_symbol.get(symbol, 0.0)))
+            epsilon = self._exposure_epsilon_for_symbol(symbol)
+            epsilon_by_symbol[symbol] = epsilon
+            gross_exposure += exposure
+            gross_epsilon += epsilon
+            if exposure > epsilon:
+                no_exposure = False
+        return no_exposure, float(gross_exposure), float(gross_epsilon), epsilon_by_symbol
 
     def portfolio_symbols(self, frame: pd.DataFrame) -> list[str]:
         return [c for c in frame.columns if c in self.exposure_by_symbol]
@@ -673,6 +735,8 @@ class RiskEngine:
         horizons_sorted = sorted({int(item) for item in horizons if int(item) > 0})
         points: list[RiskSurfacePoint] = []
         horizon_observations: dict[str, int] = {}
+        # Evaluate no-exposure on the full configured book, not only on aligned return columns.
+        no_exposure, gross_exposure, gross_exposure_epsilon, epsilon_by_symbol = self._no_exposure_quality()
 
         for horizon_days in horizons_sorted:
             aggregated_returns = self._aggregate_returns_for_horizon(returns, horizon_days)
@@ -681,10 +745,14 @@ class RiskEngine:
                 continue
             pnl = portfolio_pnl_from_returns(aggregated_returns, self.exposure_by_symbol)
             latest_observation = aggregated_returns.index[-1].isoformat()
-            status = self._history_status(
-                len(pnl),
-                minimum_valid_days=int(minimum_valid_days),
-                latest_observation=latest_observation,
+            status = (
+                "no_exposure"
+                if no_exposure
+                else self._history_status(
+                    len(pnl),
+                    minimum_valid_days=int(minimum_valid_days),
+                    latest_observation=latest_observation,
+                )
             )
             horizon_observations[f"h{horizon_days}"] = int(len(pnl))
 
@@ -715,12 +783,17 @@ class RiskEngine:
         oldest_observation = None if returns.empty else returns.index[0].isoformat()
         latest_observation = None if returns.empty else returns.index[-1].isoformat()
         available_observations = int(len(returns))
-        data_quality = RiskDataQuality(
-            status=self._history_status(
+        quality_status = (
+            "no_exposure"
+            if no_exposure
+            else self._history_status(
                 available_observations,
                 minimum_valid_days=int(minimum_valid_days),
                 latest_observation=latest_observation,
-            ),
+            )
+        )
+        data_quality = RiskDataQuality(
+            status=quality_status,
             estimation_window_days=int(estimation_window_days),
             minimum_valid_days=int(minimum_valid_days),
             available_observations=available_observations,
@@ -728,6 +801,9 @@ class RiskEngine:
             latest_observation=latest_observation,
             horizon_observations=horizon_observations,
             symbol_count=len(list(returns.columns)),
+            gross_exposure_base_ccy=float(gross_exposure),
+            gross_exposure_epsilon_base_ccy=float(gross_exposure_epsilon),
+            no_exposure_epsilon_by_symbol=epsilon_by_symbol,
         )
         order_index = {name: idx for idx, name in enumerate(ordered_model_names({point.model for point in points}))}
         ordered_points = sorted(

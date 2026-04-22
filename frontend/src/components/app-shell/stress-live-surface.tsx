@@ -26,6 +26,18 @@ function asNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function formatRiskQualityStatus(status: string | undefined): string {
+  if (!status) return "n/a";
+  return status.replaceAll("_", " ");
+}
+
+function riskQualityTone(status: string | undefined): "neutral" | "success" | "warning" | "accent" {
+  if (status === "healthy") return "success";
+  if (status === "thin_history") return "warning";
+  if (status === "no_exposure") return "accent";
+  return "neutral";
+}
+
 function selectAttributionModel(
   attribution: StressReportResponse["attribution"] | StressReportResponse["scenarios"][number]["attribution"] | null | undefined,
 ) {
@@ -198,7 +210,11 @@ function StressResults({ report }: { report: StressReportResponse }) {
   const live99Es = asNumber(live99?.es);
   const stressed99Es = asNumber(stressed99?.es);
   const historicalExtremes = report.historical_extremes ?? [];
-  const dataQuality = (report.risk_surface?.data_quality ?? null) as { status?: string; observation_count?: number } | null;
+  const dataQuality = (report.risk_surface?.data_quality ?? null) as {
+    status?: string;
+    available_observations?: number;
+  } | null;
+  const qualityStatus = typeof dataQuality?.status === "string" ? dataQuality.status : undefined;
   const worstScenario = useMemo(() => {
     if (report.scenarios.length === 0) return null;
     return report.scenarios.reduce((left, right) => {
@@ -255,9 +271,15 @@ function StressResults({ report }: { report: StressReportResponse }) {
         />
         <FormMetaTile
           label="Data quality"
-          value={dataQuality?.status ?? "n/a"}
-          hint={dataQuality?.observation_count != null ? `${dataQuality.observation_count} obs` : undefined}
-          tone={dataQuality?.status === "healthy" ? "success" : dataQuality?.status === "thin_history" ? "warning" : "neutral"}
+          value={formatRiskQualityStatus(qualityStatus)}
+          hint={
+            qualityStatus === "no_exposure"
+              ? "No active exposure above epsilon."
+              : dataQuality?.available_observations != null
+                ? `${dataQuality.available_observations} obs`
+                : undefined
+          }
+          tone={riskQualityTone(qualityStatus)}
         />
       </div>
 

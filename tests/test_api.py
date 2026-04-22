@@ -970,6 +970,49 @@ def test_risk_summary_fallback_tolerates_empty_data_quality_snapshot(tmp_path: P
     assert payload["data_quality"]["minimum_valid_days"] >= 20
 
 
+def test_risk_summary_fallback_marks_no_exposure_for_zero_book(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    service = DeskApiService(root, mt5_connector_factory=FailingMT5Connector, bootstrap_storage=True)
+    portfolio_id = service.runtime._resolve_portfolio_id("fx_eur_20k")
+
+    service.runtime.storage.record_snapshot(
+        {
+            "time_utc": "2026-04-04T09:00:00+00:00",
+            "source": "historical",
+            "alpha": 0.95,
+            "timeframe": "H1",
+            "days": 60,
+            "window": 20,
+            "sample_size": 12,
+            "exposure_by_symbol": {"EURUSD": 0.0, "USDJPY": 0.0},
+            "var": {"hist": 0.0},
+            "es": {"hist": 0.0},
+            "risk_surface": {},
+            "headline_risk": [],
+            "stress_surface": {},
+            "data_quality": {},
+            "model_diagnostics": {},
+            "risk_nowcast": {},
+            "microstructure": {},
+            "tick_quality": {},
+            "pnl_explain": {},
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+
+    def fail_live_state(*, portfolio_slug=None):
+        raise RuntimeError("bridge unavailable")
+
+    service.mt5.live_state = fail_live_state  # type: ignore[method-assign]
+    payload = service.risk_summary()
+
+    assert payload is not None
+    assert payload["data_quality"]["status"] == "no_exposure"
+    assert payload["data_quality"]["available_observations"] == 12
+
+
 def test_risk_summary_fallback_uses_snapshot_when_live_state_times_out(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

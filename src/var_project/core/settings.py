@@ -146,6 +146,23 @@ def get_risk_defaults(raw_cfg: Mapping[str, Any]) -> dict[str, Any]:
     garch = dict(risk.get("garch") or {})
     alphas = risk.get("alphas") or [risk.get("alpha", 0.95), 0.975, 0.99]
     horizons = risk.get("horizons") or [1, 5, 10]
+    epsilon_default_raw = risk.get("no_exposure_epsilon_eur")
+    try:
+        epsilon_default = (
+            1.0
+            if epsilon_default_raw in {None, "", "null"}
+            else max(float(epsilon_default_raw), 0.0)
+        )
+    except (TypeError, ValueError):
+        epsilon_default = 1.0
+    epsilon_by_symbol: dict[str, float] = {}
+    for symbol, raw_value in dict(risk.get("no_exposure_epsilon_by_symbol") or {}).items():
+        if symbol in {None, ""}:
+            continue
+        try:
+            epsilon_by_symbol[str(symbol).upper()] = max(float(raw_value), 0.0)
+        except (TypeError, ValueError):
+            continue
     return {
         "alpha": float(risk.get("alpha", 0.95)),
         "window": int(risk.get("window", 250)),
@@ -156,6 +173,8 @@ def get_risk_defaults(raw_cfg: Mapping[str, Any]) -> dict[str, Any]:
         "validation_window_days": int(risk.get("validation_window_days", max(int(risk.get("window", 250)), 500))),
         "ewma_lambda": float(ewma.get("lambda", 0.94)),
         "fhs_lambda": float(fhs.get("lambda", 0.94)),
+        "no_exposure_epsilon_eur": float(epsilon_default),
+        "no_exposure_epsilon_by_symbol": epsilon_by_symbol,
         "mc": {
             "n_sims": int(mc.get("n_sims", 20_000)),
             "dist": str(mc.get("dist", "normal")),

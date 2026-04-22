@@ -116,8 +116,57 @@ def test_risk_surface_exposes_multi_horizon_metrics_and_quality():
 
     payload = surface.to_dict()
     assert payload["headline"]
-    assert payload["data_quality"]["status"] in {"healthy", "thin_history", "stale", "incomplete"}
+    assert payload["data_quality"]["status"] in {"healthy", "thin_history", "stale", "incomplete", "no_exposure"}
     assert any(point["alpha"] == 0.99 and point["horizon_days"] == 10 for point in payload["points"])
+
+
+def test_risk_surface_marks_no_exposure_when_book_is_under_epsilon():
+    engine = RiskEngine(
+        {"EURUSD": 0.4, "USDJPY": -0.3},
+        no_exposure_epsilon_by_symbol={"EURUSD": 1.0, "USDJPY": 1.0},
+        default_no_exposure_epsilon=1.0,
+    )
+    surface = engine.build_risk_surface(
+        _sample_returns(220),
+        RiskModelConfig(alpha=0.95),
+        alphas=[0.95],
+        horizons=[1, 5],
+        estimation_window_days=120,
+        minimum_valid_days=60,
+        reference_model="hist",
+    )
+
+    payload = surface.to_dict()
+    assert payload["data_quality"]["status"] == "no_exposure"
+    assert payload["data_quality"]["gross_exposure_base_ccy"] == pytest.approx(0.7)
+    assert payload["data_quality"]["gross_exposure_epsilon_base_ccy"] == pytest.approx(2.0)
+    assert payload["data_quality"]["no_exposure_epsilon_by_symbol"] == {"EURUSD": 1.0, "USDJPY": 1.0}
+    assert payload["points"]
+    assert all(point["status"] == "no_exposure" for point in payload["points"])
+
+
+def test_risk_surface_keeps_non_no_exposure_when_history_misses_a_symbol():
+    engine = RiskEngine(
+        {"EURUSD": 1_200.0, "USDJPY": 800.0},
+        no_exposure_epsilon_by_symbol={"EURUSD": 1.0, "USDJPY": 1.0},
+        default_no_exposure_epsilon=1.0,
+    )
+    returns = _sample_returns(220)[["date", "EURUSD"]]
+    surface = engine.build_risk_surface(
+        returns,
+        RiskModelConfig(alpha=0.95),
+        alphas=[0.95],
+        horizons=[1, 5],
+        estimation_window_days=120,
+        minimum_valid_days=60,
+        reference_model="hist",
+    )
+
+    payload = surface.to_dict()
+    assert payload["data_quality"]["status"] != "no_exposure"
+    assert payload["data_quality"]["gross_exposure_base_ccy"] == pytest.approx(2_000.0)
+    assert payload["points"]
+    assert all(point["status"] != "no_exposure" for point in payload["points"])
 
 
 def test_backtest_adds_surface_columns_for_alpha_and_horizon():
