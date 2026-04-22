@@ -310,6 +310,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/risk/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Risk Model Diagnostics */
+        get: operations["analytics_risk_model_diagnostics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/risk/contributions": {
         parameters: {
             query?: never;
@@ -3665,6 +3682,41 @@ export interface components {
             headline_risk?: components["schemas"]["HeadlineRiskPointResponse"][];
             data_quality?: components["schemas"]["RiskDataQualityResponse"] | null;
         };
+        /** RiskModelDiagnosticsResponse */
+        RiskModelDiagnosticsResponse: {
+            /** Generated At */
+            generated_at?: string | null;
+            /** Portfolio Slug */
+            portfolio_slug: string;
+            /** Source */
+            source: string;
+            /** Reference Model */
+            reference_model?: string | null;
+            /** Data Quality Status */
+            data_quality_status?: string | null;
+            /**
+             * Coherence Alert Active
+             * @default false
+             */
+            coherence_alert_active: boolean;
+            /**
+             * Suspicious Equalities Count
+             * @default 0
+             */
+            suspicious_equalities_count: number;
+            /** Suspicious Equalities */
+            suspicious_equalities?: {
+                [key: string]: unknown;
+            }[];
+            /** Model Diagnostics */
+            model_diagnostics?: {
+                [key: string]: unknown;
+            };
+            /** Debug Rows */
+            debug_rows?: {
+                [key: string]: unknown;
+            }[];
+        };
         /** RiskSummaryConcentrationResponse */
         RiskSummaryConcentrationResponse: {
             /** Model */
@@ -4436,6 +4488,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LiveRiskSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    analytics_risk_model_diagnostics: {
+        parameters: {
+            query?: {
+                source?: string | null;
+                portfolio_slug?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiskModelDiagnosticsResponse"];
                 };
             };
             /** @description Validation Error */

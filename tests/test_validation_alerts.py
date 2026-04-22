@@ -776,6 +776,29 @@ def test_live_snapshot_alerts_flag_limit_breaches():
     assert "LIVE_ZONE_HIST_RED" in codes
 
 
+def test_live_snapshot_alerts_flag_suspicious_model_equalities():
+    snapshot = {
+        "var": {"hist": 210.0, "param": 210.0},
+        "es": {"hist": 260.0, "param": 260.0},
+        "model_diagnostics": {
+            "coherence_checks": {
+                "suspicious_equalities": [
+                    {
+                        "models": ["hist", "param"],
+                        "alpha": 0.99,
+                        "horizon_days": 1,
+                    }
+                ]
+            }
+        },
+    }
+
+    alerts = alerts_from_live_snapshot(snapshot, limits_cfg={})
+    codes = {alert.code for alert in alerts}
+
+    assert "VAR_MODEL_EQUALITY_SUSPECT" in codes
+
+
 def test_risk_budget_alerts_flag_model_and_position_pressure():
     budget = {
         "preferred_model": "hist",

@@ -10,6 +10,7 @@ from typing import Any, Literal, Mapping
 from var_project.alerts.engine import (
     alerts_from_capital_snapshot,
     alerts_from_execution_result,
+    alerts_from_live_snapshot,
     alerts_from_live_operator_state,
     alerts_from_risk_budget,
     alerts_from_validation_summary,
@@ -798,6 +799,17 @@ class DeskMt5Service:
             "alerts": [
                 *[alert.to_dict() for alert in alerts_from_risk_budget(risk_budget)],
                 *[alert.to_dict() for alert in alerts_from_capital_snapshot(capital_usage)],
+                *[
+                    alert.to_dict()
+                    for alert in alerts_from_live_snapshot(
+                        {
+                            "var": bundle["snapshot"].vars_dict(),
+                            "es": bundle["snapshot"].es_dict(),
+                            "model_diagnostics": dict(bundle["risk_surface"].get("model_diagnostics") or {}),
+                        },
+                        self.runtime.limits_config,
+                    )
+                ],
                 *validation_alerts,
             ],
         }

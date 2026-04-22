@@ -1122,6 +1122,94 @@ def test_risk_summary_fallback_uses_snapshot_when_live_state_times_out(
     assert elapsed < 0.45
 
 
+def test_risk_model_diagnostics_fallback_detects_suspicious_equalities(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    service = DeskApiService(root, mt5_connector_factory=FailingMT5Connector, bootstrap_storage=True)
+    portfolio_id = service.runtime._resolve_portfolio_id("fx_eur_20k")
+
+    service.runtime.storage.record_snapshot(
+        {
+            "time_utc": "2026-04-04T09:00:00+00:00",
+            "source": "historical",
+            "alpha": 0.99,
+            "timeframe": "H1",
+            "days": 60,
+            "window": 20,
+            "sample_size": 45,
+            "var": {"hist": 125.0, "param": 125.0},
+            "es": {"hist": 165.0, "param": 165.0},
+            "risk_surface": {},
+            "headline_risk": [],
+            "stress_surface": {},
+            "data_quality": {},
+            "model_diagnostics": {},
+            "risk_nowcast": {},
+            "microstructure": {},
+            "tick_quality": {},
+            "pnl_explain": {},
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+
+    def fail_live_state(*, portfolio_slug=None):  # noqa: ARG001
+        raise RuntimeError("bridge unavailable")
+
+    service.mt5.live_state = fail_live_state  # type: ignore[method-assign]
+    payload = service.risk_model_diagnostics(source="historical")
+
+    assert payload is not None
+    assert payload["source"] == "historical"
+    assert payload["coherence_alert_active"] is True
+    assert payload["suspicious_equalities_count"] == 1
+    suspicious = list(payload["suspicious_equalities"] or [])
+    assert suspicious
+    assert set(suspicious[0]["models"]) == {"hist", "param"}
+
+
+def test_risk_model_diagnostics_endpoint_returns_payload(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    service = DeskApiService(root, mt5_connector_factory=FailingMT5Connector, bootstrap_storage=True)
+    portfolio_id = service.runtime._resolve_portfolio_id("fx_eur_20k")
+
+    service.runtime.storage.record_snapshot(
+        {
+            "time_utc": "2026-04-04T09:00:00+00:00",
+            "source": "historical",
+            "alpha": 0.99,
+            "timeframe": "H1",
+            "days": 60,
+            "window": 20,
+            "sample_size": 45,
+            "var": {"hist": 125.0, "param": 125.0},
+            "es": {"hist": 165.0, "param": 165.0},
+            "risk_surface": {},
+            "headline_risk": [],
+            "stress_surface": {},
+            "data_quality": {},
+            "model_diagnostics": {},
+            "risk_nowcast": {},
+            "microstructure": {},
+            "tick_quality": {},
+            "pnl_explain": {},
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=FailingMT5Connector, bootstrap_storage=True))
+    response = client.get("/risk/diagnostics", params={"source": "historical"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["portfolio_slug"] == "fx_eur_20k"
+    assert body["source"] == "historical"
+    assert body["coherence_alert_active"] is True
+    assert body["suspicious_equalities_count"] == 1
+    assert body["model_diagnostics"]["coherence_checks"]["suspicious_equalities_count"] == 1
+
+
 def test_latest_capital_fallback_when_live_state_times_out(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1643,6 +1731,13 @@ def test_live_state_backfills_market_data_without_manual_sync(tmp_path: Path):
     assert risk_summary_body["risk_nowcast"]["live_1d_99"]["nowcast_var"] is not None
     assert risk_summary_body["concentration"] is not None
     assert risk_summary_body["concentration"]["var"]["top3_share"] is not None
+
+    diagnostics = client.get("/risk/diagnostics")
+    assert diagnostics.status_code == 200
+    diagnostics_body = diagnostics.json()
+    assert diagnostics_body["portfolio_slug"] == "fx_eur_20k"
+    assert isinstance(diagnostics_body["debug_rows"], list)
+    assert "coherence_checks" in diagnostics_body["model_diagnostics"]
 
     risk_contributions = client.get("/risk/contributions")
     assert risk_contributions.status_code == 200

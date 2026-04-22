@@ -689,16 +689,52 @@ class RiskEngine:
         return headline
 
     @staticmethod
-    def _diagnostics_from_points(points: Sequence[RiskSurfacePoint]) -> dict[str, Any]:
+    def _close_numeric(
+        left: float,
+        right: float,
+        *,
+        abs_tol: float = 1e-8,
+        rel_tol: float = 1e-7,
+    ) -> bool:
+        scale = max(abs(float(left)), abs(float(right)), 1.0)
+        return abs(float(left) - float(right)) <= max(float(abs_tol), float(rel_tol) * scale)
+
+    @classmethod
+    def _diagnostics_from_points(
+        cls,
+        points: Sequence[RiskSurfacePoint],
+        *,
+        config: RiskModelConfig,
+        exposure_by_symbol: Mapping[str, float] | None = None,
+        sample_size: int | None = None,
+        data_quality_status: str | None = None,
+        no_exposure: bool = False,
+    ) -> dict[str, Any]:
         diagnostics: dict[str, Any] = {}
         grouped: dict[str, list[RiskSurfacePoint]] = {}
+        grouped_by_surface: dict[tuple[float, int], list[RiskSurfacePoint]] = {}
+        debug_rows: list[dict[str, Any]] = []
         for point in points:
             if point.is_stressed:
                 continue
             grouped.setdefault(point.model, []).append(point)
+            grouped_by_surface.setdefault((round(float(point.alpha), 6), int(point.horizon_days)), []).append(point)
+            debug_rows.append(
+                {
+                    "model": str(point.model),
+                    "alpha": float(point.alpha),
+                    "horizon_days": int(point.horizon_days),
+                    "var": float(point.var),
+                    "es": float(point.es),
+                    "status": str(point.status),
+                    "observation_count": int(point.observation_count),
+                    "latest_observation": point.latest_observation,
+                }
+            )
         for model, model_points in grouped.items():
             vars_values = [float(point.var) for point in model_points]
             es_values = [float(point.es) for point in model_points]
+            min_var = float(np.min(vars_values)) if vars_values else 0.0
             diagnostics[model] = {
                 "role": "primary" if model in {"hist", "fhs"} else "challenger",
                 "surface_points": len(model_points),
@@ -706,14 +742,125 @@ class RiskEngine:
                 "avg_es": float(np.mean(es_values)) if es_values else 0.0,
                 "max_var": float(np.max(vars_values)) if vars_values else 0.0,
                 "max_es": float(np.max(es_values)) if es_values else 0.0,
-                "min_var": float(np.min(vars_values)) if vars_values else 0.0,
+                "min_var": min_var,
                 "min_es": float(np.min(es_values)) if es_values else 0.0,
                 "stability_ratio": (
                     None
-                    if not vars_values or min(vars_values) <= 1e-9
-                    else float(max(vars_values) / min(vars_values))
+                    if not vars_values or min_var <= 1e-9
+                    else float(max(vars_values) / min_var)
                 ),
             }
+
+        suspicious_equalities: list[dict[str, Any]] = []
+        non_zero_floor = 1e-6
+        for (alpha, horizon_days), surface_points in grouped_by_surface.items():
+            if len(surface_points) < 2:
+                continue
+            ordered_surface_points = sorted(surface_points, key=lambda item: str(item.model))
+            for left_index in range(len(ordered_surface_points)):
+                left = ordered_surface_points[left_index]
+                for right in ordered_surface_points[left_index + 1 :]:
+                    max_abs_metric = max(abs(float(left.var)), abs(float(left.es)), abs(float(right.var)), abs(float(right.es)))
+                    if max_abs_metric <= non_zero_floor:
+                        continue
+                    var_equal = cls._close_numeric(float(left.var), float(right.var))
+                    es_equal = cls._close_numeric(float(left.es), float(right.es))
+                    if not (var_equal and es_equal):
+                        continue
+                    suspicious_equalities.append(
+                        {
+                            "models": [str(left.model), str(right.model)],
+                            "alpha": float(alpha),
+                            "horizon_days": int(horizon_days),
+                            "left_var": float(left.var),
+                            "right_var": float(right.var),
+                            "left_es": float(left.es),
+                            "right_es": float(right.es),
+                            "var_abs_diff": abs(float(left.var) - float(right.var)),
+                            "es_abs_diff": abs(float(left.es) - float(right.es)),
+                            "non_zero_floor": float(non_zero_floor),
+                            "status": str(left.status),
+                            "reason": "non_zero_equal_var_es",
+                        }
+                    )
+
+        model_inputs: dict[str, Any] = {}
+        for model_name in ordered_model_names(grouped.keys()):
+            assumptions: list[str]
+            parameters: dict[str, Any]
+            if model_name == "hist":
+                assumptions = ["empirical_quantile", "historical_losses"]
+                parameters = {}
+            elif model_name == "param":
+                assumptions = ["normal_losses"]
+                parameters = {}
+            elif model_name == "mc":
+                assumptions = ["simulation_based"]
+                parameters = {
+                    "n_sims": int(config.mc.n_sims),
+                    "dist": str(config.mc.dist),
+                    "df_t": int(config.mc.df_t),
+                    "seed": config.mc.seed,
+                }
+            elif model_name == "ewma":
+                assumptions = ["time_varying_volatility", "normal_losses"]
+                parameters = {"lambda": float(config.ewma_lambda)}
+            elif model_name == "garch":
+                assumptions = ["conditional_volatility"]
+                parameters = {
+                    "enabled": bool(config.garch.enabled),
+                    "p": int(config.garch.p),
+                    "q": int(config.garch.q),
+                    "dist": str(config.garch.dist),
+                    "mean": str(config.garch.mean),
+                }
+            elif model_name == "fhs":
+                assumptions = ["filtered_historical_simulation"]
+                parameters = {"lambda": float(config.fhs_lambda), "min_window": int(FHS_MIN_WINDOW)}
+            else:
+                assumptions = []
+                parameters = {}
+            model_points = grouped.get(model_name) or []
+            model_inputs[model_name] = {
+                "model": model_name,
+                "role": str(diagnostics.get(model_name, {}).get("role") or "challenger"),
+                "alphas": sorted({float(point.alpha) for point in model_points}),
+                "horizons": sorted({int(point.horizon_days) for point in model_points}),
+                "sample_size": None if sample_size is None else int(sample_size),
+                "surface_points": len(model_points),
+                "parameters": parameters,
+                "assumptions": assumptions,
+            }
+
+        shared_inputs = {
+            "sample_size": None if sample_size is None else int(sample_size),
+            "symbol_count": len(dict(exposure_by_symbol or {})),
+            "gross_exposure_base_ccy": float(sum(abs(float(value)) for value in dict(exposure_by_symbol or {}).values())),
+            "alphas": [],
+            "horizons": [],
+            "data_quality_status": None if data_quality_status is None else str(data_quality_status),
+            "no_exposure": bool(no_exposure),
+        }
+        if grouped_by_surface:
+            shared_inputs["alphas"] = sorted({float(key[0]) for key in grouped_by_surface.keys()})
+            shared_inputs["horizons"] = sorted({int(key[1]) for key in grouped_by_surface.keys()})
+
+        diagnostics["input_trace"] = {
+            "shared": shared_inputs,
+            "models": model_inputs,
+        }
+        diagnostics["coherence_checks"] = {
+            "enabled": True,
+            "policy": "detect_non_zero_equal_var_es",
+            "suspicious_equalities_count": int(len(suspicious_equalities)),
+            "suspicious_equalities": suspicious_equalities,
+            "alert_active": bool(suspicious_equalities),
+        }
+        diagnostics["debug_rows"] = debug_rows
+        diagnostics["no_exposure"] = bool(no_exposure)
+        diagnostics["data_quality_status"] = None if data_quality_status is None else str(data_quality_status)
+        diagnostics["suspicious_equalities_count"] = int(len(suspicious_equalities))
+        diagnostics["coherence_alert_active"] = bool(suspicious_equalities)
         return diagnostics
 
     def build_risk_surface(
@@ -822,7 +969,14 @@ class RiskEngine:
             points=ordered_points,
             headline=self._headline_from_points(ordered_points, reference_model=reference_model),
             data_quality=data_quality,
-            model_diagnostics=self._diagnostics_from_points(ordered_points),
+            model_diagnostics=self._diagnostics_from_points(
+                ordered_points,
+                config=config,
+                exposure_by_symbol=self.exposure_by_symbol,
+                sample_size=available_observations,
+                data_quality_status=quality_status,
+                no_exposure=bool(no_exposure),
+            ),
         )
 
     def _asset_class_groups(self, symbols: Sequence[str]) -> dict[str, list[str]]:

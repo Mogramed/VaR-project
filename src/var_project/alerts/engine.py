@@ -583,6 +583,13 @@ def alerts_from_live_snapshot(snapshot: Mapping[str, Any], limits_cfg: Mapping[s
     vars_map = dict(snapshot.get("var") or {})
     es_map = dict(snapshot.get("es") or {})
     live_loss = snapshot.get("live_loss_proxy")
+    diagnostics = dict(snapshot.get("model_diagnostics") or {})
+    coherence = dict(diagnostics.get("coherence_checks") or {})
+    suspicious_equalities = [
+        dict(item)
+        for item in list(coherence.get("suspicious_equalities") or [])
+        if isinstance(item, Mapping)
+    ]
 
     model_limits = limits_cfg.get("model_limits_eur", {}) if limits_cfg else {}
     for model, rules in model_limits.items():
@@ -653,6 +660,25 @@ def alerts_from_live_snapshot(snapshot: Mapping[str, Any], limits_cfg: Mapping[s
                 code="LIVE_ZONE_EWMA_AMBER",
                 message="EWMA live zone is AMBER.",
                 context={"zone": zone_ewma, "live_loss": live_loss, "var_ewma": vars_map.get("ewma")},
+            )
+        )
+
+    if suspicious_equalities:
+        primary = suspicious_equalities[0]
+        alerts.append(
+            AlertEvent(
+                source="live",
+                severity="WARN",
+                code="VAR_MODEL_EQUALITY_SUSPECT",
+                message=(
+                    f"{len(suspicious_equalities)} suspicious non-zero VaR/ES equalities detected across models."
+                ),
+                context={
+                    "suspicious_equalities_count": len(suspicious_equalities),
+                    "sample_pair": list(primary.get("models") or []),
+                    "sample_alpha": primary.get("alpha"),
+                    "sample_horizon_days": primary.get("horizon_days"),
+                },
             )
         )
 

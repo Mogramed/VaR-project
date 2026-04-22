@@ -1337,6 +1337,131 @@ class DeskApiService:
         }
 
     @staticmethod
+    def _close_numeric(
+        left: Any,
+        right: Any,
+        *,
+        abs_tol: float = 1e-8,
+        rel_tol: float = 1e-7,
+    ) -> bool:
+        left_value = DeskApiService._float_or_none(left)
+        right_value = DeskApiService._float_or_none(right)
+        if left_value is None or right_value is None:
+            return False
+        scale = max(abs(left_value), abs(right_value), 1.0)
+        return abs(left_value - right_value) <= max(float(abs_tol), float(rel_tol) * scale)
+
+    @classmethod
+    def _suspicious_equalities_from_maps(
+        cls,
+        *,
+        vars_map: Mapping[str, Any],
+        es_map: Mapping[str, Any],
+        alpha: Any = None,
+        horizon_days: Any = None,
+        non_zero_floor: float = 1e-6,
+    ) -> list[dict[str, Any]]:
+        available_models = sorted(
+            {
+                str(model).lower()
+                for model in [*dict(vars_map or {}).keys(), *dict(es_map or {}).keys()]
+                if str(model).strip()
+            }
+        )
+        suspicious: list[dict[str, Any]] = []
+        for index, left_model in enumerate(available_models):
+            left_var = cls._float_or_none(dict(vars_map or {}).get(left_model))
+            left_es = cls._float_or_none(dict(es_map or {}).get(left_model))
+            if left_var is None or left_es is None:
+                continue
+            for right_model in available_models[index + 1 :]:
+                right_var = cls._float_or_none(dict(vars_map or {}).get(right_model))
+                right_es = cls._float_or_none(dict(es_map or {}).get(right_model))
+                if right_var is None or right_es is None:
+                    continue
+                if max(abs(left_var), abs(right_var), abs(left_es), abs(right_es)) <= float(non_zero_floor):
+                    continue
+                if not (cls._close_numeric(left_var, right_var) and cls._close_numeric(left_es, right_es)):
+                    continue
+                suspicious.append(
+                    {
+                        "models": [left_model, right_model],
+                        "alpha": cls._float_or_none(alpha),
+                        "horizon_days": None if horizon_days is None else int(horizon_days),
+                        "left_var": float(left_var),
+                        "right_var": float(right_var),
+                        "left_es": float(left_es),
+                        "right_es": float(right_es),
+                        "var_abs_diff": abs(float(left_var) - float(right_var)),
+                        "es_abs_diff": abs(float(left_es) - float(right_es)),
+                        "non_zero_floor": float(non_zero_floor),
+                        "reason": "non_zero_equal_var_es",
+                    }
+                )
+        return suspicious
+
+    @classmethod
+    def _normalize_model_diagnostics(cls, payload: Mapping[str, Any]) -> dict[str, Any]:
+        risk_surface = dict(payload.get("risk_surface") or {})
+        diagnostics = dict(payload.get("model_diagnostics") or risk_surface.get("model_diagnostics") or {})
+        coherence = dict(diagnostics.get("coherence_checks") or {})
+        suspicious = [dict(item) for item in list(coherence.get("suspicious_equalities") or []) if isinstance(item, Mapping)]
+
+        if not suspicious:
+            suspicious = cls._suspicious_equalities_from_maps(
+                vars_map=dict(payload.get("var") or {}),
+                es_map=dict(payload.get("es") or {}),
+                alpha=payload.get("alpha"),
+                horizon_days=1,
+            )
+            if suspicious:
+                coherence = {
+                    **coherence,
+                    "enabled": True,
+                    "policy": str(coherence.get("policy") or "detect_non_zero_equal_var_es"),
+                    "suspicious_equalities": suspicious,
+                    "suspicious_equalities_count": len(suspicious),
+                    "alert_active": True,
+                }
+                diagnostics["coherence_checks"] = coherence
+        else:
+            coherence = {
+                **coherence,
+                "enabled": bool(coherence.get("enabled", True)),
+                "suspicious_equalities": suspicious,
+                "suspicious_equalities_count": int(coherence.get("suspicious_equalities_count") or len(suspicious)),
+                "alert_active": bool(coherence.get("alert_active", len(suspicious) > 0)),
+            }
+            diagnostics["coherence_checks"] = coherence
+
+        if "debug_rows" not in diagnostics:
+            diagnostics["debug_rows"] = [
+                {
+                    "model": str(item.get("model") or ""),
+                    "alpha": cls._float_or_none(item.get("alpha")),
+                    "horizon_days": int(item.get("horizon_days") or 0),
+                    "var": cls._float_or_none(item.get("var")),
+                    "es": cls._float_or_none(item.get("es")),
+                    "status": str(item.get("status") or ""),
+                    "observation_count": int(item.get("observation_count") or 0),
+                    "latest_observation": item.get("latest_observation"),
+                }
+                for item in list(risk_surface.get("points") or [])
+                if not bool(item.get("is_stressed"))
+            ]
+        diagnostics["suspicious_equalities_count"] = int(
+            diagnostics.get("suspicious_equalities_count")
+            or dict(diagnostics.get("coherence_checks") or {}).get("suspicious_equalities_count")
+            or len(suspicious)
+        )
+        diagnostics["coherence_alert_active"] = bool(
+            diagnostics.get("coherence_alert_active")
+            or dict(diagnostics.get("coherence_checks") or {}).get("alert_active")
+            or diagnostics["suspicious_equalities_count"] > 0
+        )
+        return diagnostics
+
+    @staticmethod
     def _float_or_none(value: Any) -> float | None:
         try:
             if value in {None, "", "null"}:
@@ -1562,6 +1687,7 @@ class DeskApiService:
         live_state = self._safe_live_state_summary(portfolio_slug=portfolio["slug"])
         if live_state is not None and live_state.get("risk_summary") is not None:
             summary = dict(live_state["risk_summary"])
+            summary["model_diagnostics"] = self._normalize_model_diagnostics(summary)
             if summary.get("concentration") is None:
                 concentration = self._build_risk_summary_concentration(
                     reference_model=summary.get("reference_model"),
@@ -1603,7 +1729,7 @@ class DeskApiService:
             "headline_risk": list(payload.get("headline_risk") or []),
             "stress_surface": dict(payload.get("stress_surface") or {}),
             "data_quality": self._normalize_risk_data_quality(payload),
-            "model_diagnostics": dict(payload.get("model_diagnostics") or {}),
+            "model_diagnostics": self._normalize_model_diagnostics(payload),
             "risk_nowcast": dict(payload.get("risk_nowcast") or {}),
             "microstructure": dict(payload.get("microstructure") or {}),
             "tick_quality": dict(payload.get("tick_quality") or {}),
@@ -1618,6 +1744,77 @@ class DeskApiService:
         if concentration is not None:
             summary["concentration"] = concentration
         return summary
+
+    def risk_model_diagnostics(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        source: str | None = "auto",
+    ) -> dict[str, Any] | None:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        normalized_source = str(source or "auto").strip().lower()
+        live_source_requested = normalized_source in {"", "auto", "live", "mt5_live", "mt5_live_bridge"}
+        if live_source_requested:
+            live_state = self._safe_live_state_summary(portfolio_slug=portfolio["slug"])
+            if live_state is not None and live_state.get("risk_summary") is not None:
+                summary = dict(live_state.get("risk_summary") or {})
+                diagnostics = self._normalize_model_diagnostics(summary)
+                coherence = dict(diagnostics.get("coherence_checks") or {})
+                suspicious = [
+                    dict(item)
+                    for item in list(coherence.get("suspicious_equalities") or [])
+                    if isinstance(item, Mapping)
+                ]
+                return {
+                    "generated_at": summary.get("generated_at"),
+                    "portfolio_slug": portfolio["slug"],
+                    "source": str(summary.get("source") or "mt5_live_bridge"),
+                    "reference_model": summary.get("reference_model"),
+                    "data_quality_status": dict(summary.get("data_quality") or {}).get("status"),
+                    "coherence_alert_active": bool(diagnostics.get("coherence_alert_active", False)),
+                    "suspicious_equalities_count": int(diagnostics.get("suspicious_equalities_count") or len(suspicious)),
+                    "suspicious_equalities": suspicious,
+                    "model_diagnostics": diagnostics,
+                    "debug_rows": list(diagnostics.get("debug_rows") or []),
+                }
+
+        snapshot: dict[str, Any] | None = None
+        if normalized_source in {"", "auto"}:
+            for candidate in self.reads._preferred_snapshot_sources(
+                portfolio_slug=portfolio["slug"],
+                source="auto",
+            ):
+                snapshot = self.reads.latest_snapshot(source=candidate, portfolio_slug=portfolio["slug"])
+                if snapshot is not None:
+                    break
+        else:
+            snapshot = self.reads.latest_snapshot(source=source, portfolio_slug=portfolio["slug"])
+        if snapshot is None:
+            return None
+
+        payload = dict(snapshot.get("payload") or {})
+        diagnostics = self._normalize_model_diagnostics(payload)
+        coherence = dict(diagnostics.get("coherence_checks") or {})
+        suspicious = [
+            dict(item)
+            for item in list(coherence.get("suspicious_equalities") or [])
+            if isinstance(item, Mapping)
+        ]
+        data_quality = self._normalize_risk_data_quality(payload)
+        return {
+            "generated_at": payload.get("time_utc") or snapshot.get("created_at"),
+            "portfolio_slug": portfolio["slug"],
+            "source": str(snapshot.get("source") or "historical"),
+            "reference_model": payload.get("model")
+            or payload.get("reference_model")
+            or self.runtime._decision_reference_model(portfolio["slug"]),
+            "data_quality_status": dict(data_quality or {}).get("status"),
+            "coherence_alert_active": bool(diagnostics.get("coherence_alert_active", False)),
+            "suspicious_equalities_count": int(diagnostics.get("suspicious_equalities_count") or len(suspicious)),
+            "suspicious_equalities": suspicious,
+            "model_diagnostics": diagnostics,
+            "debug_rows": list(diagnostics.get("debug_rows") or []),
+        }
 
     def risk_contributions(self, *, portfolio_slug: str | None = None, source: str | None = None) -> dict[str, Any] | None:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)

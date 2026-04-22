@@ -83,6 +83,7 @@ export type RiskConcentrationResponse = ApiSchemas["RiskConcentrationResponse"];
 export type RiskDataQualityResponse = ApiSchemas["RiskDataQualityResponse"];
 export type RiskDecisionResponse = ApiSchemas["RiskDecisionResponse"];
 export type RiskDecisionStateResponse = ApiSchemas["RiskDecisionStateResponse"];
+export type RiskModelDiagnosticsResponse = ApiSchemas["RiskModelDiagnosticsResponse"];
 export type RiskSummaryConcentrationResponse = ApiSchemas["RiskSummaryConcentrationResponse"];
 export type RunBacktestRequest = ApiSchemas["RunBacktestRequest"];
 export type RunReportRequest = ApiSchemas["RunReportRequest"];

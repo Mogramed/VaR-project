@@ -12,6 +12,7 @@ from var_project.api.schemas import (
     ModelComparisonResponse,
     RiskAttributionResponse,
     RiskBudgetResponse,
+    RiskModelDiagnosticsResponse,
     RunBacktestRequest,
     RunSnapshotRequest,
     RunStressTestRequest,
@@ -145,6 +146,18 @@ def risk_summary(
     if summary is None:
         raise HTTPException(status_code=404, detail="No risk summary available.")
     return LiveRiskSummaryResponse.model_validate(summary)
+
+
+@router.get("/risk/diagnostics", response_model=RiskModelDiagnosticsResponse)
+def risk_model_diagnostics(
+    source: str | None = Query(default="auto"),
+    portfolio_slug: str | None = Query(default=None),
+    service: DeskApiService = Depends(get_service),
+) -> RiskModelDiagnosticsResponse:
+    payload = service.risk_model_diagnostics(source=source, portfolio_slug=portfolio_slug)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="No risk diagnostics available.")
+    return RiskModelDiagnosticsResponse.model_validate(payload)
 
 
 @router.get("/risk/contributions", response_model=RiskAttributionResponse)

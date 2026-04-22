@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 import var_project.engine.risk_engine as risk_engine_module
-from var_project.engine.risk_engine import RiskEngine, RiskModelConfig
+from var_project.engine.risk_engine import RiskEngine, RiskModelConfig, RiskSurfacePoint
 from var_project.risk.stress import StressScenario
 
 
@@ -118,6 +118,41 @@ def test_risk_surface_exposes_multi_horizon_metrics_and_quality():
     assert payload["headline"]
     assert payload["data_quality"]["status"] in {"healthy", "thin_history", "stale", "incomplete", "no_exposure"}
     assert any(point["alpha"] == 0.99 and point["horizon_days"] == 10 for point in payload["points"])
+
+
+def test_risk_surface_diagnostics_flag_non_zero_equalities():
+    diagnostics = RiskEngine._diagnostics_from_points(
+        [
+            RiskSurfacePoint(
+                model="hist",
+                alpha=0.99,
+                horizon_days=1,
+                var=125.0,
+                es=165.0,
+                observation_count=220,
+                status="healthy",
+            ),
+            RiskSurfacePoint(
+                model="param",
+                alpha=0.99,
+                horizon_days=1,
+                var=125.0,
+                es=165.0,
+                observation_count=220,
+                status="healthy",
+            ),
+        ],
+        config=RiskModelConfig(alpha=0.99),
+        exposure_by_symbol={"EURUSD": 10_000.0},
+        sample_size=220,
+        data_quality_status="healthy",
+        no_exposure=False,
+    )
+
+    coherence = dict(diagnostics.get("coherence_checks") or {})
+    assert coherence.get("suspicious_equalities_count") == 1
+    assert diagnostics.get("coherence_alert_active") is True
+    assert dict(diagnostics.get("input_trace") or {}).get("models", {}).get("hist") is not None
 
 
 def test_risk_surface_marks_no_exposure_when_book_is_under_epsilon():
