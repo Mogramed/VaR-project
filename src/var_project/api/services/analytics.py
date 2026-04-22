@@ -20,15 +20,23 @@ class DeskAnalyticsService:
     def __init__(self, runtime: DeskServiceRuntime):
         self.runtime = runtime
 
+    def _default_no_exposure_epsilon(self) -> float:
+        raw_default = self.runtime.risk_defaults.get("no_exposure_epsilon_eur")
+        try:
+            epsilon = 1.0 if raw_default in {None, "", "null"} else float(raw_default)
+        except (TypeError, ValueError):
+            epsilon = 1.0
+        if epsilon < 0.0:
+            epsilon = 1.0
+        return float(epsilon)
+
     def _no_exposure_epsilon_by_symbol(self, symbols: list[str]) -> dict[str, float]:
         configured = {
             str(symbol).upper(): value
             for symbol, value in dict(self.runtime.risk_defaults.get("no_exposure_epsilon_by_symbol") or {}).items()
             if symbol not in {None, ""}
         }
-        default_epsilon = float(self.runtime.risk_defaults.get("no_exposure_epsilon_eur") or 1.0)
-        if default_epsilon < 0.0:
-            default_epsilon = 1.0
+        default_epsilon = self._default_no_exposure_epsilon()
         epsilon_by_symbol: dict[str, float] = {}
         for symbol in symbols:
             normalized = str(symbol).upper()
@@ -289,7 +297,7 @@ class DeskAnalyticsService:
             bundle["holdings"],
             base_currency=str(portfolio["base_currency"]),
             no_exposure_epsilon_by_symbol=self._no_exposure_epsilon_by_symbol(list(bundle["portfolio_symbols"])),
-            default_no_exposure_epsilon=float(self.runtime.risk_defaults.get("no_exposure_epsilon_eur") or 1.0),
+            default_no_exposure_epsilon=self._default_no_exposure_epsilon(),
         )
         return_columns = ["date", *bundle["portfolio_symbols"]]
         daily_rets = bundle["daily_returns"][return_columns].copy()
@@ -591,7 +599,7 @@ class DeskAnalyticsService:
                 bundle["holdings"],
                 base_currency=str(portfolio["base_currency"]),
                 no_exposure_epsilon_by_symbol=self._no_exposure_epsilon_by_symbol(list(bundle["portfolio_symbols"])),
-                default_no_exposure_epsilon=float(self.runtime.risk_defaults.get("no_exposure_epsilon_eur") or 1.0),
+                default_no_exposure_epsilon=self._default_no_exposure_epsilon(),
             ).build_stress_surface(
                 bundle["sample"][bundle["portfolio_symbols"]],
                 config,

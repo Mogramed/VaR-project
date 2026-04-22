@@ -1287,24 +1287,31 @@ class DeskApiService:
             for symbol, value in dict(raw.get("no_exposure_epsilon_by_symbol") or {}).items()
             if symbol not in {None, ""} and self._float_or_none(value) is not None
         }
-        if not epsilon_by_symbol and exposure_map:
-            epsilon_by_symbol = {
-                symbol: configured_epsilons.get(symbol, float(default_epsilon))
-                for symbol in exposure_map
-            }
+        if exposure_map:
+            for symbol in exposure_map:
+                if symbol in epsilon_by_symbol:
+                    continue
+                epsilon_by_symbol[symbol] = max(float(configured_epsilons.get(symbol, float(default_epsilon))), 0.0)
         gross_exposure = self._float_or_none(raw.get("gross_exposure_base_ccy"))
         if gross_exposure is None and exposure_map:
             gross_exposure = float(sum(abs(value) for value in exposure_map.values()))
         gross_exposure_epsilon = self._float_or_none(raw.get("gross_exposure_epsilon_base_ccy"))
-        if gross_exposure_epsilon is None and epsilon_by_symbol:
+        if gross_exposure_epsilon is None and exposure_map:
+            gross_exposure_epsilon = float(
+                sum(max(float(epsilon_by_symbol.get(symbol, float(default_epsilon))), 0.0) for symbol in exposure_map)
+            )
+        elif gross_exposure_epsilon is None and epsilon_by_symbol:
             gross_exposure_epsilon = float(sum(max(value, 0.0) for value in epsilon_by_symbol.values()))
         status = raw.get("status")
         if not status:
-            has_no_exposure = (
-                gross_exposure is not None
-                and gross_exposure_epsilon is not None
-                and gross_exposure <= max(gross_exposure_epsilon, 0.0)
-            )
+            has_no_exposure = False
+            if exposure_map:
+                has_no_exposure = all(
+                    abs(float(exposure_map[symbol])) <= max(float(epsilon_by_symbol.get(symbol, float(default_epsilon))), 0.0)
+                    for symbol in exposure_map
+                )
+            elif gross_exposure is not None and gross_exposure_epsilon is not None:
+                has_no_exposure = gross_exposure <= max(gross_exposure_epsilon, 0.0)
             if has_no_exposure:
                 status = "no_exposure"
             elif available_observations <= 0:

@@ -38,6 +38,16 @@ class PortfolioRiskCalculator:
     def __init__(self, runtime: "DeskServiceRuntime"):
         self.runtime = runtime
 
+    def _default_no_exposure_epsilon(self) -> float:
+        raw_default = self.runtime.risk_defaults.get("no_exposure_epsilon_eur")
+        try:
+            epsilon = 1.0 if raw_default in {None, "", "null"} else float(raw_default)
+        except (TypeError, ValueError):
+            epsilon = 1.0
+        if epsilon < 0.0:
+            epsilon = 1.0
+        return float(epsilon)
+
     def build_risk_model_config(
         self,
         alpha: float | None,
@@ -73,9 +83,7 @@ class PortfolioRiskCalculator:
             for symbol, value in dict(self.runtime.risk_defaults.get("no_exposure_epsilon_by_symbol") or {}).items()
             if symbol not in {None, ""}
         }
-        default_epsilon = float(self.runtime.risk_defaults.get("no_exposure_epsilon_eur") or 1.0)
-        if default_epsilon < 0.0:
-            default_epsilon = 1.0
+        default_epsilon = self._default_no_exposure_epsilon()
         epsilon_by_symbol: dict[str, float] = {}
         for symbol in symbols:
             normalized = str(symbol).upper()
@@ -248,7 +256,7 @@ class PortfolioRiskCalculator:
             normalized_holdings,
             base_currency=str(portfolio["base_currency"]),
             no_exposure_epsilon_by_symbol=self._no_exposure_epsilon_by_symbol(portfolio_symbols),
-            default_no_exposure_epsilon=float(self.runtime.risk_defaults.get("no_exposure_epsilon_eur") or 1.0),
+            default_no_exposure_epsilon=self._default_no_exposure_epsilon(),
         )
         portfolio_frame = engine.build_portfolio_frame(daily_returns)
         sample = portfolio_frame.iloc[-min(len(portfolio_frame), estimation_window_days) :].copy()
