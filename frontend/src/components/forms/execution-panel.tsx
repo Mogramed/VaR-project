@@ -4,7 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { TrendingUp, DollarSign } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "@/lib/api/client";
+import { ApiError, api } from "@/lib/api/client";
 import type {
   ExecutionPreviewResponse,
   ExecutionResultResponse,
@@ -112,18 +112,66 @@ export function ExecutionPanel({
   const preview = previewMutation.data;
   const result = submitMutation.data;
   const activeError = submitMutation.error ?? previewMutation.error;
+  const actionableError = (() => {
+    if (!activeError) {
+      return null;
+    }
+    if (activeError instanceof ApiError) {
+      const timeoutLike = activeError.status === 504 || String(activeError.errorCode ?? "").toLowerCase().includes("timeout");
+      if (timeoutLike) {
+        if (submitMutation.error) {
+          return "MT5 submit timed out. Check Execution/Blotter before retrying submit.";
+        }
+        return "Execution preview timed out. Retry preview after checking backend load.";
+      }
+      return activeError.message;
+    }
+    return activeError instanceof Error ? activeError.message : "Failed";
+  })();
+  const canRetry =
+    !previewMutation.isPending
+    && !submitMutation.isPending
+    && (previewMutation.error != null || submitMutation.error != null);
   const fillRatio = useMemo(() => {
     const source = result?.guard ?? preview?.guard;
     if (!source || source.requested_exposure_change === 0) return null;
     return Math.abs(source.executable_exposure_change / source.requested_exposure_change);
   }, [preview, result]);
 
+  const runPreview = useCallback(() => {
+    if (!validate()) {
+      return false;
+    }
+    previewMutation.mutate();
+    return true;
+  }, [previewMutation, validate]);
+
+  const runSubmit = useCallback(() => {
+    if (!validate()) {
+      return false;
+    }
+    if (!preview?.guard.submit_allowed) {
+      setValidationError(
+        preview?.guard
+          ? "Submit blocked by guardrails. Refresh preview before sending."
+          : "Preview is required before sending to MT5.",
+      );
+      return false;
+    }
+    setValidationError(null);
+    submitMutation.mutate();
+    return true;
+  }, [preview?.guard, submitMutation, validate]);
+
   return (
     <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
       {/* Form */}
       <form
         className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4"
-        onSubmit={(e) => { e.preventDefault(); if (validate()) previewMutation.mutate(); }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          runPreview();
+        }}
       >
         <div className="flex items-center justify-between">
           <h3 className="text-[13px] font-semibold text-[var(--color-text)]">MT5 Execution</h3>
@@ -190,9 +238,24 @@ export function ExecutionPanel({
             pendingLabel="Sending..."
             variant="secondary"
             disabled={!preview?.guard.submit_allowed || submitMutation.isPending}
-            onClick={() => submitMutation.mutate()}
+            onClick={runSubmit}
           />
-          <FormError message={validationError ?? (activeError instanceof Error ? activeError.message : activeError ? "Failed" : null)} />
+          {canRetry ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (submitMutation.error) {
+                  runSubmit();
+                  return;
+                }
+                runPreview();
+              }}
+              className="h-7 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2.5 text-[11px] font-medium text-[var(--color-text)] transition hover:bg-[var(--color-surface-hover)]"
+            >
+              Retry
+            </button>
+          ) : null}
+          <FormError message={validationError ?? actionableError} />
           <FormSuccess message="Order sent to MT5" visible={showSuccess} />
         </div>
       </form>

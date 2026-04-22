@@ -25,6 +25,8 @@ type UseOperatorRunActionOptions<TPayload> = {
   onSucceeded?: (run: OperatorRunResponse) => void | Promise<void>;
 };
 
+export type OperatorActionUiState = "idle" | "queued" | "running" | "success" | "error";
+
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -77,6 +79,8 @@ export function useOperatorRunAction<TPayload>({
   const [manualError, setManualError] = useState<Error | null>(null);
   const completedRunIds = useRef<Set<number>>(new Set());
   const onSucceededRef = useRef(onSucceeded);
+  const lastPayloadRef = useRef<TPayload | null>(null);
+  const lastExecuteAtRef = useRef<number>(0);
 
   useEffect(() => {
     onSucceededRef.current = onSucceeded;
@@ -309,38 +313,113 @@ export function useOperatorRunAction<TPayload>({
         ? new Error("Failed to interrupt operator action.")
         : null;
 
+  const activeRun = mergedRun && !TERMINAL_STATUSES.has(String(mergedRun.status))
+    ? mergedRun
+    : null;
+  const hasQueued = Boolean(activeRun && String(activeRun.status) === "queued");
+  const hasRunning = Boolean(activeRun && String(activeRun.status) === "running");
+  const hasSucceeded = Boolean(mergedRun && String(mergedRun.status) === "succeeded");
+  const hasFailed = Boolean(mergedRun && String(mergedRun.status) === "failed");
+
+  const baseError =
+    manualError
+    ?? mutationError
+    ?? interruptError
+    ?? (
+      hasFailed
+        ? new Error(
+          [
+            mergedRun?.error_message ?? "Operator action failed.",
+            mergedRun?.error_code ? `code ${mergedRun.error_code}` : null,
+            mergedRun?.hint ?? null,
+            mergedRun?.request_id ? `request ${mergedRun.request_id}` : null,
+            mergedRun?.id ? `run ${mergedRun.id}` : null,
+          ].filter(Boolean).join(" "),
+        )
+        : null
+    )
+    ?? (mergedRun == null ? pollingError : null);
+
+  const progressPercent = (() => {
+    if (hasSucceeded) {
+      return 100;
+    }
+    if (!activeRun) {
+      return null;
+    }
+    const activeElapsed = Number(activeRun.elapsed_seconds ?? 0);
+    const activeSla = Number(
+      activeRun.sla_seconds
+      ?? activeRun.running_timeout_seconds
+      ?? activeRun.queued_timeout_seconds
+      ?? fallbackSlaSeconds,
+    );
+    if (!Number.isFinite(activeElapsed) || activeElapsed <= 0) {
+      return hasQueued ? 5 : 10;
+    }
+    if (!Number.isFinite(activeSla) || activeSla <= 0) {
+      return hasQueued ? 10 : null;
+    }
+    const ratio = Math.max(0, Math.min(activeElapsed / activeSla, 1));
+    const ceiling = hasQueued ? 35 : 95;
+    return Math.max(hasQueued ? 5 : 10, Math.min(Math.round(ratio * 100), ceiling));
+  })();
+
+  const uiState: OperatorActionUiState = (
+    hasRunning ? "running"
+      : hasQueued ? "queued"
+        : hasSucceeded ? "success"
+          : (hasFailed || baseError != null) ? "error"
+            : "idle"
+  );
+
+  const execute = (payload: TPayload) => {
+    const now = Date.now();
+    if (now - lastExecuteAtRef.current < 450) {
+      return false;
+    }
+    const latestRun = (pollQuery.data ?? run) as OperatorRunResponse | null;
+    if (
+      mutation.isPending
+      || interruptMutation.isPending
+      || (latestRun != null && !TERMINAL_STATUSES.has(String(latestRun.status)))
+    ) {
+      const currentStatus = String(latestRun?.status ?? "running");
+      setManualError(new Error(`${action} is already ${currentStatus}. Wait for completion.`));
+      return false;
+    }
+    lastExecuteAtRef.current = now;
+    lastPayloadRef.current = payload;
+    setManualError(null);
+    mutation.mutate(payload);
+    return true;
+  };
+
+  const retry = () => {
+    if (lastPayloadRef.current == null) {
+      setManualError(new Error("No previous payload available to retry."));
+      return false;
+    }
+    return execute(lastPayloadRef.current);
+  };
+
   return {
     run: mergedRun,
     elapsedSeconds,
     deadlineExceeded,
+    uiState,
+    progressPercent,
+    statusLabel: hasRunning ? "running" : hasQueued ? "queued" : hasSucceeded ? "succeeded" : hasFailed ? "failed" : "idle",
+    lastUpdatedAt: mergedRun?.updated_at ?? mergedRun?.finished_at ?? mergedRun?.created_at ?? null,
     pending:
       mutation.isPending
       || interruptMutation.isPending
       || Boolean(mergedRun && !TERMINAL_STATUSES.has(String(mergedRun.status))),
     interrupting: interruptMutation.isPending,
     canInterrupt: Boolean(mergedRun && !TERMINAL_STATUSES.has(String(mergedRun.status))),
-    error:
-      manualError
-      ?? mutationError
-      ?? interruptError
-      ?? (
-        mergedRun?.status === "failed"
-          ? new Error(
-            [
-              mergedRun.error_message ?? "Operator action failed.",
-              mergedRun.error_code ? `code ${mergedRun.error_code}` : null,
-              mergedRun.hint ?? null,
-              mergedRun.request_id ? `request ${mergedRun.request_id}` : null,
-              mergedRun.id ? `run ${mergedRun.id}` : null,
-            ].filter(Boolean).join(" "),
-          )
-          : null
-      )
-      ?? (mergedRun == null ? pollingError : null),
-    execute: (payload: TPayload) => {
-      setManualError(null);
-      mutation.mutate(payload);
-    },
+    error: baseError,
+    execute,
+    retry,
     interrupt: (reason?: string) => {
       setManualError(null);
       interruptMutation.mutate(reason);

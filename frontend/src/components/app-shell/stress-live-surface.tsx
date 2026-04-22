@@ -5,7 +5,7 @@ import { useMutation } from "@tanstack/react-query";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { FormMetaTile, FieldInput, FieldLabel, FormError } from "@/components/forms/shared";
 import { StatusBadge } from "@/components/ui/primitives";
-import { api } from "@/lib/api/client";
+import { ApiError, api } from "@/lib/api/client";
 import type {
   RiskAttributionAssetClassResponse,
   RiskAttributionModelResponse,
@@ -14,7 +14,7 @@ import type {
   StressScenarioRequest,
 } from "@/lib/api/types";
 import { preferredHeadlineRisk } from "@/lib/risk-surface";
-import { formatCurrency, formatPercent } from "@/lib/utils";
+import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
 
 const defaults: StressScenarioRequest[] = [
   { name: "Volatility regime shift", vol_multiplier: 1.5, shock_pnl: 0.0 },
@@ -63,6 +63,8 @@ export function StressLiveSurface({ portfolioSlug }: { portfolioSlug: string }) 
   const [vol, setVol] = useState("2.0");
   const [shock, setShock] = useState("0");
   const [scenarioError, setScenarioError] = useState<string | null>(null);
+  const [startedAt, setStartedAt] = useState<string | null>(null);
+  const [finishedAt, setFinishedAt] = useState<string | null>(null);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -70,7 +72,40 @@ export function StressLiveSurface({ portfolioSlug }: { portfolioSlug: string }) 
         portfolio_slug: portfolioSlug,
         scenarios: scenarios.length > 0 ? scenarios : undefined,
       }),
+    onMutate: () => {
+      setStartedAt(new Date().toISOString());
+      setFinishedAt(null);
+    },
+    onSettled: () => {
+      setFinishedAt(new Date().toISOString());
+    },
   });
+  const stressErrorMessage = (() => {
+    if (!mutation.error) return null;
+    if (mutation.error instanceof ApiError) {
+      const timeoutLike = mutation.error.status === 504 || String(mutation.error.errorCode ?? "").toLowerCase().includes("timeout");
+      if (timeoutLike) {
+        return "Stress request timed out. The run may still be processing in backend; check worker health, then retry.";
+      }
+      return mutation.error.message;
+    }
+    return mutation.error instanceof Error ? mutation.error.message : "Failed";
+  })();
+  const canRetry = mutation.error != null && !mutation.isPending;
+  const statusLabel = mutation.isPending
+    ? "running"
+    : mutation.error
+      ? "error"
+      : mutation.data
+        ? "success"
+        : "idle";
+  const statusTone = statusLabel === "running"
+    ? "accent"
+    : statusLabel === "success"
+      ? "success"
+      : statusLabel === "error"
+        ? "danger"
+        : "neutral";
 
   return (
     <div className="desk-page space-y-4">
@@ -78,7 +113,10 @@ export function StressLiveSurface({ portfolioSlug }: { portfolioSlug: string }) 
 
       <div className="grid gap-4 xl:grid-cols-2">
         <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
-          <h3 className="text-[13px] font-semibold text-[var(--color-text)]">Scenario library</h3>
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-[13px] font-semibold text-[var(--color-text)]">Scenario library</h3>
+            <StatusBadge label={statusLabel} tone={statusTone} />
+          </div>
           <div className="mt-3 space-y-1.5">
             {scenarios.map((sc, i) => (
               <div
@@ -173,19 +211,31 @@ export function StressLiveSurface({ portfolioSlug }: { portfolioSlug: string }) 
           </div>
 
           <div className="mt-4">
-            <button
-              type="button"
-              disabled={mutation.isPending}
-              onClick={() => mutation.mutate()}
-              className="h-8 rounded-[var(--radius-md)] bg-[var(--color-accent)] px-4 text-[12px] font-semibold text-[#1a1206] transition hover:brightness-110 disabled:opacity-50"
-            >
-              {mutation.isPending ? "Running..." : "Run stress test"}
-            </button>
-            {mutation.error ? (
-              <div className="mt-2 text-[11px] text-[var(--color-red)]">
-                {mutation.error instanceof Error ? mutation.error.message : "Failed"}
-              </div>
-            ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={mutation.isPending}
+                onClick={() => mutation.mutate()}
+                className="h-8 rounded-[var(--radius-md)] bg-[var(--color-accent)] px-4 text-[12px] font-semibold text-[#1a1206] transition hover:brightness-110 disabled:opacity-50"
+              >
+                {mutation.isPending ? "Running..." : "Run stress test"}
+              </button>
+              {canRetry ? (
+                <button
+                  type="button"
+                  onClick={() => mutation.mutate()}
+                  className="h-8 rounded-[var(--radius-md)] border border-[var(--color-border)] px-4 text-[12px] font-semibold text-[var(--color-text)] transition hover:bg-[var(--color-surface-hover)]"
+                >
+                  Retry
+                </button>
+              ) : null}
+            </div>
+            <div className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+              Started: {formatTimestamp(startedAt)} | Finished: {formatTimestamp(finishedAt)}
+            </div>
+            <div className="mt-2 text-[11px] text-[var(--color-red)]">
+              {stressErrorMessage ?? null}
+            </div>
           </div>
         </div>
 
