@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from threading import Lock
 import time
 from typing import Any, Mapping
@@ -233,6 +234,30 @@ class DeskReadService:
             return parsed.to_pydatetime().astimezone(timezone.utc).isoformat()
         return None
 
+    @staticmethod
+    def _extract_selected_model_from_report_markdown(report_path: Any) -> str | None:
+        if report_path in {None, "", "null"}:
+            return None
+        try:
+            path = Path(str(report_path))
+        except (TypeError, ValueError):
+            return None
+        if not path.exists():
+            return None
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        match = re.search(
+            r"^- Champion model:\s+\*\*(?P<model>[a-z0-9_]+)\*\*",
+            content,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+        if match is None:
+            return None
+        model = str(match.group("model")).strip().lower()
+        return model or None
+
     def _resolve_report_snapshot_record(
         self,
         *,
@@ -250,19 +275,17 @@ class DeskReadService:
         except (TypeError, ValueError):
             snapshot_id = None
 
+        if snapshot_id is not None:
+            snapshot = self.runtime.storage.snapshot_by_id(int(snapshot_id))
+            if snapshot is None:
+                return None
+            return dict(snapshot)
+
         candidates = self.runtime.storage.recent_snapshots(
             limit=200,
             source=snapshot_source,
             portfolio_slug=portfolio_slug,
         )
-        if snapshot_id is not None:
-            for candidate in candidates:
-                try:
-                    candidate_id = int(candidate.get("id"))
-                except (TypeError, ValueError):
-                    continue
-                if candidate_id == snapshot_id:
-                    return dict(candidate)
         if candidates:
             return dict(candidates[0])
         if snapshot_source:
@@ -288,11 +311,11 @@ class DeskReadService:
         compare_var_value: float | None = None
         compare_es_value: float | None = None
 
-        comparison = self.latest_model_comparison(portfolio_slug=portfolio_slug)
-        if comparison is not None:
-            champion_raw = comparison.get("champion_model")
-            if champion_raw not in {None, "", "null"}:
-                selected_model = str(champion_raw).strip().lower() or None
+        selected_model_raw = details.get("selected_model")
+        if selected_model_raw not in {None, "", "null"}:
+            selected_model = str(selected_model_raw).strip().lower() or None
+        if selected_model is None:
+            selected_model = self._extract_selected_model_from_report_markdown(artifact.get("path"))
 
         compare_csv_raw = details.get("compare_csv")
         compare_csv_path = Path(str(compare_csv_raw)).expanduser() if compare_csv_raw not in {None, "", "null"} else None

@@ -1034,6 +1034,11 @@ class StorageReadRepository:
             records = session.scalars(stmt.order_by(SnapshotRecord.created_at.desc(), SnapshotRecord.id.desc()).limit(int(limit))).all()
             return [snapshot_to_dict(record) for record in records]
 
+    def snapshot_by_id(self, snapshot_id: int) -> dict[str, Any] | None:
+        with self.session_factory() as session:
+            record = session.get(SnapshotRecord, int(snapshot_id))
+            return None if record is None else snapshot_to_dict(record)
+
     def latest_backtest_run(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
         with self.session_factory() as session:
             stmt = select(BacktestRunRecord)

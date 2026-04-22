@@ -363,6 +363,9 @@ class AppStorage:
     ) -> list[dict[str, Any]]:
         return self.reads.recent_snapshots(limit=limit, source=source, portfolio_slug=portfolio_slug)
 
+    def snapshot_by_id(self, snapshot_id: int) -> dict[str, Any] | None:
+        return self.reads.snapshot_by_id(snapshot_id)
+
     def latest_backtest_run(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
         return self.reads.latest_backtest_run(portfolio_slug=portfolio_slug)
 
