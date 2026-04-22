@@ -1003,6 +1003,7 @@ class GovernanceRecorder:
             "sample_size": bundle["snapshot"].sample_size,
             "latest_observation": sample.index[-1].isoformat(),
             "risk_surface": dict(bundle.get("risk_surface") or {}),
+            "model_diagnostics": dict(dict(bundle.get("risk_surface") or {}).get("model_diagnostics") or {}),
             "headline_risk": list(bundle.get("headline_risk") or []),
             "stress_surface": dict(bundle.get("stress_surface") or {}),
             "data_quality": dict(bundle.get("data_quality") or {}),

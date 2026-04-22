@@ -937,6 +937,19 @@ class LiveRiskSummaryResponse(BaseModel):
     pnl_explain: dict[str, Any] = Field(default_factory=dict)
 
 
+class RiskModelDiagnosticsResponse(BaseModel):
+    generated_at: str | None = None
+    portfolio_slug: str
+    source: str
+    reference_model: str | None = None
+    data_quality_status: str | None = None
+    coherence_alert_active: bool = False
+    suspicious_equalities_count: int = 0
+    suspicious_equalities: list[dict[str, Any]] = Field(default_factory=list)
+    model_diagnostics: dict[str, Any] = Field(default_factory=dict)
+    debug_rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class MarketDataSyncStatusResponse(BaseModel):
     portfolio_slug: str
     portfolio_mode: str | None = None
