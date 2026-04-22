@@ -525,6 +525,9 @@ def render_daily_markdown(
         coverage_fail_count = _as_int(governance.get("coverage_fail_count"))
         independence_fail_count = _as_int(governance.get("independence_fail_count"))
         conditional_fail_count = _as_int(governance.get("conditional_fail_count"))
+        confidence_score = _as_float(governance.get("confidence_score"))
+        confidence_level = str(governance.get("confidence_level") or "").strip().lower() or None
+        confidence_reason = str(governance.get("confidence_reason") or "").strip() or None
         traffic_counts = {
             str(key).upper(): _as_int(value)
             for key, value in dict(governance.get("traffic_lights") or {}).items()
@@ -554,6 +557,12 @@ def render_daily_markdown(
             f"Independence fails: **{independence_fail_count}** | "
             f"Conditional fails: **{conditional_fail_count}**"
         )
+        if confidence_level or confidence_score is not None:
+            level_label = str(confidence_level or "unknown").upper()
+            score_label = "n/a" if confidence_score is None else _fmt_number(confidence_score, 1)
+            lines.append(f"- Backtest confidence: **{level_label}** (score **{score_label}/100**)")
+        if confidence_reason:
+            lines.append(f"- Confidence note: **{confidence_reason}**")
     horizon_items = {
         str(key): dict(value)
         for key, value in dict(horizon_governance.get("horizons") or {}).items()
@@ -590,9 +599,9 @@ def render_daily_markdown(
             )
         lines.append(
             "| Horizon | Champion | Verdict | Pass rate | PASS/WARN/FAIL | "
-            "Coverage fails | Independence fails | Conditional fails |"
+            "Coverage fails | Independence fails | Conditional fails | Confidence |"
         )
-        lines.append("|---:|---|---|---:|---|---:|---:|---:|")
+        lines.append("|---:|---|---|---:|---|---:|---:|---:|---|")
         for horizon_days in horizon_order:
             payload = horizon_items.get(f"h{int(horizon_days)}") or {}
             status_counts = {
@@ -608,6 +617,13 @@ def render_daily_markdown(
             pass_rate = _as_float(payload.get("pass_rate"))
             if pass_rate is None and total_points > 0:
                 pass_rate = float(pass_count / total_points)
+            confidence_level = str(payload.get("confidence_level") or "").strip().upper() or "N/A"
+            confidence_score = _as_float(payload.get("confidence_score"))
+            confidence_display = (
+                confidence_level
+                if confidence_score is None
+                else f"{confidence_level} ({_fmt_number(confidence_score, 1)}/100)"
+            )
             lines.append(
                 f"| {int(horizon_days)}d | "
                 f"{str(payload.get('champion_model') or 'n/a').upper()} | "
@@ -616,7 +632,8 @@ def render_daily_markdown(
                 f"{pass_count}/{warn_count}/{fail_count} | "
                 f"{_as_int(payload.get('coverage_fail_count'))} | "
                 f"{_as_int(payload.get('independence_fail_count'))} | "
-                f"{_as_int(payload.get('conditional_fail_count'))} |"
+                f"{_as_int(payload.get('conditional_fail_count'))} | "
+                f"{confidence_display} |"
             )
     lines.append("")
 

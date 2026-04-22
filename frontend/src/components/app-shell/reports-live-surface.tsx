@@ -49,6 +49,14 @@ function verdictTone(verdict: string | null | undefined) {
   return "neutral" as const;
 }
 
+function confidenceTone(level: string | null | undefined) {
+  const normalized = String(level || "").toUpperCase();
+  if (normalized === "LOW") return "danger" as const;
+  if (normalized === "MEDIUM") return "warning" as const;
+  if (normalized === "HIGH") return "success" as const;
+  return "neutral" as const;
+}
+
 function trafficLightTone(value: string | null | undefined) {
   const normalized = String(value || "").toUpperCase();
   if (normalized === "RED") return "danger" as const;
@@ -187,6 +195,14 @@ export function ReportsLiveSurface({
                 tone={verdictTone(view.validationAcademic.globalVerdict)}
               />
               <StatusBadge label={view.validationAcademic.championVerdict} tone={verdictTone(view.validationAcademic.championVerdict)} />
+              <StatusBadge
+                label={
+                  view.validationAcademic.confidenceScore == null
+                    ? `Confidence ${view.validationAcademic.confidenceLevel}`
+                    : `Confidence ${view.validationAcademic.confidenceLevel} ${view.validationAcademic.confidenceScore.toFixed(0)}/100`
+                }
+                tone={confidenceTone(view.validationAcademic.confidenceLevel)}
+              />
               <StatusBadge label={`p-threshold ${(view.validationAcademic.threshold * 100).toFixed(1)}%`} tone="neutral" />
             </div>
           ) : (
@@ -196,12 +212,23 @@ export function ReportsLiveSurface({
 
         {view.validationAcademic.available ? (
           <div className="space-y-3">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
               <MetricBlock
                 label="Surface pass rate"
                 value={view.validationAcademic.passRate == null ? "n/a" : formatPercent(view.validationAcademic.passRate, 0)}
                 hint={`${view.validationAcademic.passCount}/${view.validationAcademic.totalPoints} PASS`}
                 tone={view.validationAcademic.failCount > 0 ? "warning" : "success"}
+                className="bg-transparent"
+              />
+              <MetricBlock
+                label="Sample confidence"
+                value={
+                  view.validationAcademic.confidenceScore == null
+                    ? view.validationAcademic.confidenceLevel
+                    : `${view.validationAcademic.confidenceLevel} ${view.validationAcademic.confidenceScore.toFixed(0)}/100`
+                }
+                hint={view.validationAcademic.confidenceReason ?? "Statistical confidence from sample-size guardrails."}
+                tone={confidenceTone(view.validationAcademic.confidenceLevel)}
                 className="bg-transparent"
               />
               <MetricBlock
@@ -263,6 +290,9 @@ export function ReportsLiveSurface({
                     </p>
                     <p className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
                       Warn {row.warnCount} | Fail {row.failCount} | Pass rate {row.passRate == null ? "n/a" : `${(row.passRate * 100).toFixed(0)}%`}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
+                      Confidence {row.confidenceScore == null ? row.confidenceLevel : `${row.confidenceLevel} ${row.confidenceScore.toFixed(0)}/100`}
                     </p>
                   </div>
                 ))}

@@ -34,6 +34,21 @@ def _compare_frame() -> pd.DataFrame:
     )
 
 
+def _surface_frame_with_observations(*, n: int, alpha_token: str, horizon_days: int) -> pd.DataFrame:
+    observations = max(int(n), 1)
+    exc = [0] * observations
+    exc[min(observations - 1, observations // 4)] = 1
+    return pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=observations, freq="D", tz="UTC"),
+            "pnl": [-10.0 if i % 2 == 0 else 4.0 for i in range(observations)],
+            f"var_hist_a{alpha_token}_h{int(horizon_days)}": [10.0] * observations,
+            f"es_hist_a{alpha_token}_h{int(horizon_days)}": [12.0] * observations,
+            f"exc_hist_a{alpha_token}_h{int(horizon_days)}": exc,
+        }
+    )
+
+
 def test_validation_summary_picks_best_model():
     summary = validate_compare_frame(_compare_frame(), alpha=0.95)
 
@@ -110,6 +125,10 @@ def test_validation_surface_exposes_statistical_governance_summary():
     assert isinstance(governance, dict)
     assert governance["pvalue_threshold"] == 0.05
     assert governance["total_points"] == len(surface["points"])
+    assert governance["confidence_level"] in {"high", "medium", "low", "unknown"}
+    assert "confidence_score" in governance
+    assert "confidence_reason" in governance
+    assert "min_observations_by_horizon_days" in governance
     status_counts = governance["status_counts"]
     assert status_counts["PASS"] + status_counts["WARN"] + status_counts["FAIL"] == len(surface["points"])
     assert governance["coverage_fail_count"] >= 0
@@ -121,6 +140,106 @@ def test_validation_surface_exposes_statistical_governance_summary():
     assert "independence_pass" in first_point
     assert "conditional_pass" in first_point
     assert first_point["statistical_status"] in {"PASS", "WARN", "FAIL"}
+
+
+def test_validation_surface_sample_guardrails_below_threshold():
+    frame = _surface_frame_with_observations(n=119, alpha_token="90", horizon_days=10)
+
+    surface = validate_compare_surface(frame, alphas=[0.90], horizons=[10])
+    governance = surface["governance_summary"]
+
+    assert governance["total_points"] == 1
+    assert governance["insufficient_sample_count"] == 1
+    assert governance["effective_points"] == 0
+    assert governance["confidence_level"] == "low"
+    assert float(governance["confidence_score"]) < 60.0
+    assert "Insufficient observations" in str(governance["confidence_reason"])
+    assert surface["points"][0]["statistical_status"] == "WARN"
+
+
+def test_validation_surface_sample_guardrails_at_threshold():
+    frame = _surface_frame_with_observations(n=120, alpha_token="90", horizon_days=10)
+
+    surface = validate_compare_surface(frame, alphas=[0.90], horizons=[10])
+    governance = surface["governance_summary"]
+    horizon_payload = surface["horizon_governance"]["horizons"]["h10"]
+
+    assert governance["insufficient_sample_count"] == 0
+    assert governance["effective_points"] == governance["total_points"]
+    assert governance["confidence_level"] == "high"
+    assert float(governance["confidence_score"]) >= 80.0
+    assert horizon_payload["horizon_observation_floor"] == 120
+    assert horizon_payload["confidence_level"] == "high"
+
+
+def test_validation_surface_sample_guardrails_above_threshold():
+    frame = _surface_frame_with_observations(n=180, alpha_token="90", horizon_days=10)
+
+    surface = validate_compare_surface(frame, alphas=[0.90], horizons=[10])
+    governance = surface["governance_summary"]
+
+    assert governance["insufficient_sample_count"] == 0
+    assert governance["effective_points"] == governance["total_points"]
+    assert governance["confidence_level"] == "high"
+    assert float(governance["confidence_score"]) >= 99.0
+
+
+def test_validation_surface_sample_guardrails_apply_extrapolated_floor_for_long_horizon():
+    frame = _surface_frame_with_observations(n=139, alpha_token="90", horizon_days=15)
+
+    surface = validate_compare_surface(frame, alphas=[0.90], horizons=[15])
+    governance = surface["governance_summary"]
+    horizon_payload = surface["horizon_governance"]["horizons"]["h15"]
+
+    assert horizon_payload["horizon_observation_floor"] == 140
+    assert governance["insufficient_sample_count"] == 1
+    assert horizon_payload["insufficient_sample_count"] == 1
+    assert surface["points"][0]["statistical_status"] == "WARN"
+
+
+def test_validation_alerts_long_horizon_fallback_counts_preserve_sample_thin_signal():
+    summary = ValidationSummary(
+        alpha=0.90,
+        expected_rate=0.10,
+        model_results={},
+        best_model=None,
+        surface={
+            "governance_summary": {
+                "total_points": 1,
+                "status_counts": {"PASS": 0, "WARN": 1, "FAIL": 0},
+            },
+            "points": [
+                {
+                    "model": "hist",
+                    "alpha": 0.90,
+                    "horizon_days": 15,
+                    "n": 130,
+                    "expected_rate": 0.10,
+                }
+            ],
+            "horizon_governance": {
+                "horizon_order": [15],
+                "overall_verdict": "WARN",
+                "horizons": {
+                    "h15": {
+                        "horizon_days": 15,
+                        "total_points": 1,
+                        "status_counts": {"PASS": 0, "WARN": 1, "FAIL": 0},
+                        "pass_rate": 0.0,
+                        "verdict": "WARN",
+                        "champion_model": "hist",
+                    }
+                },
+            },
+        },
+    )
+
+    alerts = alerts_from_validation_summary(summary)
+    codes = {alert.code for alert in alerts}
+
+    assert "VALIDATION_SURFACE_SAMPLE_THIN" in codes
+    assert "VALIDATION_HORIZON_SAMPLE_THIN" in codes
+    assert "VALIDATION_HORIZON_WARN" not in codes
 
 
 def test_validation_surface_exposes_horizon_governance_rollup():

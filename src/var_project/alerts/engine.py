@@ -6,7 +6,12 @@ from typing import Any, Dict, List, Mapping
 
 from var_project.risk.decisioning import RiskDecisionResult
 from var_project.risk.budgeting import RiskBudgetSnapshot
-from var_project.validation.model_validation import ValidationSummary
+from var_project.validation.model_validation import (
+    VALIDATION_SURFACE_MIN_EXPECTED_EXCEPTIONS,
+    VALIDATION_SURFACE_MIN_OBSERVATIONS,
+    VALIDATION_SURFACE_MIN_OBSERVATIONS_BY_HORIZON_DAYS,
+    ValidationSummary,
+)
 
 # ES diagnostics are unstable on tiny samples; require both enough rows and enough tail events.
 ES_ALERT_MIN_TOTAL_OBSERVATIONS = 30
@@ -18,10 +23,6 @@ ES_BREACH_RATE_BREACH_THRESHOLD = 0.50
 ES_ACERBI_MIN_OBSERVATIONS = 60
 ES_ACERBI_WARN_PVALUE = 0.05
 ES_ACERBI_BREACH_PVALUE = 0.01
-VALIDATION_SURFACE_MIN_OBSERVATIONS = 60
-VALIDATION_SURFACE_MIN_EXPECTED_EXCEPTIONS = 5.0
-
-
 @dataclass(frozen=True)
 class AlertEvent:
     source: str
@@ -51,18 +52,49 @@ def _float_or_none(value: Any) -> float | None:
     return parsed
 
 
-def _surface_min_required_observations(expected_rate: float) -> int:
+def _surface_horizon_observation_floor(horizon_days: int | None) -> int:
+    if horizon_days is None:
+        return int(VALIDATION_SURFACE_MIN_OBSERVATIONS)
+    resolved_horizon = int(horizon_days)
+    if resolved_horizon <= 0:
+        return int(VALIDATION_SURFACE_MIN_OBSERVATIONS)
+
+    floor_map = {
+        int(key): int(value)
+        for key, value in dict(VALIDATION_SURFACE_MIN_OBSERVATIONS_BY_HORIZON_DAYS).items()
+        if int(key) > 0
+    }
+    if not floor_map:
+        return int(VALIDATION_SURFACE_MIN_OBSERVATIONS)
+
+    ordered_horizons = sorted(floor_map.keys())
+    max_key = ordered_horizons[-1]
+    if resolved_horizon > max_key:
+        max_floor = int(floor_map[max_key])
+        extra_steps = int(math.ceil((resolved_horizon - max_key) / 5.0))
+        return int(max(int(VALIDATION_SURFACE_MIN_OBSERVATIONS), max_floor + extra_steps * 20))
+
+    for key in reversed(ordered_horizons):
+        if resolved_horizon >= key:
+            return int(max(int(VALIDATION_SURFACE_MIN_OBSERVATIONS), floor_map[key]))
+
+    return int(VALIDATION_SURFACE_MIN_OBSERVATIONS)
+
+
+def _surface_min_required_observations(expected_rate: float, *, horizon_days: int | None = None) -> int:
     rate = max(float(expected_rate), 1e-9)
     expected_floor = int(math.ceil(float(VALIDATION_SURFACE_MIN_EXPECTED_EXCEPTIONS) / rate))
-    return int(max(int(VALIDATION_SURFACE_MIN_OBSERVATIONS), expected_floor))
+    horizon_floor = _surface_horizon_observation_floor(horizon_days)
+    return int(max(int(VALIDATION_SURFACE_MIN_OBSERVATIONS), int(horizon_floor), expected_floor))
 
 
 def _surface_point_has_sufficient_observations(point: Mapping[str, Any]) -> bool:
     n = _int_or_zero(point.get("n"))
     expected_rate = _float_or_none(point.get("expected_rate"))
+    horizon_days = _int_or_zero(point.get("horizon_days"))
     if expected_rate is None:
         return False
-    return int(n) >= _surface_min_required_observations(expected_rate)
+    return int(n) >= _surface_min_required_observations(expected_rate, horizon_days=horizon_days)
 
 
 def _surface_horizon_sample_counts(points: list[Mapping[str, Any]]) -> dict[int, dict[str, int]]:

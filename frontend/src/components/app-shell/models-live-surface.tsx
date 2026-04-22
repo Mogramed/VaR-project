@@ -34,6 +34,14 @@ function verdictTone(verdict: ValidationVerdict) {
   return "neutral" as const;
 }
 
+function confidenceTone(level: string | null | undefined) {
+  const normalized = String(level ?? "").trim().toUpperCase();
+  if (normalized === "LOW") return "danger" as const;
+  if (normalized === "MEDIUM") return "warning" as const;
+  if (normalized === "HIGH") return "success" as const;
+  return "neutral" as const;
+}
+
 export function ModelsLiveSurface({
   portfolioSlug, initialComparison, initialValidation, initialFrame,
 }: {
@@ -109,6 +117,11 @@ export function ModelsLiveSurface({
   const governanceIndependenceFails = toNumber(governanceSummary?.independence_fail_count);
   const governanceConditionalFails = toNumber(governanceSummary?.conditional_fail_count);
   const governancePvalueThreshold = toNumber(governanceSummary?.pvalue_threshold);
+  const governanceConfidenceScore = toNumber(governanceSummary?.confidence_score);
+  const governanceConfidenceLevel = toUpper(governanceSummary?.confidence_level) ?? "UNKNOWN";
+  const governanceConfidenceReason = typeof governanceSummary?.confidence_reason === "string"
+    ? governanceSummary.confidence_reason.trim()
+    : null;
   const horizonGovernance = toRecord(validationSurface?.horizon_governance) ?? {};
   const horizonPayload = toRecord(horizonGovernance.horizons) ?? {};
   const horizonOrder = Array.isArray(horizonGovernance.horizon_order)
@@ -134,6 +147,8 @@ export function ModelsLiveSurface({
     const rowVerdict =
       normalizeValidationVerdict(row.verdict)
       ?? (rowFailCount > 0 ? "FAIL" : rowWarnCount > 0 ? "WARN" : rowPassCount > 0 ? "PASS" : "N/A");
+    const rowConfidenceLevel = toUpper(row.confidence_level) ?? "UNKNOWN";
+    const rowConfidenceScore = toNumber(row.confidence_score);
     return {
       horizonDays,
       championModel: toUpper(row.champion_model),
@@ -143,6 +158,8 @@ export function ModelsLiveSurface({
       warnCount: rowWarnCount,
       failCount: rowFailCount,
       totalPoints: rowTotalPoints,
+      confidenceLevel: rowConfidenceLevel,
+      confidenceScore: rowConfidenceScore,
     };
   });
   const globalVerdict =
@@ -185,6 +202,11 @@ export function ModelsLiveSurface({
               governanceTotalPoints == null || governancePassCount == null
                 ? null
                 : `${Math.round(governancePassCount)}/${Math.round(governanceTotalPoints)} pass`,
+              governanceConfidenceLevel === "UNKNOWN"
+                ? null
+                : governanceConfidenceScore == null
+                  ? `Confidence ${governanceConfidenceLevel}`
+                  : `Confidence ${governanceConfidenceLevel} ${governanceConfidenceScore.toFixed(0)}/100`,
             ) || undefined
           }
           tone={
@@ -194,7 +216,7 @@ export function ModelsLiveSurface({
                 ? "danger"
                 : governanceWarnCount != null && governanceWarnCount > 0
                   ? "warning"
-                  : "success"
+                  : confidenceTone(governanceConfidenceLevel)
           }
         />
         <MetricBlock
@@ -325,6 +347,20 @@ export function ModelsLiveSurface({
                   {governancePvalueThreshold == null ? "n/a" : `${(governancePvalueThreshold * 100).toFixed(1)}%`}
                 </span>
               </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-[var(--color-text-muted)]">Sample confidence</span>
+                <StatusBadge
+                  label={
+                    governanceConfidenceScore == null
+                      ? governanceConfidenceLevel
+                      : `${governanceConfidenceLevel} ${governanceConfidenceScore.toFixed(0)}/100`
+                  }
+                  tone={confidenceTone(governanceConfidenceLevel)}
+                />
+              </div>
+              {governanceConfidenceReason ? (
+                <p className="text-[11px] text-[var(--color-text-soft)]">{governanceConfidenceReason}</p>
+              ) : null}
               {horizonRows.length > 0 ? (
                 <div className="space-y-1.5 border-t border-[var(--color-border)] pt-2">
                   {horizonRows.map((row) => (
@@ -335,6 +371,7 @@ export function ModelsLiveSurface({
                       <span className="mono text-[var(--color-text-soft)]">
                         {row.passCount}/{row.totalPoints}
                         {row.passRate == null ? "" : ` ${formatPercent(row.passRate, 0)}`}
+                        {row.confidenceScore == null ? "" : ` • ${row.confidenceLevel} ${row.confidenceScore.toFixed(0)}/100`}
                       </span>
                       <StatusBadge label={row.verdict} tone={verdictTone(row.verdict)} />
                     </div>
