@@ -83,6 +83,10 @@ export function OverviewLiveStripPanel({
   fallbackEsValue,
   fallbackSnapshotCreatedAt,
   fallbackSnapshotSource,
+  preferredModel,
+  preferredHorizonDays,
+  showRiskStrip = true,
+  showAccountTicker = true,
 }: {
   liveState: MT5LiveStateResponse | null;
   heartbeatAt: string | null;
@@ -93,6 +97,10 @@ export function OverviewLiveStripPanel({
   fallbackEsValue: number;
   fallbackSnapshotCreatedAt: string | null;
   fallbackSnapshotSource: string | null;
+  preferredModel?: string | null;
+  preferredHorizonDays?: number;
+  showRiskStrip?: boolean;
+  showAccountTicker?: boolean;
 }) {
   const riskSummary = liveState?.risk_summary ?? null;
   const liveBridgeConnected = Boolean(liveState?.connected);
@@ -100,16 +108,17 @@ export function OverviewLiveStripPanel({
     ? (liveState?.capital_usage ?? null)
     : (liveState?.capital_usage ?? initialCapital);
   const reconciliation = liveState?.reconciliation ?? null;
-  const selectedModel = riskSummary?.reference_model ?? fallbackSelectedModel;
+  const selectedModel = preferredModel ?? riskSummary?.reference_model ?? fallbackSelectedModel;
   const varValue = riskSummary
     ? (riskSummary.var?.[selectedModel] ?? firstNumericValue(riskSummary.var))
     : (liveBridgeConnected ? null : fallbackVarValue);
   const esValue = riskSummary
     ? (riskSummary.es?.[selectedModel] ?? firstNumericValue(riskSummary.es))
     : (liveBridgeConnected ? null : fallbackEsValue);
+  const horizonDays = preferredHorizonDays === 5 || preferredHorizonDays === 10 ? preferredHorizonDays : 1;
   const headline = riskSummary?.headline_risk ?? [];
-  const live95 = preferredHeadlineRisk(headline, ["live_1d_95"]);
-  const live99 = preferredHeadlineRisk(headline, ["live_1d_99"]);
+  const live95 = preferredHeadlineRisk(headline, [`live_${horizonDays}d_95`, "live_1d_95"]);
+  const live99 = preferredHeadlineRisk(headline, [`live_${horizonDays}d_99`, "live_1d_99"]);
   const stressed = preferredHeadlineRisk(headline, [
     "stressed_10d_975",
     "stressed_10d_99",
@@ -125,7 +134,10 @@ export function OverviewLiveStripPanel({
   const microstructure = liveState?.microstructure ?? riskSummary?.microstructure ?? null;
   const tickQuality = liveState?.tick_quality ?? riskSummary?.tick_quality ?? null;
   const nowcast = liveState?.risk_nowcast ?? riskSummary?.risk_nowcast ?? null;
-  const nowcast99 = (nowcast?.live_1d_99 ?? null) as { nowcast_var?: number; nowcast_es?: number } | null;
+  const nowcastKey = `live_${horizonDays}d_99`;
+  const nowcast99 = (
+    asRecord(nowcast?.[nowcastKey]) ?? asRecord(nowcast?.live_1d_99) ?? null
+  ) as { nowcast_var?: number; nowcast_es?: number } | null;
   const nowcastRegime = typeof nowcast?.regime === "string" ? nowcast.regime : undefined;
   const marketRegime = typeof microstructure?.regime === "string" ? microstructure.regime : undefined;
   const qualityStatus = typeof dataQuality?.status === "string" ? dataQuality.status : undefined;
@@ -171,7 +183,7 @@ export function OverviewLiveStripPanel({
     <div className="space-y-4">
       <LivePostureBanner liveState={liveState} transport={transport} />
       {/* Live Account Ticker */}
-      {account ? (
+      {showAccountTicker && account ? (
         <section className="grid gap-2 sm:grid-cols-5">
           <LiveTickerCell
             label="Balance"
@@ -203,7 +215,7 @@ export function OverviewLiveStripPanel({
         </section>
       ) : null}
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      {showRiskStrip ? <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         <MetricBlock
           label={
             live95
@@ -235,7 +247,7 @@ export function OverviewLiveStripPanel({
           tone="warning"
         />
         <MetricBlock
-          label="Nowcast 1D 99%"
+          label={`Nowcast ${horizonDays}D 99%`}
           value={formatCurrency(nowcast99?.nowcast_var)}
           hint={
             joinLabelParts(
@@ -285,9 +297,9 @@ export function OverviewLiveStripPanel({
           }
           tone={liveState?.status === "ok" ? "success" : liveState?.degraded ? "warning" : "neutral"}
         />
-      </section>
+      </section> : null}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(260px,0.8fr)]">
+      {showRiskStrip ? <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(260px,0.8fr)]">
         <LiveOperatorAlerts alerts={liveState?.operator_alerts ?? []} title="Watchlist" />
 
         <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5">
@@ -421,12 +433,12 @@ export function OverviewLiveStripPanel({
             ) : null}
           </div>
         </div>
-      </div>
+      </div> : null}
     </div>
   );
 }
 
-/* ─── Live Ticker Cell ─── */
+/* Live Ticker Cell */
 
 const tickerToneColors: Record<string, string> = {
   success: "text-[var(--color-green)]",

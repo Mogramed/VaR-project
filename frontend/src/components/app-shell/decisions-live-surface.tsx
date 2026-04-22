@@ -2,6 +2,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
+import { DashboardActiveFilters } from "@/components/app-shell/dashboard-active-filters";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
 import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
@@ -18,6 +19,7 @@ import {
   deskArtifactQueryKey,
   deskArtifactQueryOptions,
 } from "@/components/app-shell/desk-artifact-query";
+import { useDashboardPrefs } from "@/lib/dashboard-preferences-context";
 import { averageDecisionFillRatio, buildDecisionDeltaComparison, buildDecisionImpactSeries, buildDecisionVerdictCounts } from "@/lib/view-models";
 import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
 
@@ -25,6 +27,7 @@ export function DecisionsLiveSurface({
   portfolioSlug, initialDecisions,
 }: { portfolioSlug: string; initialDecisions: RiskDecisionResponse[] }) {
   const { liveState, transport, accountId } = useDeskLive();
+  const { matchesSymbol } = useDashboardPrefs();
   const queryClient = useQueryClient();
   const decisionsQueryKey = deskArtifactQueryKey("decisions", portfolioSlug, accountId ?? "default", 12);
   const decisionsQuery = useQuery({
@@ -33,7 +36,7 @@ export function DecisionsLiveSurface({
     initialData: initialDecisions,
     ...deskArtifactQueryOptions,
   });
-  const decisions = decisionsQuery.data ?? initialDecisions;
+  const decisions = (decisionsQuery.data ?? initialDecisions).filter((row) => matchesSymbol(row.symbol));
 
   const verdicts = buildDecisionVerdictCounts(decisions);
   const fillRatio = averageDecisionFillRatio(decisions);
@@ -50,6 +53,7 @@ export function DecisionsLiveSurface({
           <LiveRuntimeBadgeGroup liveState={liveState} transport={transport} showBridge={false} />
         </>}
       />
+      <DashboardActiveFilters showHorizon={false} showModel={false} />
       <LivePostureBanner liveState={liveState} transport={transport} />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">

@@ -105,7 +105,19 @@ Backtest validation now includes sample-size guardrails and an explicit confiden
 - Interpretation:
   - `HIGH`: sample size is sufficient across points.
   - `MEDIUM`: mostly sufficient, but with reduced margin.
-  - `LOW`: insufficient observations; results should be treated as indicative only.
+- `LOW`: insufficient observations; results should be treated as indicative only.
+
+## Dashboard View Controls (VAR-017)
+
+The operator dashboard now supports user-level personalization through the `Configure` drawer in the top bar:
+
+- Toggle overview widgets on/off.
+- Show/hide sidebar pages.
+- Apply global filters for symbol, horizon (`1d/5d/10d`), and model preference.
+- Start from presets (`trading`, `risk-monitoring`, `minimal`) and fine-tune as needed.
+- Preferences auto-save in browser storage and persist after refresh.
+
+Global symbol filtering is applied consistently on live operational pages (MT5 Ops, Blotter, Execution, Decisions, Attribution, Capital, Universe). Model/horizon preferences are used by risk-oriented surfaces (Overview and Models).
 
 Frontend:
 

@@ -3,6 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
+import { DashboardActiveFilters } from "@/components/app-shell/dashboard-active-filters";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
 import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
@@ -19,6 +20,7 @@ import {
   deskArtifactQueryKey,
   deskArtifactQueryOptions,
 } from "@/components/app-shell/desk-artifact-query";
+import { useDashboardPrefs } from "@/lib/dashboard-preferences-context";
 import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
 import { buildCapitalHistorySeries, flattenCapitalAllocations } from "@/lib/view-models";
 
@@ -34,6 +36,7 @@ export function CapitalLiveSurface({
   initialHistory: CapitalUsageSnapshotResponse[];
 }) {
   const { liveState, transport } = useDeskLive();
+  const { matchesSymbol } = useDashboardPrefs();
   const queryClient = useQueryClient();
   const src = preferredSource(liveState);
   const capitalQueryKey = deskArtifactQueryKey("capital", "latest", portfolioSlug, src);
@@ -53,7 +56,7 @@ export function CapitalLiveSurface({
 
   const resolved = liveState?.capital_usage ?? capitalQuery.data ?? initialCapital;
   const history = historyQuery.data ?? initialHistory;
-  const allocations = resolved ? flattenCapitalAllocations(resolved) : [];
+  const allocations = (resolved ? flattenCapitalAllocations(resolved) : []).filter((row) => matchesSymbol(row.symbol));
   const capitalSeries = buildCapitalHistorySeries(history);
 
   return (
@@ -68,6 +71,7 @@ export function CapitalLiveSurface({
           </>
         )}
       />
+      <DashboardActiveFilters showHorizon={false} showModel={false} />
       <LivePostureBanner liveState={liveState} transport={transport} />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">

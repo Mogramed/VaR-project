@@ -12,6 +12,7 @@ import {
   Landmark,
   Orbit,
   Radar,
+  Settings2,
   ShieldCheck,
   X,
 } from "lucide-react";
@@ -35,29 +36,32 @@ import { alertPriorityCode, dedupeOperatorAlerts, dedupePersistedAlerts } from "
 import { cn, formatTimestamp } from "@/lib/utils";
 import { useRelativeTime } from "@/lib/use-relative-time";
 import { useQuery } from "@tanstack/react-query";
+import { DashboardConfigPanel } from "@/components/app-shell/dashboard-config-panel";
+import { DashboardPreferencesProvider } from "@/lib/dashboard-preferences-context";
+import { useDashboardPreferences, type PageId } from "@/lib/dashboard-preferences";
 
-const navItems = [
-  { href: "/desk", label: "Overview", icon: Gauge },
-  { href: "/desk/live", label: "MT5 Ops", icon: Activity },
-  { href: "/desk/incidents", label: "Incidents", icon: AlertTriangle },
-  { href: "/desk/universe", label: "Universe", icon: Orbit },
-  { href: "/desk/models", label: "Models", icon: Radar },
-  { href: "/desk/attribution", label: "Attribution", icon: BarChart3 },
-  { href: "/desk/capital", label: "Capital", icon: Landmark },
-  { href: "/desk/decisions", label: "Decisions", icon: ShieldCheck },
-  { href: "/desk/execution", label: "Execution", icon: BriefcaseBusiness },
-  { href: "/desk/stress", label: "Stress", icon: Flame },
-  { href: "/desk/blotter", label: "Blotter", icon: Orbit },
-  { href: "/desk/reports", label: "Reports", icon: FileText },
-] as const;
+const navItems: ReadonlyArray<{ href: string; label: string; icon: typeof Gauge; pageId: PageId }> = [
+  { href: "/desk", label: "Overview", icon: Gauge, pageId: "overview" },
+  { href: "/desk/live", label: "MT5 Ops", icon: Activity, pageId: "live" },
+  { href: "/desk/incidents", label: "Incidents", icon: AlertTriangle, pageId: "incidents" },
+  { href: "/desk/universe", label: "Universe", icon: Orbit, pageId: "universe" },
+  { href: "/desk/models", label: "Models", icon: Radar, pageId: "models" },
+  { href: "/desk/attribution", label: "Attribution", icon: BarChart3, pageId: "attribution" },
+  { href: "/desk/capital", label: "Capital", icon: Landmark, pageId: "capital" },
+  { href: "/desk/decisions", label: "Decisions", icon: ShieldCheck, pageId: "decisions" },
+  { href: "/desk/execution", label: "Execution", icon: BriefcaseBusiness, pageId: "execution" },
+  { href: "/desk/stress", label: "Stress", icon: Flame, pageId: "stress" },
+  { href: "/desk/blotter", label: "Blotter", icon: Orbit, pageId: "blotter" },
+  { href: "/desk/reports", label: "Reports", icon: FileText, pageId: "reports" },
+];
 
-const mobileNavItems = [
-  { href: "/desk", label: "Overview", icon: Gauge },
-  { href: "/desk/live", label: "MT5 Ops", icon: Activity },
-  { href: "/desk/capital", label: "Capital", icon: Landmark },
-  { href: "/desk/execution", label: "Execute", icon: BriefcaseBusiness },
-  { href: "/desk/blotter", label: "Blotter", icon: Orbit },
-] as const;
+const mobileNavItems: ReadonlyArray<{ href: string; label: string; icon: typeof Gauge; pageId: PageId }> = [
+  { href: "/desk", label: "Overview", icon: Gauge, pageId: "overview" },
+  { href: "/desk/live", label: "MT5 Ops", icon: Activity, pageId: "live" },
+  { href: "/desk/capital", label: "Capital", icon: Landmark, pageId: "capital" },
+  { href: "/desk/execution", label: "Execute", icon: BriefcaseBusiness, pageId: "execution" },
+  { href: "/desk/blotter", label: "Blotter", icon: Orbit, pageId: "blotter" },
+];
 
 const MT5_ACCOUNT_STORAGE_KEY = "desk:active-mt5-account";
 const EMPTY_MT5_ACCOUNTS: NonNullable<MT5AccountsResponse["accounts"]> = [];
@@ -312,12 +316,23 @@ function DeskChromeFrame({
   jobsStatus: WorkerStatusResponse | null;
 }) {
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
   const [portfolioDropdownOpen, setPortfolioDropdownOpen] = useState(false);
   const [accountDropdownOpen, setAccountDropdownOpen] = useState(false);
   const { liveState, heartbeatAt, transport } = useDeskLive();
+  const dashboardPrefs = useDashboardPreferences();
+  const visibleNavItems = useMemo(
+    () => navItems.filter((item) => dashboardPrefs.isPageVisible(item.pageId)),
+    [dashboardPrefs],
+  );
+  const visibleMobileNavItems = useMemo(
+    () => mobileNavItems.filter((item) => dashboardPrefs.isPageVisible(item.pageId)),
+    [dashboardPrefs],
+  );
+  const mt5AccountsList = mt5Accounts?.accounts;
   const accountOptions = useMemo(
-    () => (Array.isArray(mt5Accounts?.accounts) ? mt5Accounts.accounts : EMPTY_MT5_ACCOUNTS),
-    [mt5Accounts?.accounts],
+    () => (Array.isArray(mt5AccountsList) ? mt5AccountsList : EMPTY_MT5_ACCOUNTS),
+    [mt5AccountsList],
   );
   const activeAccountLabel = useMemo(() => {
     if (!accountId) return "account";
@@ -382,7 +397,7 @@ function DeskChromeFrame({
 
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--color-bg)]">
-      {/* ── Sidebar ── */}
+      {/* Sidebar */}
       <aside
         data-desk-rail
         className="hidden w-[52px] shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg)] xl:flex"
@@ -397,7 +412,7 @@ function DeskChromeFrame({
 
         {/* Nav items */}
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-1.5 py-2">
-          {navItems.map(({ href, label, icon: Icon }) => {
+          {visibleNavItems.map(({ href, label, icon: Icon }) => {
             const active = pathname === href;
             return (
               <Link
@@ -436,9 +451,9 @@ function DeskChromeFrame({
         </div>
       </aside>
 
-      {/* ── Main area ── */}
+      {/* Main area */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* ── Topbar ── */}
+        {/* Topbar */}
         <header
           data-desk-topbar
           className="flex h-11 shrink-0 items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg)] px-4"
@@ -599,6 +614,19 @@ function DeskChromeFrame({
 
             <button
               type="button"
+              onClick={() => {
+                setConfigOpen(true);
+                setInspectorOpen(false);
+              }}
+              title="Configure my view"
+              className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 text-[11px] text-[var(--color-text-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+            >
+              <Settings2 className="size-3" />
+              <span className="hidden sm:inline">Configure</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setInspectorOpen(true)}
               className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 text-[11px] text-[var(--color-text-muted)] transition-colors hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-soft)]"
             >
@@ -607,17 +635,19 @@ function DeskChromeFrame({
           </div>
         </header>
 
-        {/* ── Page content ── */}
+        {/* Page content */}
         <main
           data-desk-main
           className="flex-1 overflow-y-auto px-4 py-4 pb-20 lg:px-6 lg:py-5 xl:pb-5"
         >
-          {children}
+          <DashboardPreferencesProvider value={dashboardPrefs}>
+            {children}
+          </DashboardPreferencesProvider>
         </main>
 
-        {/* ── Mobile bottom nav ── */}
+        {/* Mobile bottom nav */}
         <nav className="fixed inset-x-0 bottom-0 z-30 flex h-14 items-center justify-around border-t border-[var(--color-border)] bg-[var(--color-bg)]/95 backdrop-blur-md xl:hidden">
-          {mobileNavItems.map(({ href, label, icon: Icon }) => {
+          {visibleMobileNavItems.map(({ href, label, icon: Icon }) => {
             const active = pathname === href;
             return (
               <Link
@@ -638,7 +668,7 @@ function DeskChromeFrame({
         </nav>
       </div>
 
-      {/* ── Inspector drawer ── */}
+      {/* Inspector drawer */}
       <div
         className={cn(
           "fixed inset-0 z-40 bg-black/40 transition-opacity",
@@ -677,11 +707,18 @@ function DeskChromeFrame({
           />
         </div>
       </aside>
+
+      {/* Dashboard config drawer */}
+      <DashboardConfigPanel
+        open={configOpen}
+        onClose={() => setConfigOpen(false)}
+        api={dashboardPrefs}
+      />
     </div>
   );
 }
 
-/* ── Inspector content ── */
+/* Inspector content */
 
 function InspectorContent({
   health,

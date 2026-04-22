@@ -1100,18 +1100,35 @@ class DeskMt5Service:
         holdings = list(payload.get("holdings") or [])
         if exposure or holdings:
             gross = self._coerce_float(exposure.get("gross_exposure_base_ccy"))
-            from_holdings = float(
-                sum(
-                    abs(
-                        float(
-                            (item or {}).get("signed_exposure_base_ccy")
-                            or (item or {}).get("exposure_base_ccy")
-                            or 0.0
+            # Use per-symbol exposure items (already netted by symbol) when
+            # available so the derivation matches gross_exposure_base_ccy which
+            # also nets by symbol before summing absolute values.
+            exposure_items = list(exposure.get("items") or [])
+            if exposure_items:
+                from_holdings = float(
+                    sum(
+                        abs(
+                            float(
+                                (item or {}).get("signed_exposure_base_ccy")
+                                or (item or {}).get("exposure_base_ccy")
+                                or 0.0
+                            )
                         )
+                        for item in exposure_items
                     )
-                    for item in holdings
                 )
-            )
+            else:
+                # Fallback: aggregate raw holdings by symbol before comparing
+                symbol_net: dict[str, float] = {}
+                for item in holdings:
+                    symbol = str((item or {}).get("symbol") or "")
+                    value = float(
+                        (item or {}).get("signed_exposure_base_ccy")
+                        or (item or {}).get("exposure_base_ccy")
+                        or 0.0
+                    )
+                    symbol_net[symbol] = symbol_net.get(symbol, 0.0) + value
+                from_holdings = float(sum(abs(v) for v in symbol_net.values()))
             if gross is None:
                 _append(
                     check_id="exposure_identity",

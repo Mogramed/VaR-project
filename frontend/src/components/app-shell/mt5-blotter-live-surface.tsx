@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
+import { DashboardActiveFilters } from "@/components/app-shell/dashboard-active-filters";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
 import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
@@ -23,6 +24,8 @@ import { buildIncidentTimeline } from "@/lib/incidents";
 import { useRecentExecutionActivity } from "@/lib/use-recent-execution-activity";
 import { formatCurrency, formatTimestamp, humanizeIdentifier } from "@/lib/utils";
 import { countManualMt5Events } from "@/lib/view-models";
+import { useDashboardPrefs } from "@/lib/dashboard-preferences-context";
+import { symbolFilterTokens } from "@/lib/dashboard-preferences";
 
 type IncidentStatus = "acknowledged" | "investigating" | "resolved";
 type TransactionHistoryType = "all" | "order" | "deal" | "manual" | "desk";
@@ -35,14 +38,14 @@ type TransactionHistoryFilters = {
 };
 
 function selectedMismatch(
-  reconciliation: ReconciliationSummaryResponse | null,
+  mismatches: ReconciliationSummaryResponse["mismatches"] | null | undefined,
   symbol: string | null,
 ) {
-  if (!reconciliation || !symbol) {
+  if (!mismatches || !symbol) {
     return null;
   }
   return (
-    (reconciliation.mismatches ?? []).find((item) => item.symbol === symbol) ?? null
+    (mismatches ?? []).find((item) => item.symbol === symbol) ?? null
   );
 }
 
@@ -55,6 +58,7 @@ export function Mt5BlotterLiveSurface({
   initialAudit: AuditEventResponse[];
 }) {
   const { liveState, transport, accountId } = useDeskLive();
+  const { matchesSymbol, prefs } = useDashboardPrefs();
   const { executions, fills } = useRecentExecutionActivity({
     portfolioSlug,
     accountId,
@@ -64,8 +68,22 @@ export function Mt5BlotterLiveSurface({
     executionLimit: 20,
     fillLimit: 20,
   });
-  const orders = useMemo(() => liveState?.order_history ?? [], [liveState?.order_history]);
-  const deals = useMemo(() => liveState?.deal_history ?? [], [liveState?.deal_history]);
+  const filteredExecutions = useMemo(
+    () => executions.filter((row) => matchesSymbol(row.symbol)),
+    [executions, matchesSymbol],
+  );
+  const filteredFills = useMemo(
+    () => fills.filter((row) => matchesSymbol(row.symbol)),
+    [fills, matchesSymbol],
+  );
+  const orders = useMemo(
+    () => (liveState?.order_history ?? []).filter((row) => matchesSymbol(row.symbol)),
+    [liveState?.order_history, matchesSymbol],
+  );
+  const deals = useMemo(
+    () => (liveState?.deal_history ?? []).filter((row) => matchesSymbol(row.symbol)),
+    [liveState?.deal_history, matchesSymbol],
+  );
   const manual = countManualMt5Events(orders, deals);
 
   const [reconciliationState, setReconciliationState] = useState<ReconciliationSummaryResponse | null>(
@@ -100,26 +118,40 @@ export function Mt5BlotterLiveSurface({
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [reconciliationHistory, setReconciliationHistory] = useState<ReconciliationHistoryEntryResponse[]>([]);
   const [reconciliationError, setReconciliationError] = useState<string | null>(null);
+  const globalSymbolTokens = useMemo(
+    () => symbolFilterTokens(prefs.symbolFilter),
+    [prefs.symbolFilter],
+  );
+  const inferredGlobalHistorySymbol = globalSymbolTokens.length === 1 ? globalSymbolTokens[0] : "";
 
   useEffect(() => {
     setReconciliationState(liveState?.reconciliation ?? null);
   }, [liveState?.reconciliation, liveState?.sequence]);
 
+  const reconciliation = reconciliationState;
+  const mismatchRows = useMemo(
+    () => (reconciliation?.mismatches ?? []).filter((row) => matchesSymbol(row.symbol)),
+    [matchesSymbol, reconciliation],
+  );
+  const incidents = useMemo(
+    () => (reconciliation?.incidents ?? []).filter((item) => matchesSymbol(item.symbol)),
+    [matchesSymbol, reconciliation],
+  );
+
   const activeSymbol = useMemo(() => {
-    const mismatches = reconciliationState?.mismatches ?? [];
-    const active = mismatches.find((item) => item.status !== "match")?.symbol;
-    return active ?? mismatches[0]?.symbol ?? null;
-  }, [reconciliationState]);
+    const active = mismatchRows.find((item) => item.status !== "match")?.symbol;
+    return active ?? mismatchRows[0]?.symbol ?? null;
+  }, [mismatchRows]);
 
   useEffect(() => {
-    if (!selectedSymbol || !selectedMismatch(reconciliationState, selectedSymbol)) {
+    if (!selectedSymbol || !selectedMismatch(mismatchRows, selectedSymbol)) {
       setSelectedSymbol(activeSymbol);
     }
-  }, [activeSymbol, reconciliationState, selectedSymbol]);
+  }, [activeSymbol, mismatchRows, selectedSymbol]);
 
   const selectedRow = useMemo(
-    () => selectedMismatch(reconciliationState, selectedSymbol),
-    [reconciliationState, selectedSymbol],
+    () => selectedMismatch(mismatchRows, selectedSymbol),
+    [mismatchRows, selectedSymbol],
   );
 
   useEffect(() => {
@@ -136,15 +168,11 @@ export function Mt5BlotterLiveSurface({
     setResolutionNote(selectedRow.resolution_note ?? "");
   }, [selectedRow]);
 
-  const reconciliation = reconciliationState;
-  const mismatchCount = (reconciliation?.mismatches ?? []).filter((i) => i.status !== "match").length;
-  const incidents = reconciliation?.incidents ?? [];
+  const mismatchCount = mismatchRows.filter((item) => item.status !== "match").length;
   const openIncidentCount =
-    reconciliation?.active_incident_count
-    ?? incidents.filter((item) => item.incident_status !== "resolved").length;
+    incidents.filter((item) => item.incident_status !== "resolved").length;
   const resolvedIncidentCount =
-    reconciliation?.resolved_incident_count
-    ?? incidents.filter((item) => item.incident_status === "resolved").length;
+    incidents.filter((item) => item.incident_status === "resolved").length;
   const autoResolvedCount = reconciliation?.autoresolved_count ?? 0;
   const incidentTimeline = useMemo(
     () => buildIncidentTimeline(selectedSymbol, auditState, orders, deals),
@@ -191,6 +219,7 @@ export function Mt5BlotterLiveSurface({
     setHistoryFilters(cleared);
     setHistoryPage(1);
   }, []);
+  const effectiveHistorySymbol = historyFilters.symbol || inferredGlobalHistorySymbol;
 
   useEffect(() => {
     let cancelled = false;
@@ -204,7 +233,7 @@ export function Mt5BlotterLiveSurface({
           accountId,
           dateFrom: historyFilters.dateFrom ? `${historyFilters.dateFrom}T00:00:00Z` : undefined,
           dateTo: historyFilters.dateTo ? `${historyFilters.dateTo}T23:59:59Z` : undefined,
-          symbol: historyFilters.symbol || undefined,
+          symbol: effectiveHistorySymbol || undefined,
           type: historyFilters.type,
           sort: "time_desc",
           page: historyPage,
@@ -231,13 +260,17 @@ export function Mt5BlotterLiveSurface({
     return () => {
       cancelled = true;
     };
-  }, [accountId, historyFilters.dateFrom, historyFilters.dateTo, historyFilters.symbol, historyFilters.type, historyPage, historyPageSize, portfolioSlug]);
+  }, [accountId, effectiveHistorySymbol, historyFilters.dateFrom, historyFilters.dateTo, historyFilters.type, historyPage, historyPageSize, portfolioSlug]);
 
-  const historyRows = historyState?.items ?? [];
+  const rawHistoryRows = historyState?.items ?? [];
+  const historyRows = rawHistoryRows.filter((row) => matchesSymbol(row.symbol));
+  const historyRowsFiltered = historyRows.length !== rawHistoryRows.length;
   const historyTotal = historyState?.total ?? 0;
   const historyPageCount = Math.max(1, Math.ceil(historyTotal / historyPageSize));
   const historyFrom = historyTotal === 0 ? 0 : (historyPage - 1) * historyPageSize + 1;
   const historyTo = historyTotal === 0 ? 0 : Math.min(historyPage * historyPageSize, historyTotal);
+  const historyUsesGlobalSingleSymbol = historyFilters.symbol.length === 0 && inferredGlobalHistorySymbol.length > 0;
+  const historyNeedsExplicitSymbol = historyFilters.symbol.length === 0 && globalSymbolTokens.length > 1;
   const historyExportUrl = useMemo(
     () =>
       api.mt5TransactionHistoryExportUrl({
@@ -245,12 +278,12 @@ export function Mt5BlotterLiveSurface({
         accountId,
         dateFrom: historyFilters.dateFrom ? `${historyFilters.dateFrom}T00:00:00Z` : undefined,
         dateTo: historyFilters.dateTo ? `${historyFilters.dateTo}T23:59:59Z` : undefined,
-        symbol: historyFilters.symbol || undefined,
+        symbol: effectiveHistorySymbol || undefined,
         type: historyFilters.type,
         sort: "time_desc",
         maxRows: 5000,
       }),
-    [accountId, historyFilters.dateFrom, historyFilters.dateTo, historyFilters.symbol, historyFilters.type, portfolioSlug],
+    [accountId, effectiveHistorySymbol, historyFilters.dateFrom, historyFilters.dateTo, historyFilters.type, portfolioSlug],
   );
 
   const handleSaveIncident = useCallback(async () => {
@@ -293,13 +326,14 @@ export function Mt5BlotterLiveSurface({
           </ButtonLink>
         </>}
       />
+      <DashboardActiveFilters showHorizon={false} showModel={false} />
       <LivePostureBanner liveState={liveState} transport={transport} />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         <MetricBlock label="Orders" value={String(orders.length)} hint={`${manual.orders} manual`} tone="accent" />
         <MetricBlock label="Deals" value={String(deals.length)} hint={`${manual.deals} manual`} tone="warning" />
-        <MetricBlock label="Desk attempts" value={String(executions.length)} tone="success" />
-        <MetricBlock label="Fills" value={String(fills.length)} hint={liveState?.generated_at ? formatTimestamp(liveState.generated_at) : undefined} />
+        <MetricBlock label="Desk attempts" value={String(filteredExecutions.length)} tone="success" />
+        <MetricBlock label="Fills" value={String(filteredFills.length)} hint={liveState?.generated_at ? formatTimestamp(liveState.generated_at) : undefined} />
         <MetricBlock label="Mismatches" value={String(mismatchCount)} tone={mismatchCount > 0 ? "warning" : "success"} />
         <MetricBlock label="Open incidents" value={String(openIncidentCount)} tone={openIncidentCount > 0 ? "warning" : "neutral"} />
       </section>
@@ -484,9 +518,21 @@ export function Mt5BlotterLiveSurface({
               </button>
             </div>
             <span className="text-[11px] text-[var(--color-text-muted)]">
-              {historyLoading ? "Loading..." : `Showing ${historyFrom}-${historyTo} of ${historyTotal}`}
+              {historyLoading
+                ? "Loading..."
+                : `Showing ${historyFrom}-${historyTo} of ${historyTotal}${historyRowsFiltered ? ` (filtered view ${historyRows.length})` : ""}`}
             </span>
           </div>
+          {historyUsesGlobalSingleSymbol ? (
+            <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+              Using global symbol filter: {inferredGlobalHistorySymbol}.
+            </p>
+          ) : null}
+          {historyNeedsExplicitSymbol ? (
+            <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+              Multiple global symbols are active. Set a specific symbol to export a scoped CSV.
+            </p>
+          ) : null}
 
           <div className="mt-3">
             {historyError ? (
@@ -527,7 +573,7 @@ export function Mt5BlotterLiveSurface({
       <div className="grid gap-4 xl:grid-cols-[1.35fr,0.9fr]">
         <div className="space-y-2">
           <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Execution attempts</h4>
-          <ExecutionHistoryTable rows={executions} />
+          <ExecutionHistoryTable rows={filteredExecutions} />
         </div>
         <div className="space-y-2">
           <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Incident workflow</h4>
@@ -649,11 +695,11 @@ export function Mt5BlotterLiveSurface({
       <div className="grid gap-4 xl:grid-cols-2">
         <div className="space-y-2">
           <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Reconciliation</h4>
-          <ReconciliationTable rows={reconciliation?.mismatches ?? []} onManage={handleManage} />
+          <ReconciliationTable rows={mismatchRows} onManage={handleManage} />
         </div>
         <div className="space-y-2">
           <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Execution fills</h4>
-          <ExecutionFillsTable rows={fills} />
+          <ExecutionFillsTable rows={filteredFills} />
         </div>
       </div>
     </div>

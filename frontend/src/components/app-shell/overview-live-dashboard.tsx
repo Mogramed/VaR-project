@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
+import { DashboardActiveFilters } from "@/components/app-shell/dashboard-active-filters";
 import { OverviewLiveStripPanel } from "@/components/app-shell/overview-live-strip";
 import { ChartSurface } from "@/components/charts/chart-surface";
 import { StatusBadge } from "@/components/ui/primitives";
@@ -24,6 +25,7 @@ import {
   joinLabelParts,
 } from "@/lib/utils";
 import { buildDeskConsumptionSeries } from "@/lib/view-models";
+import { useDashboardPrefs } from "@/lib/dashboard-preferences-context";
 
 export function OverviewLiveDashboard({
   deskSlug,
@@ -119,155 +121,191 @@ export function OverviewLiveDashboard({
     ? `${Math.round(liveState.truth_score * 100)}%`
     : "n/a";
 
+  const { isWidgetVisible, prefs, preferredHorizonDays, resolvePreferredModel } = useDashboardPrefs();
+  const showRiskStrip = isWidgetVisible("risk-strip");
+  const showAccountTicker = isWidgetVisible("account-ticker");
+  const showCapitalChart = isWidgetVisible("capital-chart");
+  const showAlertPosture = isWidgetVisible("alert-posture");
+  const showDeskAlignment = isWidgetVisible("desk-alignment");
+  const showDataIntegrity = isWidgetVisible("data-integrity");
+  const showPortfolioSlices = isWidgetVisible("portfolio-slices");
+  const hasAnySidePanel = showAlertPosture || showDeskAlignment || showDataIntegrity;
+  const preferredModel = resolvePreferredModel(fallbackSelectedModel) ?? fallbackSelectedModel;
+
   return (
     <div className="space-y-4">
-      <OverviewLiveStripPanel
-        liveState={liveState}
-        heartbeatAt={heartbeatAt}
-        transport={transport}
-        initialCapital={initialCapital}
-        fallbackSelectedModel={fallbackSelectedModel}
-        fallbackVarValue={fallbackVarValue}
-        fallbackEsValue={fallbackEsValue}
-        fallbackSnapshotCreatedAt={snapshotCreatedAt}
-        fallbackSnapshotSource={snapshotSource}
-      />
+      <DashboardActiveFilters showSymbol={false} />
+      {showRiskStrip || showAccountTicker ? (
+        <OverviewLiveStripPanel
+          liveState={liveState}
+          heartbeatAt={heartbeatAt}
+          transport={transport}
+          initialCapital={initialCapital}
+          fallbackSelectedModel={fallbackSelectedModel}
+          fallbackVarValue={fallbackVarValue}
+          fallbackEsValue={fallbackEsValue}
+          fallbackSnapshotCreatedAt={snapshotCreatedAt}
+          fallbackSnapshotSource={snapshotSource}
+          preferredModel={preferredModel}
+          preferredHorizonDays={preferredHorizonDays}
+          showRiskStrip={showRiskStrip}
+          showAccountTicker={showAccountTicker}
+        />
+      ) : null}
 
       {/* Chart + side panel */}
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_300px]">
-        <ChartSurface
-          option={makeBarOption(deskSeries, {
-            color: CHART_PALETTE.gold,
-            negativeColor: CHART_PALETTE.green,
-            mode: deskSeries.length <= 3 ? "sparse" : "comparison",
-          })}
-          mode={deskSeries.length <= 3 ? "sparse" : "comparison"}
-          dataCount={deskSeries.length}
-          title="Capital by portfolio"
-          meta={
-            desk?.generated_at
-              ? joinLabelParts("Desk snapshot", formatTimestamp(desk.generated_at))
-              : undefined
-          }
-          emptyState={
-            <p className="text-xs text-[var(--color-text-muted)]">No desk snapshot available.</p>
-          }
-        />
+      {showCapitalChart || hasAnySidePanel ? (
+        <div className={
+          showCapitalChart && hasAnySidePanel
+            ? "grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_300px]"
+            : showCapitalChart
+              ? "grid gap-4"
+              : "grid gap-4 xl:grid-cols-1"
+        }>
+          {showCapitalChart ? (
+            <ChartSurface
+              option={makeBarOption(deskSeries, {
+                color: CHART_PALETTE.gold,
+                negativeColor: CHART_PALETTE.green,
+                mode: deskSeries.length <= 3 ? "sparse" : "comparison",
+              })}
+              mode={deskSeries.length <= 3 ? "sparse" : "comparison"}
+              dataCount={deskSeries.length}
+              title="Capital by portfolio"
+              meta={
+                desk?.generated_at
+                  ? joinLabelParts("Desk snapshot", formatTimestamp(desk.generated_at))
+                  : undefined
+              }
+              emptyState={
+                <p className="text-xs text-[var(--color-text-muted)]">No desk snapshot available.</p>
+              }
+            />
+          ) : null}
 
-        <div className="space-y-3">
-          {/* Alert posture */}
-          <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5">
-            <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-              Alert posture
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <MiniStat label="Warn" value={alertCounts.warn ?? 0} color="var(--color-amber)" />
-              <MiniStat label="Breach" value={alertCounts.breach ?? 0} color="var(--color-red)" />
-              <MiniStat label="Info" value={alertCounts.info ?? 0} color="var(--color-green)" />
-            </div>
-          </div>
-
-          {/* Desk alignment */}
-          <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5">
-            <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-              Desk alignment
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-[var(--color-text-muted)]">Champion</span>
-                <span className="mono font-semibold text-[var(--color-accent)]">
-                  {(championModel ?? "n/a").toUpperCase()}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-3 text-xs">
-                <span className="text-[var(--color-text-muted)]">Truth source</span>
-                <span className="text-right text-[var(--color-text)]">
-                  {reconciliation?.operational_truth
-                    ? formatOperationalTruth(reconciliation.operational_truth)
-                    : (initialCapital ?? snapshotSource)
-                      ? "Persisted snapshot"
-                      : "n/a"}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-3 text-xs">
-                <span className="text-[var(--color-text-muted)]">Risk basis</span>
-                <span className="text-right text-[var(--color-text)]">{formatSourceLabel(riskSource)}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3 text-xs">
-                <span className="text-[var(--color-text-muted)]">Risk as of</span>
-                <span className="mono text-right text-[10px] text-[var(--color-text-muted)]">
-                  {riskTimestamp ? formatTimestamp(riskTimestamp) : "n/a"}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-3 text-xs">
-                <span className="text-[var(--color-text-muted)]">Capital basis</span>
-                <span className="text-right text-[var(--color-text)]">{formatSourceLabel(capitalSource)}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3 text-xs">
-                <span className="text-[var(--color-text-muted)]">Capital as of</span>
-                <span className="mono text-right text-[10px] text-[var(--color-text-muted)]">
-                  {capitalTimestamp ? formatTimestamp(capitalTimestamp) : "n/a"}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-3 text-xs">
-                <span className="text-[var(--color-text-muted)]">Market ref</span>
-                <span className="mono text-right text-[10px] text-[var(--color-text-muted)]">{marketReference}</span>
-              </div>
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-[var(--color-text-muted)]">Manual events</span>
-                <span className="mono text-[var(--color-text)]">{reconciliation?.manual_event_count ?? 0}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3 text-xs">
-                <span className="text-[var(--color-text-muted)]">Persisted snapshot</span>
-                <span className="mono text-right text-[10px] text-[var(--color-text-muted)]">
-                  {persistedSnapshot}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Data integrity */}
-          <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5">
-            <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-              Data integrity
-            </div>
-            <div className="mb-2 flex items-center justify-between text-xs">
-              <span className="text-[var(--color-text-muted)]">Truth score</span>
-              <span className="mono text-[var(--color-text)]">{truthScore}</span>
-            </div>
-            {integrityChecks.length > 0 ? (
-              <div className="space-y-2">
-                {integrityChecks.slice(0, 4).map((check) => {
-                  const status = String(check.status ?? "warn").toLowerCase();
-                  const label = String(check.label ?? check.id ?? "check");
-                  const message = String(check.message ?? "");
-                  return (
-                    <div key={`${label}:${status}`} className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-medium text-[var(--color-text)]">{label}</span>
-                        <StatusBadge label={status} tone={integrityTone(status)} />
-                      </div>
-                      <p className="mt-1 text-[11px] text-[var(--color-text-muted)]">{message}</p>
-                    </div>
-                  );
-                })}
-                <div className="grid grid-cols-3 gap-2 pt-1">
-                  <MiniStat label="Pass" value={integrityCounts.pass} color="var(--color-green)" />
-                  <MiniStat label="Warn" value={integrityCounts.warn} color="var(--color-amber)" />
-                  <MiniStat label="Fail" value={integrityCounts.fail} color="var(--color-red)" />
+          {hasAnySidePanel ? (
+            <div className="space-y-3">
+              {/* Alert posture */}
+              {showAlertPosture ? (
+                <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5">
+                  <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+                    Alert posture
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <MiniStat label="Warn" value={alertCounts.warn ?? 0} color="var(--color-amber)" />
+                    <MiniStat label="Breach" value={alertCounts.breach ?? 0} color="var(--color-red)" />
+                    <MiniStat label="Info" value={alertCounts.info ?? 0} color="var(--color-green)" />
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <p className="text-[11px] text-[var(--color-text-muted)]">
-                No live integrity checks yet.
-              </p>
-            )}
-          </div>
+              ) : null}
+
+              {/* Desk alignment */}
+              {showDeskAlignment ? (
+                <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5">
+                  <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+                    Desk alignment
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-[var(--color-text-muted)]">Champion</span>
+                      <span className="mono font-semibold text-[var(--color-accent)]">
+                        {(championModel ?? "n/a").toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="text-[var(--color-text-muted)]">Truth source</span>
+                      <span className="text-right text-[var(--color-text)]">
+                        {reconciliation?.operational_truth
+                          ? formatOperationalTruth(reconciliation.operational_truth)
+                          : (initialCapital ?? snapshotSource)
+                            ? "Persisted snapshot"
+                            : "n/a"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="text-[var(--color-text-muted)]">Risk basis</span>
+                      <span className="text-right text-[var(--color-text)]">{formatSourceLabel(riskSource)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="text-[var(--color-text-muted)]">Risk as of</span>
+                      <span className="mono text-right text-[10px] text-[var(--color-text-muted)]">
+                        {riskTimestamp ? formatTimestamp(riskTimestamp) : "n/a"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="text-[var(--color-text-muted)]">Capital basis</span>
+                      <span className="text-right text-[var(--color-text)]">{formatSourceLabel(capitalSource)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="text-[var(--color-text-muted)]">Capital as of</span>
+                      <span className="mono text-right text-[10px] text-[var(--color-text-muted)]">
+                        {capitalTimestamp ? formatTimestamp(capitalTimestamp) : "n/a"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="text-[var(--color-text-muted)]">Market ref</span>
+                      <span className="mono text-right text-[10px] text-[var(--color-text-muted)]">{marketReference}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-[var(--color-text-muted)]">Manual events</span>
+                      <span className="mono text-[var(--color-text)]">{reconciliation?.manual_event_count ?? 0}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="text-[var(--color-text-muted)]">Persisted snapshot</span>
+                      <span className="mono text-right text-[10px] text-[var(--color-text-muted)]">
+                        {persistedSnapshot}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Data integrity */}
+              {showDataIntegrity ? (
+                <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5">
+                  <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+                    Data integrity
+                  </div>
+                  <div className="mb-2 flex items-center justify-between text-xs">
+                    <span className="text-[var(--color-text-muted)]">Truth score</span>
+                    <span className="mono text-[var(--color-text)]">{truthScore}</span>
+                  </div>
+                  {integrityChecks.length > 0 ? (
+                    <div className="space-y-2">
+                      {integrityChecks.slice(0, 4).map((check) => {
+                        const status = String(check.status ?? "warn").toLowerCase();
+                        const label = String(check.label ?? check.id ?? "check");
+                        const message = String(check.message ?? "");
+                        return (
+                          <div key={`${label}:${status}`} className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] font-medium text-[var(--color-text)]">{label}</span>
+                              <StatusBadge label={status} tone={integrityTone(status)} />
+                            </div>
+                            <p className="mt-1 text-[11px] text-[var(--color-text-muted)]">{message}</p>
+                          </div>
+                        );
+                      })}
+                      <div className="grid grid-cols-3 gap-2 pt-1">
+                        <MiniStat label="Pass" value={integrityCounts.pass} color="var(--color-green)" />
+                        <MiniStat label="Warn" value={integrityCounts.warn} color="var(--color-amber)" />
+                        <MiniStat label="Fail" value={integrityCounts.fail} color="var(--color-red)" />
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-[var(--color-text-muted)]">
+                      No live integrity checks yet.
+                    </p>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
-      </div>
+      ) : null}
 
       {/* Portfolio slices */}
-      {deskPortfolios.length > 0 ? (
+      {showPortfolioSlices && deskPortfolios.length > 0 ? (
         <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
           {deskPortfolios.map((p) => (
             <div
@@ -301,6 +339,11 @@ export function OverviewLiveDashboard({
             </div>
           ))}
         </div>
+      ) : null}
+      {prefs.symbolFilter ? (
+        <p className="text-[11px] text-[var(--color-text-muted)]">
+          Symbol filter is active and will apply to symbol-level views (MT5 Ops, blotter, execution, decisions, attribution, capital, universe).
+        </p>
       ) : null}
     </div>
   );
