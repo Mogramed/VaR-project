@@ -1760,7 +1760,11 @@ class DeskApiService:
                 summary = dict(live_state.get("risk_summary") or {})
                 diagnostics = self._normalize_model_diagnostics(summary)
                 coherence = dict(diagnostics.get("coherence_checks") or {})
-                suspicious = [dict(item) for item in list(coherence.get("suspicious_equalities") or [])]
+                suspicious = [
+                    dict(item)
+                    for item in list(coherence.get("suspicious_equalities") or [])
+                    if isinstance(item, Mapping)
+                ]
                 return {
                     "generated_at": summary.get("generated_at"),
                     "portfolio_slug": portfolio["slug"],
@@ -1791,7 +1795,11 @@ class DeskApiService:
         payload = dict(snapshot.get("payload") or {})
         diagnostics = self._normalize_model_diagnostics(payload)
         coherence = dict(diagnostics.get("coherence_checks") or {})
-        suspicious = [dict(item) for item in list(coherence.get("suspicious_equalities") or [])]
+        suspicious = [
+            dict(item)
+            for item in list(coherence.get("suspicious_equalities") or [])
+            if isinstance(item, Mapping)
+        ]
         data_quality = self._normalize_risk_data_quality(payload)
         return {
             "generated_at": payload.get("time_utc") or snapshot.get("created_at"),
