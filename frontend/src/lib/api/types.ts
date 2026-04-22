@@ -65,6 +65,7 @@ export type ReallocationRecommendationResponse = ApiSchemas["ReallocationRecomme
 export type ReconciliationAcknowledgeRequest = ApiSchemas["ReconciliationAcknowledgeRequest"];
 export type ReconciliationAcknowledgeResponse = ApiSchemas["ReconciliationAcknowledgeResponse"];
 export type ReconciliationAcknowledgementResponse = ApiSchemas["ReconciliationAcknowledgementResponse"];
+export type ReconciliationHistoryEntryResponse = ApiSchemas["ReconciliationHistoryEntryResponse"];
 export type ReconciliationIncidentResponse = ApiSchemas["ReconciliationIncidentResponse"];
 export type ReconciliationMismatchResponse = ApiSchemas["ReconciliationMismatchResponse"];
 export type ReconciliationSummaryResponse = ApiSchemas["ReconciliationSummaryResponse"];

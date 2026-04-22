@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import hashlib
+import json
 from pathlib import Path
 from threading import Lock
 import time
@@ -93,13 +95,49 @@ def _timeframe_minutes(timeframe: str) -> int:
     return int(minutes_map.get(tf, 60))
 
 
+RECON_EXPOSURE_WARN_EUR = 250.0
+RECON_EXPOSURE_CRITICAL_EUR = 1_000.0
+RECON_EXPOSURE_WARN_REL = 0.05
+RECON_EXPOSURE_CRITICAL_REL = 0.15
+RECON_VOLUME_WARN_LOTS = 0.05
+RECON_VOLUME_CRITICAL_LOTS = 0.20
+RECON_VOLUME_WARN_REL = 0.10
+RECON_VOLUME_CRITICAL_REL = 0.30
+RECON_PNL_WARN_EUR = 50.0
+RECON_PNL_CRITICAL_EUR = 250.0
+RECON_PNL_WARN_REL = 0.15
+RECON_PNL_CRITICAL_REL = 0.35
+RECON_HISTORY_SNAPSHOT_INTERVAL_SECONDS = 60.0
+
+
+def _safe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _relative_delta(left: float, right: float, *, floor: float = 1.0) -> float:
+    denominator = max(abs(float(left)), abs(float(right)), float(floor))
+    if denominator <= 1e-12:
+        return 0.0
+    return abs(float(right) - float(left)) / denominator
+
+
 class DeskMarketDataService:
     _shared_tick_archive_summary_cache: dict[tuple[str, str], dict[str, Any]] = {}
     _shared_market_status_cache: dict[tuple[str, str], dict[str, Any]] = {}
     _shared_status_autosync_attempt_at: dict[tuple[str, str], float] = {}
+    _shared_reconciliation_snapshot_cache: dict[tuple[str, str], dict[str, Any]] = {}
     _shared_market_status_cache_lock = Lock()
     _shared_market_status_compute_locks: dict[tuple[str, str], Lock] = {}
     _shared_status_autosync_lock = Lock()
+    _shared_reconciliation_snapshot_lock = Lock()
 
     def __init__(self, runtime: "DeskServiceRuntime"):
         self.runtime = runtime
@@ -1576,6 +1614,195 @@ class DeskMarketDataService:
         self.sync_market_data(portfolio_slug=portfolio["slug"])
         return self.runtime.storage.recent_mt5_deal_history(limit=limit, portfolio_slug=portfolio["slug"])
 
+    @staticmethod
+    def _aggregate_symbol_metric(
+        rows: Iterable[Mapping[str, Any]],
+        *,
+        keys: Iterable[str],
+    ) -> dict[str, float]:
+        aggregates: dict[str, float] = {}
+        metric_keys = [str(key) for key in keys if str(key).strip()]
+        for row in rows:
+            symbol = str(row.get("symbol") or "").upper().strip()
+            if not symbol:
+                continue
+            metric_value: float | None = None
+            for key in metric_keys:
+                metric_value = _safe_float(row.get(key))
+                if metric_value is not None:
+                    break
+            if metric_value is None:
+                continue
+            aggregates[symbol] = float(aggregates.get(symbol, 0.0) + metric_value)
+        return aggregates
+
+    @staticmethod
+    def _first_row_by_symbol(rows: Iterable[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
+        mapping: dict[str, Mapping[str, Any]] = {}
+        for row in rows:
+            symbol = str(row.get("symbol") or "").upper().strip()
+            if not symbol or symbol in mapping:
+                continue
+            mapping[symbol] = row
+        return mapping
+
+    @staticmethod
+    def _classify_reconciliation_severity(
+        *,
+        mismatch_status: str,
+        exposure_abs_eur: float,
+        exposure_relative: float,
+        volume_abs_lots: float,
+        volume_relative: float,
+        pnl_abs_eur: float | None,
+        pnl_relative: float | None,
+    ) -> str:
+        normalized_status = str(mismatch_status or "").strip().lower()
+        if normalized_status in {"", "ok", "match"}:
+            return "ok"
+        if normalized_status in {"rejected_by_broker", "overfill_or_volume_drift", "orphan_live_position"}:
+            return "critical"
+        if normalized_status in {"live_base_incomplete", "orphan_live_order", "pending_broker", "partial_fill"}:
+            return "warn"
+
+        critical = (
+            exposure_abs_eur >= RECON_EXPOSURE_CRITICAL_EUR
+            or exposure_relative >= RECON_EXPOSURE_CRITICAL_REL
+            or volume_abs_lots >= RECON_VOLUME_CRITICAL_LOTS
+            or volume_relative >= RECON_VOLUME_CRITICAL_REL
+            or (
+                pnl_abs_eur is not None
+                and pnl_relative is not None
+                and (
+                    pnl_abs_eur >= RECON_PNL_CRITICAL_EUR
+                    or pnl_relative >= RECON_PNL_CRITICAL_REL
+                )
+            )
+        )
+        if critical:
+            return "critical"
+
+        return "warn"
+
+    @staticmethod
+    def _reconciliation_probable_cause(
+        *,
+        mismatch_status: str,
+        has_pending_order: bool,
+        has_order_history: bool,
+        has_deal_history: bool,
+        has_manual_activity: bool,
+        has_pnl_drift: bool,
+    ) -> str:
+        normalized_status = str(mismatch_status or "").strip().lower()
+        if normalized_status in {"", "ok", "match"}:
+            return "none"
+        if normalized_status == "live_base_incomplete":
+            return "live_broker_book_not_ready"
+        if normalized_status == "orphan_live_position":
+            return "manual_mt5_position" if has_manual_activity else "untracked_live_position"
+        if normalized_status == "orphan_live_order":
+            return "pending_order_without_matching_fill"
+        if normalized_status == "pnl_drift":
+            return "mark_to_market_or_fee_drift"
+        if has_pending_order and not has_deal_history:
+            return "in_flight_broker_execution"
+        if has_manual_activity:
+            return "manual_mt5_activity"
+        if has_order_history and not has_deal_history:
+            return "order_fill_pending_or_stale_history"
+        if has_pnl_drift:
+            return "valuation_drift"
+        return "desk_snapshot_stale_or_untracked_trade"
+
+    def _persist_reconciliation_snapshot(
+        self,
+        *,
+        portfolio_slug: str,
+        summary: Mapping[str, Any],
+        source: str,
+    ) -> None:
+        try:
+            self.runtime.require_storage_ready()
+        except Exception:
+            return
+
+        severity = str(summary.get("summary_severity") or "ok").strip().lower()
+        severity_counts = {
+            str(key): int(value)
+            for key, value in dict(summary.get("severity_counts") or {}).items()
+        }
+        status_counts = {
+            str(key): int(value)
+            for key, value in dict(summary.get("status_counts") or {}).items()
+        }
+        top_mismatches = [
+            {
+                "symbol": str(item.get("symbol") or "").upper(),
+                "status": str(item.get("status") or ""),
+                "severity": str(item.get("severity") or ""),
+                "difference_eur": float(item.get("difference_eur") or 0.0),
+                "pnl_difference_eur": (
+                    None if item.get("pnl_difference_eur") is None else float(item.get("pnl_difference_eur"))
+                ),
+                "probable_cause": str(item.get("probable_cause") or ""),
+            }
+            for item in list(summary.get("mismatches") or [])
+            if str(item.get("status") or "").strip().lower() != "match"
+        ][:5]
+        digest_payload = {
+            "portfolio_slug": portfolio_slug,
+            "summary_severity": severity,
+            "severity_counts": severity_counts,
+            "status_counts": status_counts,
+            "critical_mismatch_count": int(summary.get("critical_mismatch_count") or 0),
+            "warning_mismatch_count": int(summary.get("warning_mismatch_count") or 0),
+            "unmatched_execution_count": int(summary.get("unmatched_execution_count") or 0),
+            "history_window_expired_execution_count": int(
+                summary.get("history_window_expired_execution_count") or 0
+            ),
+            "top_mismatches": top_mismatches,
+            "diagnostic_code": str(summary.get("diagnostic_code") or ""),
+        }
+        digest = hashlib.sha1(
+            json.dumps(digest_payload, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        scope_key = (str(self.runtime.root), str(portfolio_slug))
+        now_monotonic = time.monotonic()
+        with self._shared_reconciliation_snapshot_lock:
+            cached = dict(self._shared_reconciliation_snapshot_cache.get(scope_key) or {})
+            last_digest = str(cached.get("digest") or "")
+            last_persisted_at = float(cached.get("persisted_at") or 0.0)
+            if (
+                last_digest == digest
+                and (now_monotonic - last_persisted_at) < RECON_HISTORY_SNAPSHOT_INTERVAL_SECONDS
+            ):
+                return
+            self._shared_reconciliation_snapshot_cache[scope_key] = {
+                "digest": digest,
+                "persisted_at": now_monotonic,
+            }
+
+        try:
+            portfolio_id = self.runtime._resolve_portfolio_id(portfolio_slug)
+            self.runtime.storage.record_audit_event(
+                actor="system",
+                action_type="reconciliation.snapshot",
+                object_type="reconciliation_snapshot",
+                payload={
+                    **digest_payload,
+                    "source": str(source),
+                    "generated_at": summary.get("generated_at"),
+                    "latest_sync_at": summary.get("latest_sync_at"),
+                    "active_incident_count": int(summary.get("active_incident_count") or 0),
+                    "resolved_incident_count": int(summary.get("resolved_incident_count") or 0),
+                    "top_symbols": [item["symbol"] for item in top_mismatches if item["symbol"]],
+                },
+                portfolio_id=portfolio_id,
+            )
+        except Exception:
+            return
+
     def _build_reconciliation_summary(
         self,
         *,
@@ -1798,22 +2025,77 @@ class DeskMarketDataService:
             if str(item.get("side") or "").upper() == "SELL":
                 signed_lots *= -1.0
             desk_volume_by_symbol[symbol] = float(desk_volume_by_symbol.get(symbol, 0.0) + signed_lots)
+        live_pnl_by_symbol = self._aggregate_symbol_metric(
+            holdings,
+            keys=("unrealized_pnl", "profit", "pnl_eur", "pnl_base_ccy"),
+        )
+        desk_pnl_by_symbol = self._aggregate_symbol_metric(
+            desk_holdings,
+            keys=("unrealized_pnl", "profit", "pnl_eur", "pnl_base_ccy"),
+        )
+        manual_order_symbols = {
+            str(item.get("symbol") or "").upper()
+            for item in pending_orders
+            if str(item.get("symbol") or "").strip() and bool(item.get("is_manual"))
+        }
+        manual_order_symbols.update(
+            {
+                str(item.get("symbol") or "").upper()
+                for item in order_history
+                if str(item.get("symbol") or "").strip() and bool(item.get("is_manual"))
+            }
+        )
+        manual_deal_symbols = {
+            str(item.get("symbol") or "").upper()
+            for item in deal_history
+            if str(item.get("symbol") or "").strip() and bool(item.get("is_manual"))
+        }
+        pending_by_symbol = self._first_row_by_symbol(pending_orders)
+        order_by_symbol = self._first_row_by_symbol(order_history)
+        deal_by_symbol = self._first_row_by_symbol(deal_history)
 
         mismatch_status_counts: dict[str, int] = {}
+        severity_counts = {"ok": 0, "warn": 0, "critical": 0}
         mismatches = []
         for symbol in sorted(symbol_set):
             desk_value = float(desk_exposure.get(symbol, 0.0))
             live_value = float(live_exposure.get(symbol, 0.0))
             diff = live_value - desk_value
-            pending = next((item for item in pending_orders if str(item.get("symbol") or "").upper() == symbol), None)
-            order = next((item for item in order_history if str(item.get("symbol") or "").upper() == symbol), None)
-            deal = next((item for item in deal_history if str(item.get("symbol") or "").upper() == symbol), None)
+            abs_diff = abs(diff)
+            exposure_relative = _relative_delta(desk_value, live_value, floor=1.0)
+            desk_volume = float(desk_volume_by_symbol.get(symbol, 0.0))
+            live_volume = float(live_volume_by_symbol.get(symbol, 0.0))
+            volume_diff = live_volume - desk_volume
+            volume_abs = abs(volume_diff)
+            volume_relative = _relative_delta(desk_volume, live_volume, floor=0.01)
+            desk_pnl = desk_pnl_by_symbol.get(symbol)
+            live_pnl = live_pnl_by_symbol.get(symbol)
+            pnl_diff: float | None = None
+            pnl_abs: float | None = None
+            pnl_relative: float | None = None
+            if desk_pnl is not None or live_pnl is not None:
+                desk_pnl_value = float(desk_pnl or 0.0)
+                live_pnl_value = float(live_pnl or 0.0)
+                pnl_diff = live_pnl_value - desk_pnl_value
+                pnl_abs = abs(pnl_diff)
+                pnl_relative = _relative_delta(desk_pnl_value, live_pnl_value, floor=1.0)
+            pnl_warn = (
+                pnl_abs is not None
+                and pnl_relative is not None
+                and (pnl_abs >= RECON_PNL_WARN_EUR or pnl_relative >= RECON_PNL_WARN_REL)
+            )
+            pending = pending_by_symbol.get(symbol)
+            order = order_by_symbol.get(symbol)
+            deal = deal_by_symbol.get(symbol)
             if not live_evidence_present and abs(desk_value) > 1e-6:
                 mismatch_status = "live_base_incomplete"
                 reason = (
                     "The MT5 bridge is connected, but the broker live book/history is empty for the current "
                     f"{history_window_minutes} minute reconciliation window. Desk exposure cannot be confirmed yet."
                 )
+            elif abs(diff) <= 1e-6 and pending is None and pnl_warn:
+                mismatch_status = "pnl_drift"
+                reason = "Desk and broker exposures match, but unrealized PnL diverges."
             elif abs(diff) <= 1e-6 and pending is None:
                 mismatch_status = "match"
                 reason = "Desk exposure matches MT5 live holdings."
@@ -1831,6 +2113,24 @@ class DeskMarketDataService:
             if acknowledgement is not None and mismatch_status == "match":
                 if str(acknowledgement.get("incident_status") or "").lower() == "resolved":
                     acknowledgement = None
+            severity = self._classify_reconciliation_severity(
+                mismatch_status=mismatch_status,
+                exposure_abs_eur=abs_diff,
+                exposure_relative=exposure_relative,
+                volume_abs_lots=volume_abs,
+                volume_relative=volume_relative,
+                pnl_abs_eur=pnl_abs,
+                pnl_relative=pnl_relative,
+            )
+            severity_counts[severity] = int(severity_counts.get(severity, 0) + 1)
+            probable_cause = self._reconciliation_probable_cause(
+                mismatch_status=mismatch_status,
+                has_pending_order=pending is not None,
+                has_order_history=order is not None,
+                has_deal_history=deal is not None,
+                has_manual_activity=(symbol in manual_order_symbols) or (symbol in manual_deal_symbols),
+                has_pnl_drift=bool(pnl_warn),
+            )
             mismatches.append(
                 {
                     "symbol": symbol,
@@ -1838,13 +2138,25 @@ class DeskMarketDataService:
                     "desk_exposure_eur": desk_value,
                     "live_exposure_eur": live_value,
                     "difference_eur": diff,
-                    "desk_volume_lots": desk_volume_by_symbol.get(symbol),
-                    "live_volume_lots": live_volume_by_symbol.get(symbol),
+                    "exposure_difference_abs_eur": abs_diff,
+                    "exposure_difference_relative": exposure_relative,
+                    "desk_volume_lots": desk_volume,
+                    "live_volume_lots": live_volume,
+                    "volume_difference_lots": volume_diff,
+                    "volume_difference_abs_lots": volume_abs,
+                    "volume_difference_relative": volume_relative,
+                    "desk_pnl_eur": desk_pnl,
+                    "live_pnl_eur": live_pnl,
+                    "pnl_difference_eur": pnl_diff,
+                    "pnl_difference_abs_eur": pnl_abs,
+                    "pnl_difference_relative": pnl_relative,
                     "order_ticket": None if order is None else order.get("ticket"),
                     "deal_ticket": None if deal is None else deal.get("ticket"),
                     "position_id": None if deal is None else deal.get("position_id"),
                     "reason": reason,
                     "status": mismatch_status,
+                    "severity": severity,
+                    "probable_cause": probable_cause,
                     "acknowledged": acknowledgement is not None,
                     "incident_id": None if acknowledgement is None else acknowledgement.get("id"),
                     "incident_status": None if acknowledgement is None else acknowledgement.get("incident_status"),
@@ -1877,6 +2189,27 @@ class DeskMarketDataService:
             for incident in incidents
             if str(incident.get("incident_status") or "").strip().lower() == "resolved"
         )
+        critical_mismatch_count = sum(
+            1
+            for mismatch in mismatches
+            if str(mismatch.get("status") or "").strip().lower() != "match"
+            and str(mismatch.get("severity") or "").strip().lower() == "critical"
+        )
+        warning_mismatch_count = sum(
+            1
+            for mismatch in mismatches
+            if str(mismatch.get("status") or "").strip().lower() != "match"
+            and str(mismatch.get("severity") or "").strip().lower() == "warn"
+        )
+        summary_severity = "ok"
+        if critical_mismatch_count > 0:
+            summary_severity = "critical"
+        elif (
+            warning_mismatch_count > 0
+            or unmatched_execution_count > 0
+            or history_window_expired_execution_count > 0
+        ):
+            summary_severity = "warn"
 
         market_closed = bool(market_status.get("market_closed")) or _is_fx_weekend_closed()
         live_portfolio = self.runtime.is_live_portfolio(portfolio)
@@ -1926,6 +2259,14 @@ class DeskMarketDataService:
             "active_incident_count": int(active_incident_count),
             "resolved_incident_count": int(resolved_incident_count),
             "autoresolved_count": 0,
+            "summary_severity": summary_severity,
+            "critical_mismatch_count": int(critical_mismatch_count),
+            "warning_mismatch_count": int(warning_mismatch_count),
+            "severity_counts": {
+                "ok": int(severity_counts.get("ok") or 0),
+                "warn": int(severity_counts.get("warn") or 0),
+                "critical": int(severity_counts.get("critical") or 0),
+            },
             "live_evidence_present": bool(live_evidence_present),
             "live_evidence_counts": live_evidence_counts,
             "bridge_connected": None,
@@ -2078,6 +2419,11 @@ class DeskMarketDataService:
                     "reconciliation window. Derived drift and unmatched-execution alerts are withheld until live "
                     f"broker evidence is available.{expired_suffix}"
                 )
+        self._persist_reconciliation_snapshot(
+            portfolio_slug=portfolio["slug"],
+            summary=summary,
+            source="live_state",
+        )
         return summary
 
     def reconciliation_summary(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
@@ -2093,7 +2439,7 @@ class DeskMarketDataService:
                 pending_orders = [item.to_dict() for item in live.pending_orders(symbols=None)]
         order_history = self.mt5_order_history(portfolio_slug=portfolio["slug"], limit=200)
         deal_history = self.mt5_deal_history(portfolio_slug=portfolio["slug"], limit=200)
-        return self._build_reconciliation_summary(
+        summary = self._build_reconciliation_summary(
             portfolio=portfolio,
             market_status=status,
             holdings=holdings,
@@ -2103,3 +2449,79 @@ class DeskMarketDataService:
             ticks={},
             effective_history_lookback_minutes=effective_history_lookback_minutes,
         )
+        self._persist_reconciliation_snapshot(
+            portfolio_slug=portfolio["slug"],
+            summary=summary,
+            source="summary_endpoint",
+        )
+        return summary
+
+    def reconciliation_history(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        severity: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        normalized_severity = None if severity is None else str(severity).strip().lower()
+        if normalized_severity is not None and normalized_severity not in {"ok", "warn", "critical"}:
+            raise ValueError(f"Unsupported reconciliation severity '{severity}'.")
+
+        target_limit = max(int(limit), 1)
+        base_scan_limit = max(target_limit * (12 if normalized_severity is not None else 2), 200)
+        max_scan_limit = max(base_scan_limit, min(max(target_limit * 80, 1_000), 20_000))
+
+        history: list[dict[str, Any]] = []
+        scan_limit = base_scan_limit
+        while scan_limit <= max_scan_limit and len(history) < target_limit:
+            events = self.runtime.storage.recent_audit_events(
+                limit=scan_limit,
+                portfolio_slug=portfolio["slug"],
+                object_type="reconciliation_snapshot",
+            )
+            history = []
+            for event in events:
+                if str(event.get("action_type") or "").strip().lower() != "reconciliation.snapshot":
+                    continue
+                item_severity = str(event.get("summary_severity") or "ok").strip().lower()
+                if normalized_severity is not None and item_severity != normalized_severity:
+                    continue
+                top_symbols = [
+                    str(symbol).upper()
+                    for symbol in list(event.get("top_symbols") or [])
+                    if str(symbol or "").strip()
+                ]
+                history.append(
+                    {
+                        "id": event.get("id"),
+                        "created_at": event.get("created_at"),
+                        "portfolio_slug": event.get("portfolio_slug") or portfolio["slug"],
+                        "summary_severity": item_severity,
+                        "active_incident_count": int(event.get("active_incident_count") or 0),
+                        "resolved_incident_count": int(event.get("resolved_incident_count") or 0),
+                        "critical_mismatch_count": int(event.get("critical_mismatch_count") or 0),
+                        "warning_mismatch_count": int(event.get("warning_mismatch_count") or 0),
+                        "unmatched_execution_count": int(event.get("unmatched_execution_count") or 0),
+                        "history_window_expired_execution_count": int(
+                            event.get("history_window_expired_execution_count") or 0
+                        ),
+                        "diagnostic_code": event.get("diagnostic_code"),
+                        "top_symbols": top_symbols,
+                        "status_counts": {
+                            str(key): int(value)
+                            for key, value in dict(event.get("status_counts") or {}).items()
+                        },
+                        "severity_counts": {
+                            str(key): int(value)
+                            for key, value in dict(event.get("severity_counts") or {}).items()
+                        },
+                        "source": str(event.get("source") or "unknown"),
+                    }
+                )
+                if len(history) >= target_limit:
+                    break
+            if len(history) >= target_limit or len(events) < scan_limit or scan_limit >= max_scan_limit:
+                break
+            scan_limit = min(scan_limit * 2, max_scan_limit)
+        return history

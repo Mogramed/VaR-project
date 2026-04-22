@@ -1048,6 +1048,7 @@ def alerts_from_live_operator_state(state: Mapping[str, Any]) -> List[AlertEvent
         "orphan_live_position": ("BREACH", "ORPHAN_LIVE_POSITION", "A live MT5 position has no matching desk execution lineage."),
         "orphan_live_order": ("WARN", "ORPHAN_LIVE_ORDER", "A live MT5 order has no matching desk execution lineage."),
         "desk_vs_broker_drift": ("BREACH", "DESK_BROKER_DRIFT", "Desk vs broker exposure drift is currently detected."),
+        "pnl_drift": ("WARN", "PNL_DRIFT", "Desk vs broker unrealized PnL drift is currently detected."),
         "overfill_or_volume_drift": ("BREACH", "OVERFILL_OR_VOLUME_DRIFT", "Broker fills exceed the approved desk volume."),
     }
     if live_base_ready:

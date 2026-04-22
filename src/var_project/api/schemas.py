@@ -982,13 +982,25 @@ class ReconciliationMismatchResponse(BaseModel):
     desk_exposure_eur: float
     live_exposure_eur: float
     difference_eur: float
+    exposure_difference_abs_eur: float | None = None
+    exposure_difference_relative: float | None = None
     desk_volume_lots: float | None = None
     live_volume_lots: float | None = None
+    volume_difference_lots: float | None = None
+    volume_difference_abs_lots: float | None = None
+    volume_difference_relative: float | None = None
+    desk_pnl_eur: float | None = None
+    live_pnl_eur: float | None = None
+    pnl_difference_eur: float | None = None
+    pnl_difference_abs_eur: float | None = None
+    pnl_difference_relative: float | None = None
     order_ticket: int | None = None
     deal_ticket: int | None = None
     position_id: int | None = None
     reason: str | None = None
     status: str
+    severity: str | None = None
+    probable_cause: str | None = None
     acknowledged: bool = False
     incident_id: int | None = None
     incident_status: str | None = None
@@ -1039,6 +1051,10 @@ class ReconciliationSummaryResponse(BaseModel):
     active_incident_count: int = 0
     resolved_incident_count: int = 0
     autoresolved_count: int = 0
+    summary_severity: str = "ok"
+    critical_mismatch_count: int = 0
+    warning_mismatch_count: int = 0
+    severity_counts: dict[str, int] = Field(default_factory=dict)
     bridge_connected: bool | None = None
     live_base_ready: bool | None = None
     bridge_status: str | None = None
@@ -1058,6 +1074,24 @@ class ReconciliationSummaryResponse(BaseModel):
     incidents: list[ReconciliationIncidentResponse] = Field(default_factory=list)
     recent_execution_attempts: list[ExecutionResultResponse] = Field(default_factory=list)
     recent_fills: list[ExecutionFillResponse] = Field(default_factory=list)
+
+
+class ReconciliationHistoryEntryResponse(BaseModel):
+    id: int | None = None
+    created_at: str | None = None
+    portfolio_slug: str | None = None
+    summary_severity: str = "ok"
+    active_incident_count: int = 0
+    resolved_incident_count: int = 0
+    critical_mismatch_count: int = 0
+    warning_mismatch_count: int = 0
+    unmatched_execution_count: int = 0
+    history_window_expired_execution_count: int = 0
+    diagnostic_code: str | None = None
+    top_symbols: list[str] = Field(default_factory=list)
+    status_counts: dict[str, int] = Field(default_factory=dict)
+    severity_counts: dict[str, int] = Field(default_factory=dict)
+    source: str | None = None
 
 
 class MT5TickResponse(BaseModel):

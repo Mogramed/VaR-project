@@ -18,6 +18,21 @@ from var_project.storage.serialization import utcnow
 from test_mt5_execution_api import FakeMT5Connector, FailingMT5Connector
 
 
+class PnlDriftConnector(FakeMT5Connector):
+    position_profit: float = 25.0
+
+    @classmethod
+    def reset(cls) -> None:
+        super().reset()
+        cls.position_profit = 25.0
+
+    def positions_get(self, symbol: str | None = None) -> list[dict[str, object]]:
+        rows = super().positions_get(symbol=symbol)
+        for row in rows:
+            row["profit"] = float(type(self).position_profit)
+        return rows
+
+
 
 def _write_settings(
     root: Path,
@@ -1146,6 +1161,10 @@ def test_api_exposes_mt5_market_sync_and_reconciliation(tmp_path: Path):
     assert reconciliation_body["manual_event_count"] >= 1
     assert len(reconciliation_body["mismatches"]) == 2
     assert reconciliation_body["status_counts"]
+    assert reconciliation_body["summary_severity"] in {"ok", "warn", "critical"}
+    assert set(reconciliation_body["severity_counts"].keys()) >= {"ok", "warn", "critical"}
+    assert isinstance(reconciliation_body["critical_mismatch_count"], int)
+    assert isinstance(reconciliation_body["warning_mismatch_count"], int)
     assert reconciliation_body["live_window_minutes"] >= 1
     assert reconciliation_body["heal_window_days"] == 30
     assert isinstance(reconciliation_body.get("history_backfill_applied"), bool)
@@ -1155,6 +1174,30 @@ def test_api_exposes_mt5_market_sync_and_reconciliation(tmp_path: Path):
     mismatch_row = next(item for item in reconciliation_body["mismatches"] if item["status"] != "match")
     mismatch_symbol = mismatch_row["symbol"]
     assert mismatch_row["acknowledged"] is False
+    assert mismatch_row["severity"] in {"warn", "critical"}
+    assert mismatch_row["probable_cause"]
+    assert mismatch_row["exposure_difference_abs_eur"] >= 0.0
+    assert mismatch_row["exposure_difference_relative"] >= 0.0
+    assert mismatch_row["volume_difference_abs_lots"] >= 0.0
+
+    reconciliation_history = client.get("/reconciliation/history", params={"limit": 20})
+    assert reconciliation_history.status_code == 200
+    history_payload = reconciliation_history.json()
+    assert history_payload
+    assert history_payload[0]["summary_severity"] in {"ok", "warn", "critical"}
+    assert isinstance(history_payload[0]["top_symbols"], list)
+    filtered_history = client.get(
+        "/reconciliation/history",
+        params={"severity": history_payload[0]["summary_severity"], "limit": 1},
+    )
+    assert filtered_history.status_code == 200
+    filtered_payload = filtered_history.json()
+    assert len(filtered_payload) <= 1
+    if filtered_payload:
+        assert filtered_payload[0]["summary_severity"] == history_payload[0]["summary_severity"]
+    invalid_filter = client.get("/reconciliation/history", params={"severity": "fatal"})
+    assert invalid_filter.status_code == 400
+    assert "Unsupported reconciliation severity" in invalid_filter.json()["detail"]
 
     acknowledge = client.post(
         "/reconciliation/acknowledge",
@@ -1257,6 +1300,44 @@ def test_api_exposes_mt5_market_sync_and_reconciliation(tmp_path: Path):
 
     snapshot = client.post("/snapshots/run", json={})
     assert snapshot.status_code == 200
+
+
+def test_reconciliation_nominal_summary_without_drift(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    FakeMT5Connector.reset()
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True))
+
+    live_state = client.get("/mt5/live/state")
+    assert live_state.status_code == 200
+
+    summary = client.get("/reconciliation/summary")
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["summary_severity"] in {"ok", "warn"}
+    assert payload["critical_mismatch_count"] == 0
+    assert payload["warning_mismatch_count"] >= 0
+
+
+def test_reconciliation_detects_pnl_drift(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    PnlDriftConnector.reset()
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=PnlDriftConnector, bootstrap_storage=True))
+
+    baseline_live_state = client.get("/mt5/live/state")
+    assert baseline_live_state.status_code == 200
+
+    PnlDriftConnector.position_profit = 300.0
+    summary = client.get("/reconciliation/summary")
+    assert summary.status_code == 200
+    payload = summary.json()
+    pnl_mismatch = next((item for item in payload["mismatches"] if item["status"] == "pnl_drift"), None)
+    assert pnl_mismatch is not None
+    assert pnl_mismatch["severity"] in {"warn", "critical"}
+    assert pnl_mismatch["pnl_difference_abs_eur"] is not None
+    assert pnl_mismatch["pnl_difference_abs_eur"] > 0.0
+    assert pnl_mismatch["probable_cause"] in {"mark_to_market_or_fee_drift", "valuation_drift"}
 
 
 def test_api_mt5_transaction_history_supports_filters_pagination_and_csv(tmp_path: Path):

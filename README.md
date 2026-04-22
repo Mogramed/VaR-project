@@ -204,6 +204,7 @@ Notes:
 - If MT5 is unavailable or returns an empty live book, live compute endpoints fail fast with actionable `mt5_live_unavailable` guidance.
 - Blotter history is read-only from MT5 via `GET /mt5/history/transactions` (filters + pagination) and `GET /mt5/history/transactions/export` (CSV).
 - `/execution/recent` now keeps both pre-trade dry runs (`PREVIEW`) and executed attempts for a single end-to-end history.
+- MT5 reconciliation is exposed via `GET /reconciliation/summary` (exposure/volume/PnL drift, severity, probable cause) and `GET /reconciliation/history` (historized divergence snapshots).
 - Rebuild `api` and `worker` after changing `config/` or tracked fixture data.
 - Rebuild `frontend` after changing code under `frontend/`.
 
