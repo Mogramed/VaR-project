@@ -38,6 +38,16 @@ class PortfolioRiskCalculator:
     def __init__(self, runtime: "DeskServiceRuntime"):
         self.runtime = runtime
 
+    def _default_no_exposure_epsilon(self) -> float:
+        raw_default = self.runtime.risk_defaults.get("no_exposure_epsilon_eur")
+        try:
+            epsilon = 1.0 if raw_default in {None, "", "null"} else float(raw_default)
+        except (TypeError, ValueError):
+            epsilon = 1.0
+        if epsilon < 0.0:
+            epsilon = 1.0
+        return float(epsilon)
+
     def build_risk_model_config(
         self,
         alpha: float | None,
@@ -66,6 +76,26 @@ class PortfolioRiskCalculator:
                 mean=str(garch_defaults["mean"]),
             ),
         )
+
+    def _no_exposure_epsilon_by_symbol(self, symbols: list[str]) -> dict[str, float]:
+        configured = {
+            str(symbol).upper(): value
+            for symbol, value in dict(self.runtime.risk_defaults.get("no_exposure_epsilon_by_symbol") or {}).items()
+            if symbol not in {None, ""}
+        }
+        default_epsilon = self._default_no_exposure_epsilon()
+        epsilon_by_symbol: dict[str, float] = {}
+        for symbol in symbols:
+            normalized = str(symbol).upper()
+            raw = configured.get(normalized)
+            try:
+                epsilon = default_epsilon if raw is None else float(raw)
+            except (TypeError, ValueError):
+                epsilon = default_epsilon
+            if epsilon < 0.0:
+                epsilon = default_epsilon
+            epsilon_by_symbol[normalized] = float(epsilon)
+        return epsilon_by_symbol
 
     def compute_portfolio_state(
         self,
@@ -222,7 +252,12 @@ class PortfolioRiskCalculator:
             allow_auto_sync=allow_auto_sync,
             symbols=portfolio_symbols,
         )
-        engine = RiskEngine(normalized_holdings, base_currency=str(portfolio["base_currency"]))
+        engine = RiskEngine(
+            normalized_holdings,
+            base_currency=str(portfolio["base_currency"]),
+            no_exposure_epsilon_by_symbol=self._no_exposure_epsilon_by_symbol(portfolio_symbols),
+            default_no_exposure_epsilon=self._default_no_exposure_epsilon(),
+        )
         portfolio_frame = engine.build_portfolio_frame(daily_returns)
         sample = portfolio_frame.iloc[-min(len(portfolio_frame), estimation_window_days) :].copy()
         if sample.empty:

@@ -202,6 +202,7 @@ Notes:
 - MT5 execution remains demo-only and risk-guarded.
 - Portfolios in `live_mt5` are MT5-only: configured holdings/exposure are not used as a fallback for live risk/capital compute.
 - If MT5 is unavailable or returns an empty live book, live compute endpoints fail fast with actionable `mt5_live_unavailable` guidance.
+- Risk analytics now emit `data_quality.status=no_exposure` when all symbol exposures stay under configured epsilon thresholds (`risk.no_exposure_epsilon_eur` + optional `risk.no_exposure_epsilon_by_symbol`).
 - Blotter history is read-only from MT5 via `GET /mt5/history/transactions` (filters + pagination) and `GET /mt5/history/transactions/export` (CSV).
 - `/execution/recent` now keeps both pre-trade dry runs (`PREVIEW`) and executed attempts for a single end-to-end history.
 - MT5 reconciliation is exposed via `GET /reconciliation/summary` (exposure/volume/PnL drift, severity, probable cause) and `GET /reconciliation/history` (historized divergence snapshots).

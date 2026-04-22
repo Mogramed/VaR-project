@@ -20,6 +20,36 @@ class DeskAnalyticsService:
     def __init__(self, runtime: DeskServiceRuntime):
         self.runtime = runtime
 
+    def _default_no_exposure_epsilon(self) -> float:
+        raw_default = self.runtime.risk_defaults.get("no_exposure_epsilon_eur")
+        try:
+            epsilon = 1.0 if raw_default in {None, "", "null"} else float(raw_default)
+        except (TypeError, ValueError):
+            epsilon = 1.0
+        if epsilon < 0.0:
+            epsilon = 1.0
+        return float(epsilon)
+
+    def _no_exposure_epsilon_by_symbol(self, symbols: list[str]) -> dict[str, float]:
+        configured = {
+            str(symbol).upper(): value
+            for symbol, value in dict(self.runtime.risk_defaults.get("no_exposure_epsilon_by_symbol") or {}).items()
+            if symbol not in {None, ""}
+        }
+        default_epsilon = self._default_no_exposure_epsilon()
+        epsilon_by_symbol: dict[str, float] = {}
+        for symbol in symbols:
+            normalized = str(symbol).upper()
+            raw = configured.get(normalized)
+            try:
+                epsilon = default_epsilon if raw is None else float(raw)
+            except (TypeError, ValueError):
+                epsilon = default_epsilon
+            if epsilon < 0.0:
+                epsilon = default_epsilon
+            epsilon_by_symbol[normalized] = float(epsilon)
+        return epsilon_by_symbol
+
     @staticmethod
     def _parse_timeline_column(values: pd.Series, *, column: str) -> pd.Series:
         numeric_values = pd.to_numeric(values, errors="coerce")
@@ -263,7 +293,12 @@ class DeskAnalyticsService:
             window=selected_window,
             allow_auto_sync=False,
         )
-        engine = RiskEngine(bundle["holdings"], base_currency=str(portfolio["base_currency"]))
+        engine = RiskEngine(
+            bundle["holdings"],
+            base_currency=str(portfolio["base_currency"]),
+            no_exposure_epsilon_by_symbol=self._no_exposure_epsilon_by_symbol(list(bundle["portfolio_symbols"])),
+            default_no_exposure_epsilon=self._default_no_exposure_epsilon(),
+        )
         return_columns = ["date", *bundle["portfolio_symbols"]]
         daily_rets = bundle["daily_returns"][return_columns].copy()
         exposure_by_symbol = dict(bundle["exposure_by_symbol"])
@@ -560,7 +595,12 @@ class DeskAnalyticsService:
         ]
         stress_surface = bundle["stress_surface"]
         if stress_scenarios:
-            stress_surface = RiskEngine(bundle["holdings"], base_currency=str(portfolio["base_currency"])).build_stress_surface(
+            stress_surface = RiskEngine(
+                bundle["holdings"],
+                base_currency=str(portfolio["base_currency"]),
+                no_exposure_epsilon_by_symbol=self._no_exposure_epsilon_by_symbol(list(bundle["portfolio_symbols"])),
+                default_no_exposure_epsilon=self._default_no_exposure_epsilon(),
+            ).build_stress_surface(
                 bundle["sample"][bundle["portfolio_symbols"]],
                 config,
                 alphas=[float(item) for item in self.runtime.risk_defaults["alphas"]],

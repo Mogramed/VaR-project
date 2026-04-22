@@ -1392,6 +1392,8 @@ def test_mt5_live_state_labels_empty_broker_book_without_hiding_diagnostics(tmp_
     assert payload["market_closed"] is weekend_closed
     assert payload["health"]["market_closed"] is weekend_closed
     assert payload["risk_summary"] is not None
+    assert payload["risk_summary"]["data_quality"]["status"] == "no_exposure"
+    assert payload["risk_summary"]["model_diagnostics"]["no_exposure"] is True
     assert payload["capital_usage"] is not None
     assert payload["capital_usage"]["snapshot_source"] == "mt5_live_bridge"
     assert float(payload["capital_usage"]["total_capital_budget_eur"]) != historical_budget

@@ -705,7 +705,7 @@ class DeskMt5Service:
                 "headline_risk": [],
                 "stress_surface": {},
                 "data_quality": {
-                    "status": "flat_book",
+                    "status": "no_exposure",
                     "estimation_window_days": int(self.runtime.risk_defaults.get("estimation_window_days") or 0),
                     "minimum_valid_days": int(self.runtime.risk_defaults.get("minimum_valid_days") or 0),
                     "available_observations": 0,
@@ -713,9 +713,13 @@ class DeskMt5Service:
                     "latest_observation": raw_state.get("market_reference_timestamp"),
                     "horizon_observations": {},
                     "symbol_count": 0,
+                    "gross_exposure_base_ccy": 0.0,
+                    "gross_exposure_epsilon_base_ccy": 0.0,
+                    "no_exposure_epsilon_by_symbol": {},
                 },
                 "model_diagnostics": {
                     "flat_book": True,
+                    "no_exposure": True,
                     "market_closed": bool(raw_state.get("market_closed", False)),
                 },
             },

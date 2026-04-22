@@ -13,6 +13,7 @@ from sqlalchemy import text
 
 from var_project.api import create_app
 from var_project.api.service import DeskApiService
+from var_project.api.services.collaborators import PortfolioRiskCalculator
 from var_project.risk.expected_shortfall import historical_var_es
 from var_project.storage.serialization import utcnow
 from test_mt5_execution_api import FakeMT5Connector, FailingMT5Connector
@@ -968,6 +969,107 @@ def test_risk_summary_fallback_tolerates_empty_data_quality_snapshot(tmp_path: P
     assert payload["data_quality"]["status"] == "thin_history"
     assert payload["data_quality"]["available_observations"] == 45
     assert payload["data_quality"]["minimum_valid_days"] >= 20
+
+
+def test_risk_summary_fallback_marks_no_exposure_for_zero_book(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    service = DeskApiService(root, mt5_connector_factory=FailingMT5Connector, bootstrap_storage=True)
+    portfolio_id = service.runtime._resolve_portfolio_id("fx_eur_20k")
+
+    service.runtime.storage.record_snapshot(
+        {
+            "time_utc": "2026-04-04T09:00:00+00:00",
+            "source": "historical",
+            "alpha": 0.95,
+            "timeframe": "H1",
+            "days": 60,
+            "window": 20,
+            "sample_size": 12,
+            "exposure_by_symbol": {"EURUSD": 0.0, "USDJPY": 0.0},
+            "var": {"hist": 0.0},
+            "es": {"hist": 0.0},
+            "risk_surface": {},
+            "headline_risk": [],
+            "stress_surface": {},
+            "data_quality": {},
+            "model_diagnostics": {},
+            "risk_nowcast": {},
+            "microstructure": {},
+            "tick_quality": {},
+            "pnl_explain": {},
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+
+    def fail_live_state(*, portfolio_slug=None):
+        raise RuntimeError("bridge unavailable")
+
+    service.mt5.live_state = fail_live_state  # type: ignore[method-assign]
+    payload = service.risk_summary()
+
+    assert payload is not None
+    assert payload["data_quality"]["status"] == "no_exposure"
+    assert payload["data_quality"]["available_observations"] == 12
+
+
+def test_risk_summary_fallback_uses_per_symbol_no_exposure_thresholds(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    service = DeskApiService(root, mt5_connector_factory=FailingMT5Connector, bootstrap_storage=True)
+    service.runtime.risk_defaults["no_exposure_epsilon_eur"] = 0.0
+    service.runtime.risk_defaults["no_exposure_epsilon_by_symbol"] = {"EURUSD": 1000.0, "USDJPY": 0.0}
+    portfolio_id = service.runtime._resolve_portfolio_id("fx_eur_20k")
+
+    service.runtime.storage.record_snapshot(
+        {
+            "time_utc": "2026-04-04T09:00:00+00:00",
+            "source": "historical",
+            "alpha": 0.95,
+            "timeframe": "H1",
+            "days": 60,
+            "window": 20,
+            "sample_size": 12,
+            "exposure_by_symbol": {"EURUSD": 10.0, "USDJPY": 5.0},
+            "var": {"hist": 0.0},
+            "es": {"hist": 0.0},
+            "risk_surface": {},
+            "headline_risk": [],
+            "stress_surface": {},
+            "data_quality": {},
+            "model_diagnostics": {},
+            "risk_nowcast": {},
+            "microstructure": {},
+            "tick_quality": {},
+            "pnl_explain": {},
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+
+    def fail_live_state(*, portfolio_slug=None):
+        raise RuntimeError("bridge unavailable")
+
+    service.mt5.live_state = fail_live_state  # type: ignore[method-assign]
+    payload = service.risk_summary()
+
+    assert payload is not None
+    assert payload["data_quality"]["status"] != "no_exposure"
+    assert payload["data_quality"]["gross_exposure_base_ccy"] == pytest.approx(15.0)
+    assert payload["data_quality"]["no_exposure_epsilon_by_symbol"] == {"EURUSD": 1000.0, "USDJPY": 0.0}
+
+
+def test_no_exposure_epsilon_preserves_explicit_zero_default(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    service = DeskApiService(root, mt5_connector_factory=FailingMT5Connector, bootstrap_storage=True)
+    service.runtime.risk_defaults["no_exposure_epsilon_eur"] = 0.0
+
+    calculator = PortfolioRiskCalculator(service.runtime)
+    epsilon_by_symbol = calculator._no_exposure_epsilon_by_symbol(["EURUSD", "USDJPY"])
+
+    assert epsilon_by_symbol == {"EURUSD": 0.0, "USDJPY": 0.0}
 
 
 def test_risk_summary_fallback_uses_snapshot_when_live_state_times_out(

@@ -25,6 +25,23 @@ function firstNumericValue(values: Record<string, number> | undefined) {
   return typeof first === "number" ? first : null;
 }
 
+function formatRiskQualityStatus(status: string | undefined): string {
+  if (!status) return "unknown";
+  return status.replaceAll("_", " ");
+}
+
+function riskQualityTone(status: string | undefined): "neutral" | "success" | "warning" | "accent" {
+  if (status === "healthy") return "success";
+  if (status === "thin_history") return "warning";
+  if (status === "no_exposure") return "accent";
+  return "neutral";
+}
+
+function riskQualityMessage(status: string | undefined): string | null {
+  if (status !== "no_exposure") return null;
+  return "No active exposure above configured epsilon: VaR and ES stay structurally near zero.";
+}
+
 export function OverviewLiveStrip({
   initialCapital,
   fallbackSelectedModel,
@@ -112,6 +129,7 @@ export function OverviewLiveStripPanel({
   const nowcastRegime = typeof nowcast?.regime === "string" ? nowcast.regime : undefined;
   const marketRegime = typeof microstructure?.regime === "string" ? microstructure.regime : undefined;
   const qualityStatus = typeof dataQuality?.status === "string" ? dataQuality.status : undefined;
+  const qualityMessage = riskQualityMessage(qualityStatus);
   const riskTimestamp =
     riskSummary?.latest_observation ??
     riskSummary?.generated_at ??
@@ -318,10 +336,15 @@ export function OverviewLiveStripPanel({
             <div className="flex items-center justify-between text-xs">
               <span className="text-[var(--color-text-muted)]">Risk quality</span>
               <StatusBadge
-                label={String(dataQuality?.status ?? "unknown")}
-                tone={dataQuality?.status === "healthy" ? "success" : dataQuality?.status === "thin_history" ? "warning" : "neutral"}
+                label={formatRiskQualityStatus(qualityStatus)}
+                tone={riskQualityTone(qualityStatus)}
               />
             </div>
+            {qualityMessage ? (
+              <p className="text-[11px] leading-snug text-[var(--color-text-muted)]">
+                {qualityMessage}
+              </p>
+            ) : null}
             <div className="flex items-center justify-between gap-3 text-xs">
               <span className="text-[var(--color-text-muted)]">Risk basis</span>
               <span className="text-right text-[var(--color-text)]">{formatSourceLabel(riskSource)}</span>

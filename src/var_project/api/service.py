@@ -1250,9 +1250,71 @@ class DeskApiService:
         available_observations = int(raw.get("available_observations") or payload.get("sample_size") or 0)
         if not raw and available_observations <= 0 and estimation_window_days <= 0 and minimum_valid_days <= 0:
             return None
+        default_epsilon = self._float_or_none(self.runtime.risk_defaults.get("no_exposure_epsilon_eur"))
+        if default_epsilon is None or default_epsilon < 0.0:
+            default_epsilon = 1.0
+        configured_epsilons = {
+            str(symbol).upper(): max(float(value), 0.0)
+            for symbol, value in dict(self.runtime.risk_defaults.get("no_exposure_epsilon_by_symbol") or {}).items()
+            if symbol not in {None, ""}
+            and self._float_or_none(value) is not None
+        }
+        exposure_map = {
+            str(symbol).upper(): abs(float(value))
+            for symbol, value in dict(payload.get("exposure_by_symbol") or {}).items()
+            if symbol not in {None, ""} and self._float_or_none(value) is not None
+        }
+        if not exposure_map:
+            gross_from_holdings = 0.0
+            holdings_found = False
+            for item in list(payload.get("holdings") or []):
+                if not isinstance(item, Mapping):
+                    continue
+                symbol = item.get("symbol")
+                signed = self._float_or_none(item.get("signed_exposure_base_ccy"))
+                absolute = self._float_or_none(item.get("exposure_base_ccy"))
+                exposure = signed if signed is not None else absolute
+                if symbol in {None, ""} or exposure is None:
+                    continue
+                normalized_symbol = str(symbol).upper()
+                exposure_map[normalized_symbol] = exposure_map.get(normalized_symbol, 0.0) + abs(float(exposure))
+                gross_from_holdings += abs(float(exposure))
+                holdings_found = True
+            if holdings_found and "gross_exposure_base_ccy" not in raw:
+                raw["gross_exposure_base_ccy"] = gross_from_holdings
+        epsilon_by_symbol = {
+            str(symbol).upper(): max(float(value), 0.0)
+            for symbol, value in dict(raw.get("no_exposure_epsilon_by_symbol") or {}).items()
+            if symbol not in {None, ""} and self._float_or_none(value) is not None
+        }
+        if exposure_map:
+            for symbol in exposure_map:
+                if symbol in epsilon_by_symbol:
+                    continue
+                epsilon_by_symbol[symbol] = max(float(configured_epsilons.get(symbol, float(default_epsilon))), 0.0)
+        gross_exposure = self._float_or_none(raw.get("gross_exposure_base_ccy"))
+        if gross_exposure is None and exposure_map:
+            gross_exposure = float(sum(abs(value) for value in exposure_map.values()))
+        gross_exposure_epsilon = self._float_or_none(raw.get("gross_exposure_epsilon_base_ccy"))
+        if gross_exposure_epsilon is None and exposure_map:
+            gross_exposure_epsilon = float(
+                sum(max(float(epsilon_by_symbol.get(symbol, float(default_epsilon))), 0.0) for symbol in exposure_map)
+            )
+        elif gross_exposure_epsilon is None and epsilon_by_symbol:
+            gross_exposure_epsilon = float(sum(max(value, 0.0) for value in epsilon_by_symbol.values()))
         status = raw.get("status")
         if not status:
-            if available_observations <= 0:
+            has_no_exposure = False
+            if exposure_map:
+                has_no_exposure = all(
+                    abs(float(exposure_map[symbol])) <= max(float(epsilon_by_symbol.get(symbol, float(default_epsilon))), 0.0)
+                    for symbol in exposure_map
+                )
+            elif gross_exposure is not None and gross_exposure_epsilon is not None:
+                has_no_exposure = gross_exposure <= max(gross_exposure_epsilon, 0.0)
+            if has_no_exposure:
+                status = "no_exposure"
+            elif available_observations <= 0:
                 status = "incomplete"
             elif minimum_valid_days > 0 and available_observations < minimum_valid_days:
                 status = "thin_history"
@@ -1267,6 +1329,11 @@ class DeskApiService:
             "latest_observation": raw.get("latest_observation") or payload.get("latest_observation") or payload.get("time_utc"),
             "horizon_observations": dict(raw.get("horizon_observations") or {}),
             "symbol_count": int(raw.get("symbol_count") or 0),
+            "gross_exposure_base_ccy": None if gross_exposure is None else float(gross_exposure),
+            "gross_exposure_epsilon_base_ccy": (
+                None if gross_exposure_epsilon is None else float(gross_exposure_epsilon)
+            ),
+            "no_exposure_epsilon_by_symbol": epsilon_by_symbol,
         }
 
     @staticmethod
