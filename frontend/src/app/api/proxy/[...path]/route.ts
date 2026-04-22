@@ -47,6 +47,26 @@ function resolveUpstreamTimeoutMs(method: string, path: string[], isEventStreamR
     return 10_000;
   }
 
+  if (normalizedPath === "execution/submit") {
+    return 120_000;
+  }
+
+  if (normalizedPath === "execution/preview" || normalizedPath === "decisions/evaluate") {
+    return 90_000;
+  }
+
+  if (normalizedPath === "snapshots/stress") {
+    return 180_000;
+  }
+
+  if (
+    normalizedPath === "reports/run"
+    || normalizedPath === "backtests/run"
+    || normalizedPath === "snapshots/run"
+  ) {
+    return 90_000;
+  }
+
   if (
     normalizedPath.startsWith("reports/")
     || normalizedPath.startsWith("backtests/")
@@ -205,6 +225,9 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
       || errorMessage.toLowerCase().includes("aborted");
 
     const operatorRoute = normalizedPath.startsWith("operator/");
+    const executionRoute = normalizedPath.startsWith("execution/");
+    const decisionRoute = normalizedPath === "decisions/evaluate";
+    const stressRoute = normalizedPath === "snapshots/stress";
     return NextResponse.json(
       {
         detail: errorMessage,
@@ -213,12 +236,20 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
           ? (
             operatorRoute
               ? "The operator request timed out. Check `/operator/runs` to see if a run is already queued."
-              : "The upstream service took too long to respond. Please retry."
+              : executionRoute
+                ? "Execution request timed out. Check blotter/execution history before retrying."
+                : decisionRoute
+                  ? "Decision evaluation timed out. Retry once backend load decreases."
+                  : stressRoute
+                    ? "Stress run timed out. Retry or reduce scenario scope."
+                    : "The upstream service took too long to respond. Please retry."
           )
           : (
             operatorRoute
               ? "The operator request failed to reach backend. Retry and check `/operator/runs` for active runs."
-              : "Verify backend health and network reachability from the frontend container."
+              : executionRoute
+                ? "Execution backend unreachable. Verify API/worker/MT5 connectivity."
+                : "Verify backend health and network reachability from the frontend container."
           ),
       },
       { status: isTimeout ? 504 : 502 },

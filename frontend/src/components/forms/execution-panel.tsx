@@ -4,7 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { TrendingUp, DollarSign } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "@/lib/api/client";
+import { ApiError, api } from "@/lib/api/client";
 import type {
   ExecutionPreviewResponse,
   ExecutionResultResponse,
@@ -112,6 +112,26 @@ export function ExecutionPanel({
   const preview = previewMutation.data;
   const result = submitMutation.data;
   const activeError = submitMutation.error ?? previewMutation.error;
+  const actionableError = (() => {
+    if (!activeError) {
+      return null;
+    }
+    if (activeError instanceof ApiError) {
+      const timeoutLike = activeError.status === 504 || String(activeError.errorCode ?? "").toLowerCase().includes("timeout");
+      if (timeoutLike) {
+        if (submitMutation.error) {
+          return "MT5 submit timed out. Check Execution/Blotter before retrying submit.";
+        }
+        return "Execution preview timed out. Retry preview after checking backend load.";
+      }
+      return activeError.message;
+    }
+    return activeError instanceof Error ? activeError.message : "Failed";
+  })();
+  const canRetry =
+    !previewMutation.isPending
+    && !submitMutation.isPending
+    && (previewMutation.error != null || submitMutation.error != null);
   const fillRatio = useMemo(() => {
     const source = result?.guard ?? preview?.guard;
     if (!source || source.requested_exposure_change === 0) return null;
@@ -192,7 +212,22 @@ export function ExecutionPanel({
             disabled={!preview?.guard.submit_allowed || submitMutation.isPending}
             onClick={() => submitMutation.mutate()}
           />
-          <FormError message={validationError ?? (activeError instanceof Error ? activeError.message : activeError ? "Failed" : null)} />
+          {canRetry ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (submitMutation.error) {
+                  submitMutation.mutate();
+                  return;
+                }
+                previewMutation.mutate();
+              }}
+              className="h-7 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2.5 text-[11px] font-medium text-[var(--color-text)] transition hover:bg-[var(--color-surface-hover)]"
+            >
+              Retry
+            </button>
+          ) : null}
+          <FormError message={validationError ?? actionableError} />
           <FormSuccess message="Order sent to MT5" visible={showSuccess} />
         </div>
       </form>

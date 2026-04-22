@@ -2110,6 +2110,40 @@ def test_live_stress_baseline_respects_requested_alpha(tmp_path: Path):
     assert stress_body["baseline_es"] == pytest.approx(expected.es, rel=0.05)
 
 
+def test_live_stress_uses_relaxed_autosync_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+    FakeMT5Connector.reset()
+    FakeMT5Connector.positions_lots = {"EURUSD": 0.01, "USDJPY": 0.01}
+
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+    captured: dict[str, float] = {}
+    original_sync = service.runtime.market_data.sync_market_data_if_stale
+
+    def _capture_sync(*, portfolio_slug=None, account_id=None, max_age_seconds=900.0, days=None, timeframes=None):
+        captured["max_age_seconds"] = float(max_age_seconds)
+        return original_sync(
+            portfolio_slug=portfolio_slug,
+            account_id=account_id,
+            max_age_seconds=max_age_seconds,
+            days=days,
+            timeframes=timeframes,
+        )
+
+    monkeypatch.setattr(service.runtime.market_data, "sync_market_data_if_stale", _capture_sync)
+
+    payload = service.run_stress_test(
+        portfolio_slug="fx_eur_20k",
+        scenarios=[{"name": "Small shock", "vol_multiplier": 1.2, "shock_pnl": -5.0}],
+        alpha=None,
+    )
+
+    assert payload["portfolio_slug"] == "fx_eur_20k"
+    assert captured["max_age_seconds"] >= 300.0
+
+
 def test_market_data_sync_backfills_richer_history_for_var(tmp_path: Path):
     root = tmp_path
     _write_settings(root, portfolio_mode="live_mt5", market_history_days=365)

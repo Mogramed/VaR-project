@@ -4,7 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { TrendingUp, DollarSign } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "@/lib/api/client";
+import { ApiError, api } from "@/lib/api/client";
 import type { RiskDecisionResponse } from "@/lib/api/types";
 import {
   EXPOSURE_MIN_EUR,
@@ -82,6 +82,19 @@ export function TradeDecisionPanel({
   useEffect(() => () => clearTimeout(successTimerRef.current), []);
 
   const result = mutation.data;
+  const actionableError = (() => {
+    if (!mutation.error) {
+      return null;
+    }
+    if (mutation.error instanceof ApiError) {
+      const timeoutLike = mutation.error.status === 504 || String(mutation.error.errorCode ?? "").toLowerCase().includes("timeout");
+      if (timeoutLike) {
+        return "Decision evaluation timed out. Verify backend load and retry.";
+      }
+      return mutation.error.message;
+    }
+    return mutation.error instanceof Error ? mutation.error.message : "Failed";
+  })();
   const fillRatio = useMemo(() => {
     if (!result || result.requested_exposure_change === 0) return null;
     return Math.abs(result.approved_exposure_change / result.requested_exposure_change);
@@ -144,7 +157,16 @@ export function TradeDecisionPanel({
 
         <div className="mt-4 flex items-center gap-2">
           <SubmitButton isPending={mutation.isPending} label="Evaluate" pendingLabel="Evaluating..." />
-          <FormError message={validationError ?? (mutation.error instanceof Error ? mutation.error.message : mutation.error ? "Failed" : null)} />
+          {mutation.error && !mutation.isPending ? (
+            <button
+              type="button"
+              onClick={() => mutation.mutate()}
+              className="h-7 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2.5 text-[11px] font-medium text-[var(--color-text)] transition hover:bg-[var(--color-surface-hover)]"
+            >
+              Retry
+            </button>
+          ) : null}
+          <FormError message={validationError ?? actionableError} />
           <FormSuccess message="Decision evaluated" visible={showSuccess} />
         </div>
       </form>

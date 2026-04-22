@@ -192,6 +192,89 @@ function resolveServerSummaryCacheTtlMs(path: string, query?: Query): number {
   return 0;
 }
 
+function resolveRequestTimeoutMs(
+  method: "GET" | "POST",
+  normalizedPath: string,
+  explicitTimeoutMs?: number,
+): number {
+  if (explicitTimeoutMs != null) {
+    return Math.max(1, explicitTimeoutMs);
+  }
+  if (method === "POST" && normalizedPath.startsWith("/operator/actions/")) {
+    return 12_000;
+  }
+  if (
+    method === "POST"
+    && normalizedPath.startsWith("/operator/runs/")
+    && normalizedPath.endsWith("/interrupt")
+  ) {
+    return 12_000;
+  }
+  if (
+    method === "GET"
+    && (normalizedPath === "/operator/runs" || normalizedPath.startsWith("/operator/runs/"))
+  ) {
+    return 10_000;
+  }
+  if (method === "POST" && normalizedPath === "/execution/submit") {
+    return 120_000;
+  }
+  if (method === "POST" && normalizedPath === "/execution/preview") {
+    return 90_000;
+  }
+  if (method === "POST" && normalizedPath === "/decisions/evaluate") {
+    return 90_000;
+  }
+  if (method === "POST" && normalizedPath === "/snapshots/stress") {
+    return 180_000;
+  }
+  if (
+    method === "POST"
+    && ["/reports/run", "/backtests/run", "/snapshots/run"].includes(normalizedPath)
+  ) {
+    return 90_000;
+  }
+  return method === "GET" ? 12_000 : 25_000;
+}
+
+function resolveTimeoutHint(normalizedPath: string): string {
+  if (normalizedPath.startsWith("/operator/")) {
+    return "Retry or check /operator/runs to confirm if the action is already queued.";
+  }
+  if (normalizedPath === "/execution/submit") {
+    return "MT5 submit may still be processing. Check Execution/Blotter before sending again.";
+  }
+  if (normalizedPath === "/execution/preview") {
+    return "Preview timed out. Retry once and verify MT5 bridge health if latency persists.";
+  }
+  if (normalizedPath === "/decisions/evaluate") {
+    return "Decision evaluation timed out. Retry and check risk service health.";
+  }
+  if (normalizedPath === "/snapshots/stress") {
+    return "Stress computation is long-running. Retry once or reduce scenario scope.";
+  }
+  return "The request timed out. Please retry.";
+}
+
+function resolveNetworkFailureHint(normalizedPath: string): string {
+  if (normalizedPath.startsWith("/operator/")) {
+    return "Retry and check /operator/runs for already active actions.";
+  }
+  if (normalizedPath.startsWith("/execution/")) {
+    return "Execution service was unreachable. Verify API/worker/MT5 connectivity before retry.";
+  }
+  if (normalizedPath === "/snapshots/stress") {
+    return "Stress endpoint unreachable. Verify backend health and retry.";
+  }
+  return "Verify backend health and retry.";
+}
+
+export const __apiClientTestables = {
+  resolveRequestTimeoutMs,
+  resolveTimeoutHint,
+  resolveNetworkFailureHint,
+};
+
 function ensureSlash(value: string) {
   return value.endsWith("/") ? value : `${value}/`;
 }
@@ -286,14 +369,11 @@ async function request<T>(
     isServer && method === "GET"
       ? resolveServerSummaryCacheTtlMs(path, options.query)
       : 0;
-  const timeoutMs =
-    options.timeoutMs
-    ?? (isOperatorEnqueueRequest ? 12_000
-      : isOperatorInterruptRequest ? 12_000
-        : isOperatorRunStatusRequest ? 10_000
-          : method === "GET" ? 12_000 : 20_000);
+  const timeoutMs = resolveRequestTimeoutMs(method, normalizedPath, options.timeoutMs);
   const maxAttempts =
     isOperatorRunStatusRequest ? 3 : (method === "GET" || retryableUnsafeMethod ? 2 : 1);
+  const timeoutHint = resolveTimeoutHint(normalizedPath);
+  const networkFailureHint = resolveNetworkFailureHint(normalizedPath);
 
   const nextRetryDelayMs = (attempt: number) =>
     Math.min(1_200, Math.max(120, 180 * (2 ** Math.max(attempt - 1, 0))));
@@ -329,7 +409,7 @@ async function request<T>(
             {
               error_code: "frontend_request_timeout",
               error_message: "The request timed out.",
-              hint: "Retry or use sync/snapshot actions to refresh data.",
+              hint: timeoutHint,
             },
             "The request timed out.",
           );
@@ -339,7 +419,7 @@ async function request<T>(
           {
             error_code: "frontend_request_failed",
             error_message: "The upstream API request failed.",
-            hint: "Verify backend health and retry.",
+            hint: networkFailureHint,
           },
           "The upstream API request failed.",
         );
@@ -362,7 +442,7 @@ async function request<T>(
       {
         error_code: "frontend_request_failed",
         error_message: "No response received from upstream API.",
-        hint: "Retry once backend services are healthy.",
+        hint: networkFailureHint,
       },
       "No response received from upstream API.",
     );

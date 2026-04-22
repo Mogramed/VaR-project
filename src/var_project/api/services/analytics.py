@@ -554,9 +554,15 @@ class DeskAnalyticsService:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         config = self.runtime._build_risk_model_config(alpha, None, None, None, None)
         if self.runtime.market_data.should_use_mt5_market_data(portfolio):
+            # Stress requests are synchronous from the UI. Avoid forcing frequent heavy syncs
+            # that can exceed gateway timeouts while still refreshing stale market history.
+            stress_sync_max_age_seconds = max(
+                300.0,
+                float(self.runtime.mt5_config.live_history_poll_seconds or 0.0) * 8.0,
+            )
             self.runtime.market_data.sync_market_data_if_stale(
                 portfolio_slug=portfolio["slug"],
-                max_age_seconds=90.0,
+                max_age_seconds=stress_sync_max_age_seconds,
                 days=int(self.runtime._default_days()),
                 timeframes=[str(self.runtime._default_timeframe())],
             )
