@@ -268,10 +268,41 @@ class BacktestRunResponse(BaseModel):
     flat_book: bool = False
 
 
+class ReportContractMetricResponse(BaseModel):
+    value: float | None = None
+    display: str = "n/a"
+    as_of_utc: str | None = None
+
+
+class ReportContractRoundingResponse(BaseModel):
+    money_decimals: int = 2
+    percent_decimals: int = 1
+
+
+class ReportContractMetricsResponse(BaseModel):
+    var: ReportContractMetricResponse | None = None
+    es: ReportContractMetricResponse | None = None
+    pnl: ReportContractMetricResponse | None = None
+
+
+class ReportContractResponse(BaseModel):
+    version: str
+    timezone: str = "UTC"
+    generated_at_utc: str | None = None
+    portfolio_slug: str | None = None
+    account_id: str | None = None
+    selected_model: str | None = None
+    snapshot_source: str | None = None
+    snapshot_timestamp_utc: str | None = None
+    rounding: ReportContractRoundingResponse = Field(default_factory=ReportContractRoundingResponse)
+    metrics: ReportContractMetricsResponse = Field(default_factory=ReportContractMetricsResponse)
+
+
 class ReportRunResponse(BaseModel):
     report_markdown: str
     chart_paths: list[str]
     account_id: str | None = None
+    report_contract: ReportContractResponse | None = None
 
 
 class BacktestFrameResponse(BaseModel):
@@ -287,6 +318,7 @@ class ReportContentResponse(BaseModel):
     account_id: str | None = None
     content: str
     chart_paths: list[str]
+    report_contract: ReportContractResponse | None = None
 
 
 class ModelComparisonRow(BaseModel):

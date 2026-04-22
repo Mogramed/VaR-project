@@ -300,6 +300,8 @@ def test_api_runs_snapshot_backtest_and_report(tmp_path: Path):
     assert report.status_code == 200
     report_body = report.json()
     assert Path(report_body["report_markdown"]).exists()
+    assert report_body["report_contract"]["version"] == "report.v1"
+    assert report_body["report_contract"]["timezone"] == "UTC"
 
     latest_report_payload = client.get("/reports/latest")
     assert latest_report_payload.status_code == 200
@@ -315,6 +317,23 @@ def test_api_runs_snapshot_backtest_and_report(tmp_path: Path):
     assert "## Decision History" in latest_report_payload.json()["content"]
     assert "## Capital History" in latest_report_payload.json()["content"]
     assert "## Audit Trail" in latest_report_payload.json()["content"]
+    contract = latest_report_payload.json()["report_contract"]
+    assert contract["version"] == "report.v1"
+    assert contract["timezone"] == "UTC"
+    assert contract["rounding"]["money_decimals"] == 2
+    assert contract["selected_model"] in {"hist", "param", "mc", "ewma", "garch", "fhs", None}
+    var_metric = contract["metrics"]["var"]
+    es_metric = contract["metrics"]["es"]
+    pnl_metric = contract["metrics"]["pnl"]
+    assert isinstance(var_metric["display"], str) and var_metric["display"]
+    assert isinstance(es_metric["display"], str) and es_metric["display"]
+    assert isinstance(pnl_metric["display"], str) and pnl_metric["display"]
+    if var_metric["value"] is not None:
+        assert float(str(var_metric["display"]).replace(",", "")) == pytest.approx(float(var_metric["value"]), abs=0.01)
+    if es_metric["value"] is not None:
+        assert float(str(es_metric["display"]).replace(",", "")) == pytest.approx(float(es_metric["value"]), abs=0.01)
+    if pnl_metric["value"] is not None:
+        assert float(str(pnl_metric["display"]).replace(",", "")) == pytest.approx(float(pnl_metric["value"]), abs=0.01)
     if report_body["chart_paths"]:
         chart_name = Path(report_body["chart_paths"][0]).name
         chart_asset = client.get(f"/reports/charts/{chart_name}")
@@ -365,6 +384,148 @@ def test_api_backtest_rejects_incompatible_fixture_window_early(tmp_path: Path):
 
     assert response.status_code == 400
     assert "tracked history" in response.json()["detail"]
+
+
+def test_latest_report_by_id_uses_persisted_snapshot_id_outside_recent_window(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    portfolio_slug = "fx_eur_20k"
+    portfolio_id = service.runtime._resolve_portfolio_id(portfolio_slug)
+
+    old_snapshot_id = service.storage.record_snapshot(
+        {
+            "time_utc": "2024-01-01T00:00:00+00:00",
+            "alpha": 0.95,
+            "timeframe": "H1",
+            "days": 60,
+            "window": 20,
+            "var": {"hist": 111.0},
+            "es": {"hist": 222.0},
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+    for index in range(220):
+        service.storage.record_snapshot(
+            {
+                "time_utc": (datetime(2024, 2, 1, tzinfo=timezone.utc) + timedelta(minutes=index)).isoformat(),
+                "alpha": 0.95,
+                "timeframe": "H1",
+                "days": 60,
+                "window": 20,
+                "var": {"hist": float(900 + index)},
+                "es": {"hist": float(1000 + index)},
+            },
+            portfolio_id=portfolio_id,
+            source="historical",
+        )
+
+    recent_ids = {
+        int(item["id"])
+        for item in service.storage.recent_snapshots(
+            limit=200,
+            source="historical",
+            portfolio_slug=portfolio_slug,
+        )
+    }
+    assert int(old_snapshot_id) not in recent_ids
+
+    compare_csv = root / "reports" / "backtests" / "report_old_compare.csv"
+    compare_csv.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "date": ["2024-01-01T00:00:00Z"],
+            "pnl": [12.0],
+            "var_hist": [111.0],
+            "es_hist": [222.0],
+        }
+    ).to_csv(compare_csv, index=False)
+
+    report_path = root / "reports" / "daily" / "historical_report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("# Risk Report - Historical\n", encoding="utf-8")
+    report_id = service.storage.register_artifact(
+        report_path,
+        artifact_type="daily_report",
+        details={
+            "portfolio_slug": portfolio_slug,
+            "compare_csv": str(compare_csv.resolve()),
+            "snapshot_source": "historical",
+            "snapshot_id": int(old_snapshot_id),
+        },
+    )
+
+    payload = service.latest_report_content(portfolio_slug=portfolio_slug, report_id=report_id)
+    assert payload is not None
+    contract = payload["report_contract"]
+    assert contract["metrics"]["var"]["value"] == pytest.approx(111.0, abs=1e-9)
+    assert contract["metrics"]["es"]["value"] == pytest.approx(222.0, abs=1e-9)
+    assert str(contract["snapshot_timestamp_utc"]).startswith("2024-01-01T00:00:00")
+
+
+def test_latest_report_contract_selected_model_uses_report_scoped_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path
+    _write_settings(root)
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    portfolio_slug = "fx_eur_20k"
+    portfolio_id = service.runtime._resolve_portfolio_id(portfolio_slug)
+
+    snapshot_id = service.storage.record_snapshot(
+        {
+            "time_utc": "2024-03-01T00:00:00+00:00",
+            "alpha": 0.95,
+            "timeframe": "H1",
+            "days": 60,
+            "window": 20,
+            "var": {"hist": 50.0, "mc": 75.0},
+            "es": {"hist": 70.0, "mc": 95.0},
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+
+    compare_csv = root / "reports" / "backtests" / "report_compare_scope.csv"
+    compare_csv.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "date": ["2024-03-01T00:00:00Z"],
+            "pnl": [9.0],
+            "var_hist": [50.0],
+            "es_hist": [70.0],
+            "var_mc": [75.0],
+            "es_mc": [95.0],
+        }
+    ).to_csv(compare_csv, index=False)
+
+    report_path = root / "reports" / "daily" / "scoped_model_report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("# Risk Report - Scoped model\n", encoding="utf-8")
+    report_id = service.storage.register_artifact(
+        report_path,
+        artifact_type="daily_report",
+        details={
+            "portfolio_slug": portfolio_slug,
+            "compare_csv": str(compare_csv.resolve()),
+            "snapshot_source": "historical",
+            "snapshot_id": int(snapshot_id),
+            "selected_model": "hist",
+        },
+    )
+
+    monkeypatch.setattr(service.reads, "latest_model_comparison", lambda **_: {"champion_model": "mc"})
+
+    payload = service.latest_report_content(portfolio_slug=portfolio_slug, report_id=report_id)
+    assert payload is not None
+    contract = payload["report_contract"]
+    assert contract["selected_model"] == "hist"
+    assert contract["metrics"]["var"]["value"] == pytest.approx(50.0, abs=1e-9)
+    assert contract["metrics"]["es"]["value"] == pytest.approx(70.0, abs=1e-9)
 
 
 def test_trade_exposure_validation_boundaries(tmp_path: Path):
@@ -1795,6 +1956,9 @@ def test_live_state_backfills_market_data_without_manual_sync(tmp_path: Path):
     assert live_report.status_code == 200
     assert "Preferred snapshot source: **mt5_live_bridge**" in live_report.json()["content"]
     assert "## Portfolio Snapshot" in live_report.json()["content"]
+    live_contract = live_report.json()["report_contract"]
+    assert live_contract["version"] == "report.v1"
+    assert live_contract["snapshot_source"] == "mt5_live_bridge"
     latest_live_report_artifact = client.get("/artifacts/latest/daily_report")
     assert latest_live_report_artifact.status_code == 200
     assert latest_live_report_artifact.json()["details"]["auto_generated"] is True

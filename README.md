@@ -84,6 +84,15 @@ Operator stale TTLs are configurable per action:
 
 Worker monitoring (`GET /jobs/status`) now includes `operator_runs` counters (`status_counts`, `stale_closed_total`, `stale_reason_counts`, `recent_stale`) for stale-cleanup observability.
 
+## Report Contract (VAR-016)
+
+Report rendering is now driven by a versioned payload shared by backend, UI, and export:
+
+- `GET /reports/latest` and `POST /reports/run` expose `report_contract`.
+- `report_contract.version` is currently `report.v1`.
+- Canonical VaR/ES/PnL values are under `report_contract.metrics`.
+- Formatting/rounding and timezone metadata are carried by `report_contract.rounding` and `report_contract.timezone` (`UTC`).
+
 ## Backtest Confidence Guardrails (VAR-015)
 
 Backtest validation now includes sample-size guardrails and an explicit confidence score:

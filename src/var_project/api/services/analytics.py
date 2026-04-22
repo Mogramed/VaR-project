@@ -499,6 +499,7 @@ class DeskAnalyticsService:
                 "source_artifact_id": compare_artifact,
                 "snapshot_source": report_snapshot_source,
                 "snapshot_id": snapshot_id,
+                "report_contract_version": "report.v1",
             },
         )
 
@@ -531,6 +532,7 @@ class DeskAnalyticsService:
                 "compare_csv": str(compare_csv.resolve()),
                 "snapshot_source": report_snapshot_source,
                 "snapshot_id": snapshot_id,
+                "report_contract_version": "report.v1",
             },
             portfolio_id=portfolio_id,
         )

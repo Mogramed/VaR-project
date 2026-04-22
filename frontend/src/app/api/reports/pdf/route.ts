@@ -19,9 +19,13 @@ function buildFilename(portfolioSlug?: string | null) {
 
 export async function GET(request: NextRequest) {
   const portfolioSlug = request.nextUrl.searchParams.get("portfolio");
+  const accountId = request.nextUrl.searchParams.get("account");
   const target = new URL("/report-export", getInternalBaseUrl());
   if (portfolioSlug) {
     target.searchParams.set("portfolio", portfolioSlug);
+  }
+  if (accountId) {
+    target.searchParams.set("account", accountId);
   }
 
   const browser = await launchPdfBrowser();
