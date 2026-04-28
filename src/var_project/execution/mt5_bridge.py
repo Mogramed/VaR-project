@@ -26,9 +26,17 @@ def _normalize_symbol_list(symbols: Iterable[str] | None) -> list[str]:
     return sorted({str(symbol).upper() for symbol in symbols or [] if str(symbol).strip()})
 
 
-def _is_fx_weekend_closed(now: datetime | None = None) -> bool:
+def _is_fx_symbol(symbol: str) -> bool:
+    normalized = str(symbol or "").strip().upper()
+    return len(normalized) == 6 and normalized.isalpha()
+
+
+def _is_fx_weekend_closed(now: datetime | None = None, *, symbols: Iterable[str] | None = None) -> bool:
     current = _utcnow() if now is None else now.astimezone(timezone.utc)
     weekday = current.weekday()
+    normalized_symbols = [str(symbol).upper() for symbol in symbols or [] if str(symbol or "").strip()]
+    if normalized_symbols and not all(_is_fx_symbol(symbol) for symbol in normalized_symbols):
+        return weekday in {5, 6}
     if weekday == 4 and current.hour >= 21:
         return True
     if weekday == 5:
@@ -38,10 +46,15 @@ def _is_fx_weekend_closed(now: datetime | None = None) -> bool:
     return False
 
 
-def _effective_history_lookback_minutes(*, now: datetime | None = None, history_lookback_minutes: int) -> int:
+def _effective_history_lookback_minutes(
+    *,
+    now: datetime | None = None,
+    history_lookback_minutes: int,
+    symbols: Iterable[str] | None = None,
+) -> int:
     current = _utcnow() if now is None else now.astimezone(timezone.utc)
     base = max(int(history_lookback_minutes), 1)
-    if _is_fx_weekend_closed(current):
+    if _is_fx_weekend_closed(current, symbols=symbols):
         return max(base, 72 * 60)
     return base
 
@@ -185,6 +198,7 @@ def collect_live_state_from_connector(
     effective_history_lookback_minutes = _effective_history_lookback_minutes(
         now=now,
         history_lookback_minutes=history_lookback_minutes,
+        symbols=tracked_symbols,
     )
     if refresh_history:
         end = now
@@ -217,7 +231,7 @@ def collect_live_state_from_connector(
         except Exception:
             continue
 
-    market_closed = _is_fx_weekend_closed(now)
+    market_closed = _is_fx_weekend_closed(now, symbols=tracked_symbols)
 
     return {
         "source": "mt5_agent_bridge",

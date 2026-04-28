@@ -30,12 +30,7 @@ import {
   type DeskReportViewModel,
   loadDeskReportViewModel,
 } from "@/lib/report-view-model";
-import { formatCurrency, formatPercent, formatSourceLabel, formatTimestamp } from "@/lib/utils";
-import {
-  averageDecisionFillRatio,
-  buildCapitalHistorySeries,
-  buildDecisionDeltaComparison,
-} from "@/lib/view-models";
+import { formatCurrency, formatPercent, formatSourceLabel, formatTimestamp, humanizeIdentifier } from "@/lib/utils";
 
 function snapshotLabel(src: string | null | undefined) {
   return formatSourceLabel(src ?? "auto");
@@ -80,6 +75,27 @@ function esBreachTone(value: number | null | undefined) {
   return "danger" as const;
 }
 
+const REPORTS_NOISE_ALERT_CODES = new Set([
+  "MT5_RECONCILIATION_INCOMPLETE",
+  "MT5_RECONCILIATION_WINDOW_EXPIRED",
+  "MT5_MANUAL_EVENTS",
+  "EXECUTION_UNMATCHED",
+  "PENDING_BROKER_ACTIVITY",
+  "PARTIAL_FILL_ACTIVE",
+  "PNL_DRIFT",
+]);
+
+function includeReportsAlert(code: string | null | undefined): boolean {
+  const normalized = String(code ?? "").toUpperCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.startsWith("VALIDATION_")) {
+    return false;
+  }
+  return !REPORTS_NOISE_ALERT_CODES.has(normalized);
+}
+
 export function ReportsLiveSurface({
   portfolioSlug,
   initialView,
@@ -95,6 +111,7 @@ export function ReportsLiveSurface({
     queryFn: () => loadDeskReportViewModel(portfolioSlug, {
       liveState: liveState ?? null,
       accountId,
+      freezeToReportScope: false,
     }),
     initialData: initialView,
     ...deskArtifactQueryOptions,
@@ -103,18 +120,18 @@ export function ReportsLiveSurface({
 
   const resolved = liveState ?? view.liveState;
   const decisions = view.decisions;
-  const capitalHistory = view.capitalHistory;
   const audit = view.audit;
-  const liveCapital = resolved?.capital_usage ?? view.capital;
+  const reportCapital = view.capital;
   const selectedModel = view.selectedModel;
   const varValue = Number(view.varValue);
   const esValue = Number(view.esValue);
   const pnlValue = Number(view.pnlValue);
-  const fillRatio = averageDecisionFillRatio(decisions);
-  const capitalSeries = buildCapitalHistorySeries(capitalHistory);
-  const decisionSeries = buildDecisionDeltaComparison(decisions);
-  const resolvedSource = resolved?.risk_summary?.source ?? view.meta.preferredSnapshotSource;
+  const fillRatio = view.fillRatio;
+  const capitalSeries = view.capitalSeries;
+  const decisionSeries = view.decisionSizeSeries;
+  const resolvedSource = view.meta.preferredSnapshotSource ?? resolved?.risk_summary?.source;
   const label = snapshotLabel(resolvedSource);
+  const reportLiveAlerts = (resolved?.operator_alerts ?? []).filter((alert) => includeReportsAlert(alert.code));
 
   return (
     <div className="desk-page space-y-4">
@@ -124,7 +141,7 @@ export function ReportsLiveSurface({
         aside={(
           <div className="flex flex-col items-end gap-2">
             <div className="flex items-center gap-1.5">
-              <StatusBadge label={view.resolvedPortfolio} tone="accent" />
+              <StatusBadge label={humanizeIdentifier(view.resolvedPortfolio)} tone="accent" />
               <StatusBadge
                 label={label}
                 tone={String(resolvedSource ?? "").startsWith("mt5_live") ? "success" : "neutral"}
@@ -146,7 +163,7 @@ export function ReportsLiveSurface({
       />
       <LivePostureBanner liveState={liveState} transport={transport} />
 
-      <LiveOperatorAlerts alerts={resolved?.operator_alerts ?? []} />
+      <LiveOperatorAlerts alerts={reportLiveAlerts} />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <MetricBlock
@@ -167,7 +184,7 @@ export function ReportsLiveSurface({
         />
         <MetricBlock
           label="Headroom"
-          value={liveCapital ? formatPercent(liveCapital.headroom_ratio ?? 0, 0) : "n/a"}
+          value={reportCapital ? formatPercent(reportCapital.headroom_ratio ?? 0, 0) : "n/a"}
           tone="success"
         />
         <MetricBlock
@@ -211,12 +228,36 @@ export function ReportsLiveSurface({
 
         {view.validationAcademic.available ? (
           <div className="space-y-3">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+            {view.validationAcademic.insufficientSampleCount > 0 ? (
+              <div className="rounded-[var(--radius-lg)] border border-amber-500/25 bg-amber-500/8 px-3 py-2 text-[12px] text-[var(--color-text-soft)]">
+                Zero rejection counts do not mean the models are fully validated yet.{" "}
+                <span className="font-semibold text-[var(--color-text)]">
+                  {view.validationAcademic.effectivePoints}/{view.validationAcademic.totalPoints}
+                </span>{" "}
+                points currently clear the sample floor, and{" "}
+                <span className="font-semibold text-[var(--color-text)]">
+                  {view.validationAcademic.insufficientSampleCount}
+                </span>{" "}
+                remain statistically under-sampled.
+              </div>
+            ) : null}
+
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-8">
               <MetricBlock
-                label="Surface pass rate"
-                value={view.validationAcademic.passRate == null ? "n/a" : formatPercent(view.validationAcademic.passRate, 0)}
-                hint={`${view.validationAcademic.passCount}/${view.validationAcademic.totalPoints} PASS`}
-                tone={view.validationAcademic.failCount > 0 ? "warning" : "success"}
+                label="Effective pass rate"
+                value={
+                  view.validationAcademic.effectivePoints <= 0
+                    ? "n/a"
+                    : formatPercent(view.validationAcademic.passCount / view.validationAcademic.effectivePoints, 0)
+                }
+                hint={`${view.validationAcademic.passCount} PASS on ${view.validationAcademic.effectivePoints}/${view.validationAcademic.totalPoints} sampled points`}
+                tone={
+                  view.validationAcademic.effectivePoints <= 0
+                    ? "neutral"
+                    : view.validationAcademic.failCount > 0
+                      ? "warning"
+                      : "success"
+                }
                 className="bg-transparent"
               />
               <MetricBlock
@@ -231,24 +272,55 @@ export function ReportsLiveSurface({
                 className="bg-transparent"
               />
               <MetricBlock
-                label="Coverage fails"
+                label="Sampled points"
+                value={`${view.validationAcademic.effectivePoints}/${view.validationAcademic.totalPoints}`}
+                hint={`${view.validationAcademic.insufficientSampleCount} points still below the formal sample floor`}
+                tone={
+                  view.validationAcademic.insufficientSampleCount > 0
+                    ? "warning"
+                    : view.validationAcademic.effectivePoints > 0
+                      ? "success"
+                      : "neutral"
+                }
+                className="bg-transparent"
+              />
+              <MetricBlock
+                label="Coverage rejects"
                 value={String(view.validationAcademic.coverageFailCount)}
-                hint="Kupiec UC"
-                tone={view.validationAcademic.coverageFailCount > 0 ? "danger" : "success"}
+                hint="Kupiec UC rejections among sufficiently sampled points only"
+                tone={
+                  view.validationAcademic.effectivePoints <= 0
+                    ? "neutral"
+                    : view.validationAcademic.coverageFailCount > 0
+                      ? "danger"
+                      : "success"
+                }
                 className="bg-transparent"
               />
               <MetricBlock
-                label="Independence fails"
+                label="Independence rejects"
                 value={String(view.validationAcademic.independenceFailCount)}
-                hint="Christoffersen IND"
-                tone={view.validationAcademic.independenceFailCount > 0 ? "warning" : "success"}
+                hint="Christoffersen IND rejections among sufficiently sampled points only"
+                tone={
+                  view.validationAcademic.effectivePoints <= 0
+                    ? "neutral"
+                    : view.validationAcademic.independenceFailCount > 0
+                      ? "warning"
+                      : "success"
+                }
                 className="bg-transparent"
               />
               <MetricBlock
-                label="Conditional fails"
+                label="Conditional rejects"
                 value={String(view.validationAcademic.conditionalFailCount)}
-                hint="Christoffersen CC"
-                tone={view.validationAcademic.conditionalFailCount > 0 ? "danger" : "success"}
+                hint="Christoffersen CC rejections among sufficiently sampled points only"
+                tone={
+                  view.validationAcademic.effectivePoints <= 0
+                    ? "neutral"
+                    : view.validationAcademic.conditionalFailCount > 0
+                      ? "danger"
+                      : "success"
+                }
                 className="bg-transparent"
               />
               <MetricBlock
@@ -383,7 +455,7 @@ export function ReportsLiveSurface({
           mode="standard"
           dataCount={capitalSeries.length}
           title="Capital trajectory"
-          meta={liveCapital?.reference_model?.toUpperCase()}
+          meta={reportCapital?.reference_model?.toUpperCase()}
           emptyState={<p className="text-xs text-[var(--color-text-muted)]">No capital history.</p>}
         />
       </div>

@@ -15,12 +15,22 @@ export default async function DeskDecisionsPage({
   const resolvedPortfolio = portfolioSlug ?? health.portfolio_slug;
 
   const decisions = await api.recentDecisions(resolvedPortfolio, 12, accountId).catch(() => []);
+  const forecastSymbol = decisions[0]?.symbol ?? "EURUSD";
+  const [replay, forecast] = await Promise.all([
+    api.decisionAlphaReplay(resolvedPortfolio, 200).catch(() => null),
+    api.decisionAlphaForecast(forecastSymbol, {
+      portfolioSlug: resolvedPortfolio,
+      horizonDays: 5,
+    }).catch(() => null),
+  ]);
 
   return (
     <DecisionsLiveSurface
       key={`${resolvedPortfolio}:${accountId ?? "default"}`}
       portfolioSlug={resolvedPortfolio}
       initialDecisions={decisions}
+      initialReplay={replay}
+      initialForecast={forecast}
     />
   );
 }

@@ -3,15 +3,15 @@ import Link, { type LinkProps } from "next/link";
 import { cn } from "@/lib/utils";
 
 const badgeStyles = cva(
-  "inline-flex items-center rounded-[3px] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+  "inline-flex items-center rounded-[4px] border px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-tight tracking-wide",
   {
     variants: {
       tone: {
-        neutral: "bg-white/5 text-[var(--color-text-muted)]",
-        accent: "bg-[var(--color-accent-soft)] text-[var(--color-accent)]",
-        success: "bg-[var(--color-green-soft)] text-[var(--color-green)]",
-        warning: "bg-[var(--color-amber-soft)] text-[var(--color-amber)]",
-        danger: "bg-[var(--color-red-soft)] text-[var(--color-red)]",
+        neutral: "border-white/8 bg-white/5 text-[var(--color-text-muted)]",
+        accent: "border-[var(--color-accent)]/20 bg-[var(--color-accent-soft)] text-[var(--color-accent)]",
+        success: "border-[var(--color-green)]/20 bg-[var(--color-green-soft)] text-[var(--color-green)]",
+        warning: "border-[var(--color-amber)]/20 bg-[var(--color-amber-soft)] text-[var(--color-amber)]",
+        danger: "border-[var(--color-red)]/20 bg-[var(--color-red-soft)] text-[var(--color-red)]",
       },
     },
     defaultVariants: {

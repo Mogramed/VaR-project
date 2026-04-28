@@ -1,0 +1,768 @@
+{
+  "run_root": "D:\\Finance prog\\VaR-project-assets\\tmp\\big_demo_20260428_083400_retry",
+  "generated_at": "2026-04-28T09:00:20.228921+00:00",
+  "total_checks": 72,
+  "ok_checks": 26,
+  "failed_checks": 46,
+  "failed_labels": [
+    "desk_overview",
+    "market_sync",
+    "market_status",
+    "market_sync_runs",
+    "instruments",
+    "mt5_status",
+    "mt5_account",
+    "mt5_live_state",
+    "mt5_live_events",
+    "mt5_analytics_series",
+    "snapshot_run",
+    "snapshot_latest",
+    "risk_summary",
+    "risk_diagnostics",
+    "risk_contributions",
+    "risk_budget_latest",
+    "risk_attribution_latest",
+    "stress_run",
+    "backtest_run",
+    "backtest_latest",
+    "backtest_frame_latest",
+    "validation_latest",
+    "model_compare_latest",
+    "report_run",
+    "report_latest",
+    "decision_open",
+    "decision_close",
+    "decisions_replay",
+    "decisions_forecast",
+    "decisions_trajectory",
+    "decisions_portfolio_forecast",
+    "execution_preview_open",
+    "execution_preview_close",
+    "execution_submit_open",
+    "execution_submit_close",
+    "reconciliation_summary",
+    "reconciliation_history",
+    "reconciliation_incidents",
+    "capital_latest",
+    "capital_rebalance",
+    "portfolio_capital",
+    "operator_enqueue_sync",
+    "operator_enqueue_snapshot",
+    "operator_enqueue_backtest",
+    "operator_enqueue_report",
+    "operator_runs_list"
+  ],
+  "coherence": {
+    "table_counts": {
+      "risk_snapshots": 1,
+      "risk_decisions": 0,
+      "execution_results": 0,
+      "capital_snapshots": 1,
+      "market_data_sync_runs": 3,
+      "market_bars": 18300,
+      "mt5_order_history": 41,
+      "mt5_deal_history": 41,
+      "alerts": 0,
+      "audit_events": 1,
+      "operator_runs": 0
+    },
+    "execution_status_counts": {},
+    "executed_fill_ratio_anomalies": 0
+  },
+  "checks": [
+    {
+      "label": "root",
+      "method": "GET",
+      "path": "/",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 12.93,
+      "attempts": 1
+    },
+    {
+      "label": "health",
+      "method": "GET",
+      "path": "/health",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 136515.95,
+      "attempts": 1
+    },
+    {
+      "label": "health_dependencies",
+      "method": "GET",
+      "path": "/health/dependencies",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 172365.92,
+      "attempts": 1
+    },
+    {
+      "label": "health_readiness",
+      "method": "GET",
+      "path": "/health/readiness",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 1523.55,
+      "attempts": 1
+    },
+    {
+      "label": "jobs_status",
+      "method": "GET",
+      "path": "/jobs/status",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 1554.41,
+      "attempts": 1
+    },
+    {
+      "label": "desks",
+      "method": "GET",
+      "path": "/desks",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 14.57,
+      "attempts": 1
+    },
+    {
+      "label": "desk_overview",
+      "method": "GET",
+      "path": "/desks/default/overview",
+      "status": 404,
+      "ok": false,
+      "elapsed_ms": 11.83,
+      "attempts": 1,
+      "body_preview": "{\"detail\":\"Unknown desk 'default'.\"}"
+    },
+    {
+      "label": "market_sync",
+      "method": "POST",
+      "path": "/market-data/sync",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 1218867.83,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "market_status",
+      "method": "GET",
+      "path": "/market-data/status",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 42.26,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "market_sync_runs",
+      "method": "GET",
+      "path": "/market-data/sync/runs",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 44.46,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "instruments",
+      "method": "GET",
+      "path": "/instruments",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 38.32,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "live_holdings",
+      "method": "GET",
+      "path": "/portfolio/live-holdings",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 32.79,
+      "attempts": 1
+    },
+    {
+      "label": "live_exposure",
+      "method": "GET",
+      "path": "/portfolio/live-exposure",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 35.17,
+      "attempts": 1
+    },
+    {
+      "label": "mt5_status",
+      "method": "GET",
+      "path": "/mt5/status",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 115.83,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "mt5_account",
+      "method": "GET",
+      "path": "/mt5/account",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 52.23,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "mt5_accounts",
+      "method": "GET",
+      "path": "/mt5/accounts",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 22.41,
+      "attempts": 1
+    },
+    {
+      "label": "mt5_positions",
+      "method": "GET",
+      "path": "/mt5/positions",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 21.02,
+      "attempts": 1
+    },
+    {
+      "label": "mt5_orders",
+      "method": "GET",
+      "path": "/mt5/orders",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 27.5,
+      "attempts": 1
+    },
+    {
+      "label": "mt5_live_state",
+      "method": "GET",
+      "path": "/mt5/live/state",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 54.8,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "mt5_live_events",
+      "method": "GET",
+      "path": "/mt5/live/events",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 53.26,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "mt5_analytics_series",
+      "method": "GET",
+      "path": "/mt5/analytics/series",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 60.65,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "history_orders",
+      "method": "GET",
+      "path": "/mt5/history/orders",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 275.8,
+      "attempts": 1
+    },
+    {
+      "label": "history_deals",
+      "method": "GET",
+      "path": "/mt5/history/deals",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 230.19,
+      "attempts": 1
+    },
+    {
+      "label": "history_transactions_all",
+      "method": "GET",
+      "path": "/mt5/history/transactions",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 704.43,
+      "attempts": 1
+    },
+    {
+      "label": "history_transactions_manual",
+      "method": "GET",
+      "path": "/mt5/history/transactions",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 527.03,
+      "attempts": 1
+    },
+    {
+      "label": "history_transactions_csv",
+      "method": "GET",
+      "path": "/mt5/history/transactions/export",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 477.76,
+      "attempts": 1
+    },
+    {
+      "label": "history_transactions_csv_content_type",
+      "method": "ASSERT",
+      "path": "/mt5/history/transactions/export",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 0.0,
+      "attempts": 1
+    },
+    {
+      "label": "snapshot_run",
+      "method": "POST",
+      "path": "/snapshots/run",
+      "status": 503,
+      "ok": false,
+      "elapsed_ms": 20.68,
+      "attempts": 6,
+      "body_preview": "{\"detail\":\"Database schema is invalid. Schema inspection failed: (sqlite3.OperationalError) disk I/O error\\n[SQL: SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~' ORDER BY name]\\n(Background on this error at: https://sqlalche.me/e/20/e3q8) Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\"}"
+    },
+    {
+      "label": "snapshot_latest",
+      "method": "GET",
+      "path": "/snapshots/latest",
+      "status": 404,
+      "ok": false,
+      "elapsed_ms": 16.48,
+      "attempts": 1,
+      "body_preview": "{\"detail\":\"No snapshot found.\"}"
+    },
+    {
+      "label": "risk_summary",
+      "method": "GET",
+      "path": "/risk/summary",
+      "status": 404,
+      "ok": false,
+      "elapsed_ms": 30.56,
+      "attempts": 1,
+      "body_preview": "{\"detail\":\"No risk summary available.\"}"
+    },
+    {
+      "label": "risk_diagnostics",
+      "method": "GET",
+      "path": "/risk/diagnostics",
+      "status": 404,
+      "ok": false,
+      "elapsed_ms": 27.81,
+      "attempts": 1,
+      "body_preview": "{\"detail\":\"No risk diagnostics available.\"}"
+    },
+    {
+      "label": "risk_contributions",
+      "method": "GET",
+      "path": "/risk/contributions",
+      "status": 404,
+      "ok": false,
+      "elapsed_ms": 17.22,
+      "attempts": 1,
+      "body_preview": "{\"detail\":\"No risk contributions available.\"}"
+    },
+    {
+      "label": "risk_budget_latest",
+      "method": "GET",
+      "path": "/snapshots/budget/latest",
+      "status": 404,
+      "ok": false,
+      "elapsed_ms": 15.16,
+      "attempts": 1,
+      "body_preview": "{\"detail\":\"No risk budget available.\"}"
+    },
+    {
+      "label": "risk_attribution_latest",
+      "method": "GET",
+      "path": "/snapshots/attribution/latest",
+      "status": 404,
+      "ok": false,
+      "elapsed_ms": 16.95,
+      "attempts": 1,
+      "body_preview": "{\"detail\":\"No risk attribution available.\"}"
+    },
+    {
+      "label": "stress_run",
+      "method": "POST",
+      "path": "/snapshots/stress",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 128.65,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "backtest_run",
+      "method": "POST",
+      "path": "/backtests/run",
+      "status": 503,
+      "ok": false,
+      "elapsed_ms": 21.93,
+      "attempts": 6,
+      "body_preview": "{\"detail\":\"Database schema is invalid. Schema inspection failed: (sqlite3.OperationalError) disk I/O error\\n[SQL: SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~' ORDER BY name]\\n(Background on this error at: https://sqlalche.me/e/20/e3q8) Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\"}"
+    },
+    {
+      "label": "backtest_latest",
+      "method": "GET",
+      "path": "/backtests/latest",
+      "status": 404,
+      "ok": false,
+      "elapsed_ms": 21.76,
+      "attempts": 1,
+      "body_preview": "{\"detail\":\"No backtest run found.\"}"
+    },
+    {
+      "label": "backtest_frame_latest",
+      "method": "GET",
+      "path": "/backtests/frame/latest",
+      "status": 404,
+      "ok": false,
+      "elapsed_ms": 18.75,
+      "attempts": 1,
+      "body_preview": "{\"detail\":\"No backtest frame found.\"}"
+    },
+    {
+      "label": "validation_latest",
+      "method": "GET",
+      "path": "/validations/latest",
+      "status": 404,
+      "ok": false,
+      "elapsed_ms": 19.08,
+      "attempts": 1,
+      "body_preview": "{\"detail\":\"No validation run found.\"}"
+    },
+    {
+      "label": "model_compare_latest",
+      "method": "GET",
+      "path": "/models/compare/latest",
+      "status": 404,
+      "ok": false,
+      "elapsed_ms": 22.63,
+      "attempts": 1,
+      "body_preview": "{\"detail\":\"No model comparison available.\"}"
+    },
+    {
+      "label": "report_run",
+      "method": "POST",
+      "path": "/reports/run",
+      "status": 503,
+      "ok": false,
+      "elapsed_ms": 19.53,
+      "attempts": 6,
+      "body_preview": "{\"detail\":\"Database schema is invalid. Schema inspection failed: (sqlite3.OperationalError) disk I/O error\\n[SQL: SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~' ORDER BY name]\\n(Background on this error at: https://sqlalche.me/e/20/e3q8) Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\"}"
+    },
+    {
+      "label": "report_latest",
+      "method": "GET",
+      "path": "/reports/latest",
+      "status": 404,
+      "ok": false,
+      "elapsed_ms": 17.59,
+      "attempts": 1,
+      "body_preview": "{\"detail\":\"No report found.\"}"
+    },
+    {
+      "label": "report_decision_history",
+      "method": "GET",
+      "path": "/reports/decision-history",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 18.24,
+      "attempts": 1
+    },
+    {
+      "label": "report_capital_history",
+      "method": "GET",
+      "path": "/reports/capital-history",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 17.41,
+      "attempts": 1
+    },
+    {
+      "label": "decision_open",
+      "method": "POST",
+      "path": "/decisions/evaluate",
+      "status": 503,
+      "ok": false,
+      "elapsed_ms": 21.61,
+      "attempts": 3,
+      "body_preview": "{\"detail\":\"Database schema is invalid. Schema inspection failed: (sqlite3.OperationalError) disk I/O error\\n[SQL: SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~' ORDER BY name]\\n(Background on this error at: https://sqlalche.me/e/20/e3q8) Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\"}"
+    },
+    {
+      "label": "decision_close",
+      "method": "POST",
+      "path": "/decisions/evaluate",
+      "status": 503,
+      "ok": false,
+      "elapsed_ms": 18.4,
+      "attempts": 3,
+      "body_preview": "{\"detail\":\"Database schema is invalid. Schema inspection failed: (sqlite3.OperationalError) disk I/O error\\n[SQL: SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~' ORDER BY name]\\n(Background on this error at: https://sqlalche.me/e/20/e3q8) Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\"}"
+    },
+    {
+      "label": "decisions_recent",
+      "method": "GET",
+      "path": "/decisions/recent",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 13.68,
+      "attempts": 1
+    },
+    {
+      "label": "decisions_replay",
+      "method": "GET",
+      "path": "/decisions/replay",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 154.15,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "decisions_forecast",
+      "method": "GET",
+      "path": "/decisions/forecast",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 28.04,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "decisions_trajectory",
+      "method": "GET",
+      "path": "/decisions/trajectory",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 29.09,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "decisions_portfolio_forecast",
+      "method": "GET",
+      "path": "/decisions/portfolio-forecast",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 28.2,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "execution_preview_open",
+      "method": "POST",
+      "path": "/execution/preview",
+      "status": 503,
+      "ok": false,
+      "elapsed_ms": 20.6,
+      "attempts": 3,
+      "body_preview": "{\"detail\":\"Database schema is invalid. Schema inspection failed: (sqlite3.OperationalError) disk I/O error\\n[SQL: SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~' ORDER BY name]\\n(Background on this error at: https://sqlalche.me/e/20/e3q8) Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\"}"
+    },
+    {
+      "label": "execution_preview_close",
+      "method": "POST",
+      "path": "/execution/preview",
+      "status": 503,
+      "ok": false,
+      "elapsed_ms": 229.0,
+      "attempts": 3,
+      "body_preview": "{\"detail\":\"Database schema is invalid. Schema inspection failed: (sqlite3.OperationalError) disk I/O error\\n[SQL: SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~' ORDER BY name]\\n(Background on this error at: https://sqlalche.me/e/20/e3q8) Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\"}"
+    },
+    {
+      "label": "execution_submit_open",
+      "method": "POST",
+      "path": "/execution/submit",
+      "status": 503,
+      "ok": false,
+      "elapsed_ms": 18.77,
+      "attempts": 3,
+      "body_preview": "{\"detail\":\"Database schema is invalid. Schema inspection failed: (sqlite3.OperationalError) disk I/O error\\n[SQL: SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~' ORDER BY name]\\n(Background on this error at: https://sqlalche.me/e/20/e3q8) Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\"}"
+    },
+    {
+      "label": "execution_submit_close",
+      "method": "POST",
+      "path": "/execution/submit",
+      "status": 503,
+      "ok": false,
+      "elapsed_ms": 30.51,
+      "attempts": 3,
+      "body_preview": "{\"detail\":\"Database schema is invalid. Schema inspection failed: (sqlite3.OperationalError) disk I/O error\\n[SQL: SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~' ORDER BY name]\\n(Background on this error at: https://sqlalche.me/e/20/e3q8) Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\"}"
+    },
+    {
+      "label": "execution_recent",
+      "method": "GET",
+      "path": "/execution/recent",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 31.61,
+      "attempts": 1
+    },
+    {
+      "label": "execution_fills_recent",
+      "method": "GET",
+      "path": "/execution/fills/recent",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 22.72,
+      "attempts": 1
+    },
+    {
+      "label": "reconciliation_summary",
+      "method": "GET",
+      "path": "/reconciliation/summary",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 53.15,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "reconciliation_history",
+      "method": "GET",
+      "path": "/reconciliation/history",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 46.74,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "reconciliation_incidents",
+      "method": "GET",
+      "path": "/reconciliation/incidents",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 43.5,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "capital_latest",
+      "method": "GET",
+      "path": "/capital/latest",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 137.38,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "capital_history",
+      "method": "GET",
+      "path": "/capital/history",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 28.57,
+      "attempts": 1
+    },
+    {
+      "label": "capital_rebalance",
+      "method": "POST",
+      "path": "/capital/rebalance",
+      "status": 503,
+      "ok": false,
+      "elapsed_ms": 22.7,
+      "attempts": 3,
+      "body_preview": "{\"detail\":\"Database schema is invalid. Schema inspection failed: (sqlite3.OperationalError) disk I/O error\\n[SQL: SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~' ORDER BY name]\\n(Background on this error at: https://sqlalche.me/e/20/e3q8) Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\"}"
+    },
+    {
+      "label": "portfolio_capital",
+      "method": "GET",
+      "path": "/portfolios/fx_eur_20k/capital",
+      "status": 500,
+      "ok": false,
+      "elapsed_ms": 32.97,
+      "attempts": 1,
+      "body_preview": "Internal Server Error"
+    },
+    {
+      "label": "alerts",
+      "method": "GET",
+      "path": "/alerts",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 16.31,
+      "attempts": 1
+    },
+    {
+      "label": "alerts_active",
+      "method": "GET",
+      "path": "/alerts/active",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 33.4,
+      "attempts": 1
+    },
+    {
+      "label": "audit_recent",
+      "method": "GET",
+      "path": "/audit/recent",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 17.14,
+      "attempts": 1
+    },
+    {
+      "label": "operator_enqueue_sync",
+      "method": "POST",
+      "path": "/operator/actions/sync",
+      "status": 503,
+      "ok": false,
+      "elapsed_ms": 14.36,
+      "attempts": 6,
+      "body_preview": "{\"detail\":{\"detail\":\"Database schema is invalid. Schema inspection failed: (sqlite3.OperationalError) disk I/O error\\n[SQL: SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~' ORDER BY name]\\n(Background on this error at: https://sqlalche.me/e/20/e3q8) Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\",\"error_code\":\"schema_invalid\",\"hint\":\"Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\",\"issues\":[\"Schema inspection f"
+    },
+    {
+      "label": "operator_enqueue_snapshot",
+      "method": "POST",
+      "path": "/operator/actions/snapshot",
+      "status": 503,
+      "ok": false,
+      "elapsed_ms": 23.88,
+      "attempts": 6,
+      "body_preview": "{\"detail\":{\"detail\":\"Database schema is invalid. Schema inspection failed: (sqlite3.OperationalError) disk I/O error\\n[SQL: SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~' ORDER BY name]\\n(Background on this error at: https://sqlalche.me/e/20/e3q8) Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\",\"error_code\":\"schema_invalid\",\"hint\":\"Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\",\"issues\":[\"Schema inspection f"
+    },
+    {
+      "label": "operator_enqueue_backtest",
+      "method": "POST",
+      "path": "/operator/actions/backtest",
+      "status": 503,
+      "ok": false,
+      "elapsed_ms": 16.33,
+      "attempts": 6,
+      "body_preview": "{\"detail\":{\"detail\":\"Database schema is invalid. Schema inspection failed: (sqlite3.OperationalError) disk I/O error\\n[SQL: SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~' ORDER BY name]\\n(Background on this error at: https://sqlalche.me/e/20/e3q8) Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\",\"error_code\":\"schema_invalid\",\"hint\":\"Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\",\"issues\":[\"Schema inspection f"
+    },
+    {
+      "label": "operator_enqueue_report",
+      "method": "POST",
+      "path": "/operator/actions/report",
+      "status": 503,
+      "ok": false,
+      "elapsed_ms": 23.3,
+      "attempts": 6,
+      "body_preview": "{\"detail\":{\"detail\":\"Database schema is invalid. Schema inspection failed: (sqlite3.OperationalError) disk I/O error\\n[SQL: SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~' ORDER BY name]\\n(Background on this error at: https://sqlalche.me/e/20/e3q8) Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\",\"error_code\":\"schema_invalid\",\"hint\":\"Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\",\"issues\":[\"Schema inspection f"
+    },
+    {
+      "label": "operator_runs_list",
+      "method": "GET",
+      "path": "/operator/runs",
+      "status": 503,
+      "ok": false,
+      "elapsed_ms": 18.53,
+      "attempts": 6,
+      "body_preview": "{\"detail\":{\"detail\":\"Database schema is invalid. Schema inspection failed: (sqlite3.OperationalError) disk I/O error\\n[SQL: SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite~_%' ESCAPE '~' ORDER BY name]\\n(Background on this error at: https://sqlalche.me/e/20/e3q8) Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\",\"error_code\":\"schema_invalid\",\"hint\":\"Run `var-project db upgrade` (or `alembic upgrade head`) then retry.\",\"issues\":[\"Schema inspection f"
+    }
+  ]
+}

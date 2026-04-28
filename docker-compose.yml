@@ -2,6 +2,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    mem_limit: 256m
     ports:
       - "6379:6379"
     healthcheck:
@@ -13,6 +14,7 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    mem_limit: 1024m
     environment:
       POSTGRES_DB: ${VAR_PROJECT_POSTGRES_DB:-var_risk_desk}
       POSTGRES_USER: ${VAR_PROJECT_POSTGRES_USER:-var_user}
@@ -32,22 +34,27 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    mem_limit: ${VAR_PROJECT_API_MEM_LIMIT:-1400m}
     working_dir: /app
     environment:
       VAR_PROJECT_ROOT: /app
       VAR_PROJECT_DATABASE_URL: postgresql+psycopg://${VAR_PROJECT_POSTGRES_USER:-var_user}:${VAR_PROJECT_POSTGRES_PASSWORD:-var_password}@postgres:5432/${VAR_PROJECT_POSTGRES_DB:-var_risk_desk}
       VAR_PROJECT_MT5_AGENT_BASE_URL: ${VAR_PROJECT_MT5_AGENT_BASE_URL:-http://host.docker.internal:8010}
       VAR_PROJECT_MT5_AGENT_API_KEY: ${VAR_PROJECT_MT5_AGENT_API_KEY:-}
-      VAR_PROJECT_API_WORKERS: ${VAR_PROJECT_API_WORKERS:-3}
+      VAR_PROJECT_API_WORKERS: ${VAR_PROJECT_API_WORKERS:-1}
       VAR_PROJECT_API_WORKER_HEALTHCHECK_TIMEOUT: ${VAR_PROJECT_API_WORKER_HEALTHCHECK_TIMEOUT:-30}
-      VAR_PROJECT_DB_POOL_SIZE: ${VAR_PROJECT_DB_POOL_SIZE:-8}
-      VAR_PROJECT_DB_MAX_OVERFLOW: ${VAR_PROJECT_DB_MAX_OVERFLOW:-8}
-      VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS: ${VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS:-15}
-      VAR_PROJECT_DB_POOL_RECYCLE_SECONDS: ${VAR_PROJECT_DB_POOL_RECYCLE_SECONDS:-300}
+      VAR_PROJECT_API_LIVE_READ_WORKERS: ${VAR_PROJECT_API_LIVE_READ_WORKERS:-2}
+      VAR_PROJECT_API_LIVE_READ_TIMEOUT_MS: ${VAR_PROJECT_API_LIVE_READ_TIMEOUT_MS:-900}
+      VAR_PROJECT_MT5_LIVE_POLL_SECONDS: ${VAR_PROJECT_MT5_LIVE_POLL_SECONDS:-2.0}
+      VAR_PROJECT_MT5_LIVE_HISTORY_POLL_SECONDS: ${VAR_PROJECT_MT5_LIVE_HISTORY_POLL_SECONDS:-30.0}
+      VAR_PROJECT_DB_POOL_SIZE: ${VAR_PROJECT_DB_POOL_SIZE:-4}
+      VAR_PROJECT_DB_MAX_OVERFLOW: ${VAR_PROJECT_DB_MAX_OVERFLOW:-2}
+      VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS: ${VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS:-10}
+      VAR_PROJECT_DB_POOL_RECYCLE_SECONDS: ${VAR_PROJECT_DB_POOL_RECYCLE_SECONDS:-180}
       VAR_PROJECT_OPERATOR_QUEUE_MODE: ${VAR_PROJECT_OPERATOR_QUEUE_MODE:-celery}
       VAR_PROJECT_CELERY_BROKER_URL: ${VAR_PROJECT_CELERY_BROKER_URL:-redis://redis:6379/0}
       VAR_PROJECT_CELERY_RESULT_BACKEND: ${VAR_PROJECT_CELERY_RESULT_BACKEND:-redis://redis:6379/1}
-    command: ["var-project", "api", "--host", "0.0.0.0", "--port", "8000", "--workers", "${VAR_PROJECT_API_WORKERS:-3}", "--timeout-worker-healthcheck", "${VAR_PROJECT_API_WORKER_HEALTHCHECK_TIMEOUT:-30}"]
+    command: ["var-project", "api", "--host", "0.0.0.0", "--port", "8000", "--workers", "${VAR_PROJECT_API_WORKERS:-1}", "--timeout-worker-healthcheck", "${VAR_PROJECT_API_WORKER_HEALTHCHECK_TIMEOUT:-30}"]
     volumes:
       - reports_data:/app/reports
       - snapshots_data:/app/data/snapshots
@@ -67,6 +74,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: "no"
+    mem_limit: 256m
     working_dir: /app
     environment:
       VAR_PROJECT_ROOT: /app
@@ -81,8 +89,15 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     restart: unless-stopped
+    mem_limit: 512m
     environment:
       VAR_PROJECT_API_BASE_URL: http://api:8000
+      NEXT_PUBLIC_MT5_STREAM_MODE: ${NEXT_PUBLIC_MT5_STREAM_MODE:-auto}
+      NEXT_PUBLIC_MT5_POLL_INTERVAL_MS: ${NEXT_PUBLIC_MT5_POLL_INTERVAL_MS:-1200}
+      NEXT_PUBLIC_MT5_MAX_POLL_INTERVAL_MS: ${NEXT_PUBLIC_MT5_MAX_POLL_INTERVAL_MS:-2500}
+      NEXT_PUBLIC_DESK_ARTIFACT_QUERY_STALE_MS: ${NEXT_PUBLIC_DESK_ARTIFACT_QUERY_STALE_MS:-2500}
+      NEXT_PUBLIC_DESK_ARTIFACT_QUERY_REFETCH_MS: ${NEXT_PUBLIC_DESK_ARTIFACT_QUERY_REFETCH_MS:-2500}
+      NEXT_PUBLIC_DESK_ARTIFACT_INVALIDATE_MIN_MS: ${NEXT_PUBLIC_DESK_ARTIFACT_INVALIDATE_MIN_MS:-2000}
     depends_on:
       api:
         condition: service_started
@@ -94,16 +109,24 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    mem_limit: ${VAR_PROJECT_WORKER_MEM_LIMIT:-1280m}
     working_dir: /app
     environment:
       VAR_PROJECT_ROOT: /app
       VAR_PROJECT_DATABASE_URL: postgresql+psycopg://${VAR_PROJECT_POSTGRES_USER:-var_user}:${VAR_PROJECT_POSTGRES_PASSWORD:-var_password}@postgres:5432/${VAR_PROJECT_POSTGRES_DB:-var_risk_desk}
       VAR_PROJECT_MT5_AGENT_BASE_URL: ${VAR_PROJECT_MT5_AGENT_BASE_URL:-http://host.docker.internal:8010}
       VAR_PROJECT_MT5_AGENT_API_KEY: ${VAR_PROJECT_MT5_AGENT_API_KEY:-}
-      VAR_PROJECT_DB_POOL_SIZE: ${VAR_PROJECT_DB_POOL_SIZE:-8}
-      VAR_PROJECT_DB_MAX_OVERFLOW: ${VAR_PROJECT_DB_MAX_OVERFLOW:-8}
-      VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS: ${VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS:-15}
-      VAR_PROJECT_DB_POOL_RECYCLE_SECONDS: ${VAR_PROJECT_DB_POOL_RECYCLE_SECONDS:-300}
+      VAR_PROJECT_MT5_LIVE_POLL_SECONDS: ${VAR_PROJECT_MT5_LIVE_POLL_SECONDS:-2.0}
+      VAR_PROJECT_MT5_LIVE_HISTORY_POLL_SECONDS: ${VAR_PROJECT_MT5_LIVE_HISTORY_POLL_SECONDS:-30.0}
+      VAR_PROJECT_DB_POOL_SIZE: ${VAR_PROJECT_DB_POOL_SIZE:-4}
+      VAR_PROJECT_DB_MAX_OVERFLOW: ${VAR_PROJECT_DB_MAX_OVERFLOW:-2}
+      VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS: ${VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS:-10}
+      VAR_PROJECT_DB_POOL_RECYCLE_SECONDS: ${VAR_PROJECT_DB_POOL_RECYCLE_SECONDS:-180}
+      VAR_PROJECT_WORKER_LOOP_SLEEP_SECONDS: ${VAR_PROJECT_WORKER_LOOP_SLEEP_SECONDS:-10}
+      VAR_PROJECT_WORKER_SNAPSHOT_INTERVAL_SECONDS: ${VAR_PROJECT_WORKER_SNAPSHOT_INTERVAL_SECONDS:-180}
+      VAR_PROJECT_WORKER_BACKTEST_INTERVAL_SECONDS: ${VAR_PROJECT_WORKER_BACKTEST_INTERVAL_SECONDS:-3600}
+      VAR_PROJECT_WORKER_LIVE_REFRESH_INTERVAL_SECONDS: ${VAR_PROJECT_WORKER_LIVE_REFRESH_INTERVAL_SECONDS:-30}
+      VAR_PROJECT_WORKER_REPORT_INTERVAL_SECONDS: ${VAR_PROJECT_WORKER_REPORT_INTERVAL_SECONDS:-3600}
       VAR_PROJECT_OPERATOR_QUEUE_MODE: ${VAR_PROJECT_OPERATOR_QUEUE_MODE:-celery}
       VAR_PROJECT_CELERY_BROKER_URL: ${VAR_PROJECT_CELERY_BROKER_URL:-redis://redis:6379/0}
       VAR_PROJECT_CELERY_RESULT_BACKEND: ${VAR_PROJECT_CELERY_RESULT_BACKEND:-redis://redis:6379/1}
@@ -127,19 +150,58 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    mem_limit: 768m
     working_dir: /app
     environment:
       VAR_PROJECT_ROOT: /app
       VAR_PROJECT_DATABASE_URL: postgresql+psycopg://${VAR_PROJECT_POSTGRES_USER:-var_user}:${VAR_PROJECT_POSTGRES_PASSWORD:-var_password}@postgres:5432/${VAR_PROJECT_POSTGRES_DB:-var_risk_desk}
       VAR_PROJECT_MT5_AGENT_BASE_URL: ${VAR_PROJECT_MT5_AGENT_BASE_URL:-http://host.docker.internal:8010}
       VAR_PROJECT_MT5_AGENT_API_KEY: ${VAR_PROJECT_MT5_AGENT_API_KEY:-}
-      VAR_PROJECT_DB_POOL_SIZE: ${VAR_PROJECT_DB_POOL_SIZE:-8}
-      VAR_PROJECT_DB_MAX_OVERFLOW: ${VAR_PROJECT_DB_MAX_OVERFLOW:-8}
-      VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS: ${VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS:-15}
-      VAR_PROJECT_DB_POOL_RECYCLE_SECONDS: ${VAR_PROJECT_DB_POOL_RECYCLE_SECONDS:-300}
+      VAR_PROJECT_MT5_LIVE_POLL_SECONDS: ${VAR_PROJECT_MT5_LIVE_POLL_SECONDS:-2.0}
+      VAR_PROJECT_MT5_LIVE_HISTORY_POLL_SECONDS: ${VAR_PROJECT_MT5_LIVE_HISTORY_POLL_SECONDS:-30.0}
+      VAR_PROJECT_DB_POOL_SIZE: ${VAR_PROJECT_DB_POOL_SIZE:-4}
+      VAR_PROJECT_DB_MAX_OVERFLOW: ${VAR_PROJECT_DB_MAX_OVERFLOW:-2}
+      VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS: ${VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS:-10}
+      VAR_PROJECT_DB_POOL_RECYCLE_SECONDS: ${VAR_PROJECT_DB_POOL_RECYCLE_SECONDS:-180}
       VAR_PROJECT_OPERATOR_QUEUE_MODE: celery
       VAR_PROJECT_CELERY_BROKER_URL: ${VAR_PROJECT_CELERY_BROKER_URL:-redis://redis:6379/0}
       VAR_PROJECT_CELERY_RESULT_BACKEND: ${VAR_PROJECT_CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      VAR_PROJECT_CELERY_WORKER_CONCURRENCY: ${VAR_PROJECT_CELERY_WORKER_CONCURRENCY:-1}
+    command: ["var-project", "operator-worker"]
+    volumes:
+      - reports_data:/app/reports
+      - snapshots_data:/app/data/snapshots
+      - market_ticks_data:/app/data/market_ticks
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+
+  celery-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    mem_limit: 768m
+    working_dir: /app
+    environment:
+      VAR_PROJECT_ROOT: /app
+      VAR_PROJECT_DATABASE_URL: postgresql+psycopg://${VAR_PROJECT_POSTGRES_USER:-var_user}:${VAR_PROJECT_POSTGRES_PASSWORD:-var_password}@postgres:5432/${VAR_PROJECT_POSTGRES_DB:-var_risk_desk}
+      VAR_PROJECT_MT5_AGENT_BASE_URL: ${VAR_PROJECT_MT5_AGENT_BASE_URL:-http://host.docker.internal:8010}
+      VAR_PROJECT_MT5_AGENT_API_KEY: ${VAR_PROJECT_MT5_AGENT_API_KEY:-}
+      VAR_PROJECT_MT5_LIVE_POLL_SECONDS: ${VAR_PROJECT_MT5_LIVE_POLL_SECONDS:-2.0}
+      VAR_PROJECT_MT5_LIVE_HISTORY_POLL_SECONDS: ${VAR_PROJECT_MT5_LIVE_HISTORY_POLL_SECONDS:-30.0}
+      VAR_PROJECT_DB_POOL_SIZE: ${VAR_PROJECT_DB_POOL_SIZE:-4}
+      VAR_PROJECT_DB_MAX_OVERFLOW: ${VAR_PROJECT_DB_MAX_OVERFLOW:-2}
+      VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS: ${VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS:-10}
+      VAR_PROJECT_DB_POOL_RECYCLE_SECONDS: ${VAR_PROJECT_DB_POOL_RECYCLE_SECONDS:-180}
+      VAR_PROJECT_OPERATOR_QUEUE_MODE: celery
+      VAR_PROJECT_CELERY_BROKER_URL: ${VAR_PROJECT_CELERY_BROKER_URL:-redis://redis:6379/0}
+      VAR_PROJECT_CELERY_RESULT_BACKEND: ${VAR_PROJECT_CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      VAR_PROJECT_CELERY_WORKER_CONCURRENCY: ${VAR_PROJECT_CELERY_WORKER_CONCURRENCY:-1}
     command: ["var-project", "operator-worker"]
     volumes:
       - reports_data:/app/reports
@@ -158,14 +220,69 @@ services:
       context: ./infra/nginx
       dockerfile: Dockerfile
     restart: unless-stopped
+    mem_limit: 128m
     depends_on:
       - api
       - frontend
     ports:
-      - "8080:80"
+      - "${VAR_PROJECT_NGINX_PORT:-8081}:80"
+
+  prometheus:
+    profiles: ["observability"]
+    build:
+      context: ./infra/observability/prometheus
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    mem_limit: 640m
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    volumes:
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      api:
+        condition: service_started
+      alertmanager:
+        condition: service_started
+
+  alertmanager:
+    profiles: ["observability"]
+    build:
+      context: ./infra/observability/alertmanager
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    mem_limit: 256m
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+    ports:
+      - "9093:9093"
+
+  grafana:
+    profiles: ["observability"]
+    build:
+      context: ./infra/observability/grafana
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    mem_limit: 512m
+    environment:
+      GF_SECURITY_ADMIN_USER: ${VAR_PROJECT_GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${VAR_PROJECT_GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
 
 volumes:
   postgres_data:
   reports_data:
   snapshots_data:
   market_ticks_data:
+  prometheus_data:
+  grafana_data:

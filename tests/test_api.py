@@ -16,6 +16,7 @@ from var_project.api.service import DeskApiService
 from var_project.api.services.collaborators import PortfolioRiskCalculator
 from var_project.risk.expected_shortfall import historical_var_es
 from var_project.storage.serialization import utcnow
+from var_project.validation.model_validation import BacktestModelValidation, ValidationSummary
 from test_mt5_execution_api import FakeMT5Connector, FailingMT5Connector
 
 
@@ -32,6 +33,70 @@ class PnlDriftConnector(FakeMT5Connector):
         for row in rows:
             row["profit"] = float(type(self).position_profit)
         return rows
+
+
+def _build_validation_summary(best_model: str, *, alternate_model: str = "mc") -> ValidationSummary:
+    champion = best_model.lower()
+    challenger = alternate_model.lower()
+    if challenger == champion:
+        challenger = "hist" if champion != "hist" else "mc"
+
+    champion_result = BacktestModelValidation(
+        model=champion,
+        n=120,
+        exceptions=4,
+        expected_rate=0.05,
+        actual_rate=4 / 120,
+        lr_uc=0.1,
+        p_uc=0.9,
+        lr_ind=0.1,
+        p_ind=0.85,
+        lr_cc=0.2,
+        p_cc=0.8,
+        exceptions_last_250=4,
+        traffic_light="GREEN",
+        score=90.0,
+        es_tail_observations=80,
+        es_shortfall_ratio=0.9,
+        es_breach_rate=0.04,
+        es_acerbi_stat=0.2,
+        es_acerbi_p_value=0.8,
+        es_acerbi_observations=80,
+    )
+    challenger_result = BacktestModelValidation(
+        model=challenger,
+        n=120,
+        exceptions=7,
+        expected_rate=0.05,
+        actual_rate=7 / 120,
+        lr_uc=1.1,
+        p_uc=0.3,
+        lr_ind=0.8,
+        p_ind=0.4,
+        lr_cc=1.7,
+        p_cc=0.2,
+        exceptions_last_250=7,
+        traffic_light="AMBER",
+        score=40.0,
+        es_tail_observations=80,
+        es_shortfall_ratio=1.2,
+        es_breach_rate=0.07,
+        es_acerbi_stat=1.1,
+        es_acerbi_p_value=0.2,
+        es_acerbi_observations=80,
+    )
+    return ValidationSummary(
+        alpha=0.95,
+        expected_rate=0.05,
+        model_results={
+            champion: champion_result,
+            challenger: challenger_result,
+        },
+        best_model=champion,
+        champion_model_live=champion,
+        champion_model_reporting=champion,
+        surface=None,
+    )
 
 
 
@@ -241,6 +306,8 @@ def test_api_runs_snapshot_backtest_and_report(tmp_path: Path):
     assert "es_acerbi_status" in first_ranking_row
     assert "es_acerbi_p_value" in first_ranking_row
     assert "es_acerbi_observations" in first_ranking_row
+    assert "signal" in first_ranking_row
+    assert "signal_reason" in first_ranking_row
 
     latest_attribution = client.get("/snapshots/attribution/latest", params={"source": "historical"})
     assert latest_attribution.status_code == 200
@@ -351,6 +418,8 @@ def test_api_runs_snapshot_backtest_and_report(tmp_path: Path):
     latest_report = client.get("/artifacts/latest/daily_report")
     assert latest_report.status_code == 200
     assert latest_report.json()["path"] == report_body["report_markdown"]
+    latest_report_details = dict(latest_report.json().get("details") or {})
+    assert latest_report_details.get("selected_model") in {"hist", "param", "mc", "ewma", "garch", "fhs"}
 
     decision_history = client.get("/reports/decision-history", params={"limit": 5})
     assert decision_history.status_code == 200
@@ -384,6 +453,212 @@ def test_api_backtest_rejects_incompatible_fixture_window_early(tmp_path: Path):
 
     assert response.status_code == 400
     assert "tracked history" in response.json()["detail"]
+
+
+def test_backtest_defaults_expand_to_recommended_validation_history_when_mt5_history_is_available(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5", market_history_days=1095)
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    requested_days, effective_days, recommended_days = service.analytics._resolve_backtest_days(
+        requested_days=None,
+        window=20,
+        alphas=[0.95, 0.975, 0.99],
+        horizons=[1, 5, 10],
+    )
+
+    assert requested_days == 60
+    assert recommended_days == 529
+    assert effective_days == 529
+
+
+def test_backtest_defaults_use_validation_window_floor_when_configured(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5", market_history_days=1095)
+
+    settings_path = root / "config" / "settings.yaml"
+    settings = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
+    settings["risk"]["validation_window_days"] = 40
+    settings_path.write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
+
+    service = DeskApiService(root, bootstrap_storage=True)
+
+    assert service.analytics._default_backtest_window() == 250
+    requested_days, effective_days, recommended_days = service.analytics._resolve_backtest_days(
+        requested_days=None,
+        window=service.analytics._default_backtest_window(),
+        alphas=[0.95, 0.975, 0.99],
+        horizons=[1, 5, 10],
+    )
+
+    assert requested_days == 60
+    assert recommended_days == 759
+    assert effective_days == 759
+
+
+def test_backtest_explicit_days_upgraded_to_recommended_floor_for_live_portfolio(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5", market_history_days=1095)
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    requested_days, effective_days, recommended_days = service.analytics._resolve_backtest_days(
+        requested_days=60,
+        window=20,
+        alphas=[0.95, 0.975, 0.99],
+        horizons=[1, 5, 10],
+        enforce_minimum_depth=True,
+    )
+
+    assert requested_days == 60
+    assert recommended_days == 529
+    assert effective_days == 529
+
+
+def test_backtest_explicit_days_preserved_without_minimum_depth_enforcement(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="historical", market_history_days=1095)
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    requested_days, effective_days, recommended_days = service.analytics._resolve_backtest_days(
+        requested_days=60,
+        window=20,
+        alphas=[0.95, 0.975, 0.99],
+        horizons=[1, 5, 10],
+        enforce_minimum_depth=False,
+    )
+
+    assert requested_days == 60
+    assert recommended_days == 529
+    assert effective_days == 60
+
+
+def test_operator_backtest_preserves_auto_depth_when_days_not_requested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path
+    _write_settings(root, market_history_days=1095)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    run = service.enqueue_operator_action(
+        action="backtest",
+        request_payload={"portfolio_slug": "fx_eur_20k"},
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_sync(payload: dict[str, object]) -> dict[str, object]:
+        captured["sync_payload"] = dict(payload)
+        return {"status": "ok", "source": "test"}
+
+    def _fake_backtest(**kwargs: object) -> dict[str, object]:
+        captured["backtest_kwargs"] = dict(kwargs)
+        return {
+            "backtest_run_id": 11,
+            "validation_run_id": 22,
+            "compare_artifact_id": 33,
+            "validation_artifact_id": 44,
+            "compare_csv": "D:/tmp/compare.csv",
+            "validation_json": "D:/tmp/validation.json",
+            "best_model": "hist",
+            "alert_count": 0,
+            "exception_counts": {"hist": 1},
+            "source": "historical",
+            "flat_book": False,
+        }
+
+    monkeypatch.setattr(service, "_refresh_market_data_for_operator", _fake_sync)
+    monkeypatch.setattr(service.analytics, "run_backtest", _fake_backtest)
+
+    processed = service.process_operator_run(int(run["id"]))
+
+    expected_sync_days = service._operator_backtest_sync_days({})
+    assert processed["status"] == "succeeded"
+    assert "days" not in dict(run.get("request_payload") or {})
+    assert dict(captured["sync_payload"])["days"] == expected_sync_days
+    assert "days" not in dict(captured["backtest_kwargs"])
+
+
+def test_operator_report_warm_backtest_preserves_auto_depth_when_days_not_requested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path
+    _write_settings(root, market_history_days=1095)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    run = service.enqueue_operator_action(
+        action="report",
+        request_payload={"portfolio_slug": "fx_eur_20k"},
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_sync(payload: dict[str, object]) -> dict[str, object]:
+        captured["sync_payload"] = dict(payload)
+        return {"status": "ok", "source": "test"}
+
+    def _fake_backtest(**kwargs: object) -> dict[str, object]:
+        captured["backtest_kwargs"] = dict(kwargs)
+        return {
+            "backtest_run_id": 11,
+            "validation_run_id": 22,
+            "compare_artifact_id": 33,
+            "validation_artifact_id": 44,
+            "compare_csv": "D:/tmp/compare.csv",
+            "validation_json": "D:/tmp/validation.json",
+            "best_model": "hist",
+            "alert_count": 0,
+            "exception_counts": {"hist": 1},
+            "source": "historical",
+            "flat_book": False,
+        }
+
+    def _fake_report(*, compare_path: str | None = None, portfolio_slug: str | None = None, account_id: str | None = None) -> dict[str, object]:
+        captured["report_args"] = {
+            "compare_path": compare_path,
+            "portfolio_slug": portfolio_slug,
+            "account_id": account_id,
+        }
+        return {
+            "artifact_id": 55,
+            "report_markdown": "D:/tmp/report.md",
+            "compare_csv": str(compare_path),
+        }
+
+    monkeypatch.setattr(service, "_refresh_market_data_for_operator", _fake_sync)
+    monkeypatch.setattr(service.analytics, "run_backtest", _fake_backtest)
+    monkeypatch.setattr(service.analytics, "run_report", _fake_report)
+
+    processed = service.process_operator_run(int(run["id"]))
+
+    expected_sync_days = service._operator_backtest_sync_days({})
+    assert processed["status"] == "succeeded"
+    assert dict(captured["sync_payload"])["days"] == expected_sync_days
+    assert "days" not in dict(captured["backtest_kwargs"])
+    assert dict(captured["report_args"])["compare_path"] == "D:/tmp/compare.csv"
+
+
+def test_run_backtest_creates_unique_compare_artifact_per_rerun(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+
+    service = DeskApiService(root, bootstrap_storage=True)
+
+    first = service.run_backtest(days=60, timeframe="H1", portfolio_slug="fx_eur_20k")
+    second = service.run_backtest(days=60, timeframe="H1", portfolio_slug="fx_eur_20k")
+
+    assert first["compare_artifact_id"] != second["compare_artifact_id"]
+    assert first["compare_csv"] != second["compare_csv"]
+    latest = service.latest_backtest(portfolio_slug="fx_eur_20k")
+    assert latest is not None
+    assert int(latest["artifact_id"]) == int(second["compare_artifact_id"])
 
 
 def test_latest_report_by_id_uses_persisted_snapshot_id_outside_recent_window(tmp_path: Path):
@@ -528,6 +803,469 @@ def test_latest_report_contract_selected_model_uses_report_scoped_data(
     assert contract["metrics"]["es"]["value"] == pytest.approx(70.0, abs=1e-9)
 
 
+def test_latest_report_contract_prefers_compare_metrics_over_snapshot_values(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    portfolio_slug = "fx_eur_20k"
+    portfolio_id = service.runtime._resolve_portfolio_id(portfolio_slug)
+
+    snapshot_id = service.storage.record_snapshot(
+        {
+            "time_utc": "2024-03-01T00:00:00+00:00",
+            "alpha": 0.95,
+            "timeframe": "H1",
+            "days": 60,
+            "window": 20,
+            "var": {"hist": 910.0},
+            "es": {"hist": 1110.0},
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+
+    compare_csv = root / "reports" / "backtests" / "report_compare_precedence.csv"
+    compare_csv.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "date": ["2024-03-01T00:00:00Z"],
+            "pnl": [9.0],
+            "var_hist": [50.0],
+            "es_hist": [70.0],
+        }
+    ).to_csv(compare_csv, index=False)
+
+    report_path = root / "reports" / "daily" / "compare_precedence_report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("# Risk Report - Compare precedence\n", encoding="utf-8")
+    report_id = service.storage.register_artifact(
+        report_path,
+        artifact_type="daily_report",
+        details={
+            "portfolio_slug": portfolio_slug,
+            "compare_csv": str(compare_csv.resolve()),
+            "snapshot_source": "historical",
+            "snapshot_id": int(snapshot_id),
+            "selected_model": "hist",
+        },
+    )
+
+    payload = service.latest_report_content(portfolio_slug=portfolio_slug, report_id=report_id)
+    assert payload is not None
+    contract = payload["report_contract"]
+    assert contract["selected_model"] == "hist"
+    assert contract["metrics"]["var"]["value"] == pytest.approx(50.0, abs=1e-9)
+    assert contract["metrics"]["es"]["value"] == pytest.approx(70.0, abs=1e-9)
+
+
+def test_latest_report_contract_prefers_snapshot_pnl_when_available(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    portfolio_slug = "fx_eur_20k"
+    portfolio_id = service.runtime._resolve_portfolio_id(portfolio_slug)
+
+    snapshot_id = service.storage.record_snapshot(
+        {
+            "time_utc": "2024-03-05T12:34:56+00:00",
+            "alpha": 0.95,
+            "timeframe": "H1",
+            "days": 60,
+            "window": 20,
+            "var": {"hist": 910.0},
+            "es": {"hist": 1110.0},
+            "pnl_explain": {
+                "realized": 10.0,
+                "unrealized": -3.0,
+                "swap": -1.0,
+                "commission": -2.0,
+                "fee": 0.0,
+                "estimated_spread_cost": 1.5,
+                "net_total": 2.5,
+            },
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+
+    compare_csv = root / "reports" / "backtests" / "report_compare_snapshot_pnl.csv"
+    compare_csv.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "date": ["2024-03-01T00:00:00Z"],
+            "pnl": [99.0],
+            "var_hist": [50.0],
+            "es_hist": [70.0],
+        }
+    ).to_csv(compare_csv, index=False)
+
+    report_path = root / "reports" / "daily" / "snapshot_pnl_report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("# Risk Report - Snapshot PnL\n", encoding="utf-8")
+    report_id = service.storage.register_artifact(
+        report_path,
+        artifact_type="daily_report",
+        details={
+            "portfolio_slug": portfolio_slug,
+            "compare_csv": str(compare_csv.resolve()),
+            "snapshot_source": "historical",
+            "snapshot_id": int(snapshot_id),
+            "selected_model": "hist",
+        },
+    )
+
+    payload = service.latest_report_content(portfolio_slug=portfolio_slug, report_id=report_id)
+    assert payload is not None
+    contract = payload["report_contract"]
+    assert contract["metrics"]["pnl"]["value"] == pytest.approx(2.5, abs=1e-9)
+    assert str(contract["metrics"]["pnl"]["as_of_utc"]).startswith("2024-03-05T12:34:56")
+
+
+def test_latest_report_contract_derives_snapshot_pnl_from_holdings_when_snapshot_has_no_pnl_explain(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    portfolio_slug = "fx_eur_20k"
+    portfolio_id = service.runtime._resolve_portfolio_id(portfolio_slug)
+
+    snapshot_id = service.storage.record_snapshot(
+        {
+            "time_utc": "2024-03-05T12:34:56+00:00",
+            "alpha": 0.95,
+            "timeframe": "H1",
+            "days": 60,
+            "window": 20,
+            "var": {"hist": 910.0},
+            "es": {"hist": 1110.0},
+            "holdings": [
+                {"symbol": "EURUSD", "unrealized_pnl_base_ccy": 12.5},
+                {"symbol": "USDJPY", "unrealized_pnl_base_ccy": -36.0},
+            ],
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+
+    compare_csv = root / "reports" / "backtests" / "report_compare_snapshot_holdings_pnl.csv"
+    compare_csv.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "date": ["2024-03-01T00:00:00Z"],
+            "pnl": [99.0],
+            "var_hist": [50.0],
+            "es_hist": [70.0],
+        }
+    ).to_csv(compare_csv, index=False)
+
+    report_path = root / "reports" / "daily" / "snapshot_holdings_pnl_report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("# Risk Report - Snapshot holdings PnL\n", encoding="utf-8")
+    report_id = service.storage.register_artifact(
+        report_path,
+        artifact_type="daily_report",
+        details={
+            "portfolio_slug": portfolio_slug,
+            "compare_csv": str(compare_csv.resolve()),
+            "snapshot_source": "historical",
+            "snapshot_id": int(snapshot_id),
+            "selected_model": "hist",
+        },
+    )
+
+    payload = service.latest_report_content(portfolio_slug=portfolio_slug, report_id=report_id)
+    assert payload is not None
+    contract = payload["report_contract"]
+    assert contract["metrics"]["pnl"]["value"] == pytest.approx(-23.5, abs=1e-9)
+    assert str(contract["metrics"]["pnl"]["as_of_utc"]).startswith("2024-03-05T12:34:56")
+
+
+def test_latest_report_contract_uses_last_valid_compare_row_when_trailing_row_is_nan(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    portfolio_slug = "fx_eur_20k"
+    portfolio_id = service.runtime._resolve_portfolio_id(portfolio_slug)
+
+    snapshot_id = service.storage.record_snapshot(
+        {
+            "time_utc": "2024-03-01T00:00:00+00:00",
+            "alpha": 0.95,
+            "timeframe": "H1",
+            "days": 60,
+            "window": 20,
+            "var": {"hist": 910.0},
+            "es": {"hist": 1110.0},
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+
+    compare_csv = root / "reports" / "backtests" / "report_compare_trailing_nan.csv"
+    compare_csv.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "date": ["2024-03-01T00:00:00Z", "2024-03-02T00:00:00Z"],
+            "pnl": [12.0, np.nan],
+            "var_hist": [50.0, np.nan],
+            "es_hist": [70.0, np.nan],
+        }
+    ).to_csv(compare_csv, index=False)
+
+    report_path = root / "reports" / "daily" / "compare_trailing_nan_report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("# Risk Report - Trailing NaN\n", encoding="utf-8")
+    report_id = service.storage.register_artifact(
+        report_path,
+        artifact_type="daily_report",
+        details={
+            "portfolio_slug": portfolio_slug,
+            "compare_csv": str(compare_csv.resolve()),
+            "snapshot_source": "historical",
+            "snapshot_id": int(snapshot_id),
+            "selected_model": "hist",
+        },
+    )
+
+    payload = service.latest_report_content(portfolio_slug=portfolio_slug, report_id=report_id)
+    assert payload is not None
+    contract = payload["report_contract"]
+    assert contract["metrics"]["var"]["value"] == pytest.approx(50.0, abs=1e-9)
+    assert contract["metrics"]["es"]["value"] == pytest.approx(70.0, abs=1e-9)
+    assert contract["metrics"]["pnl"]["value"] == pytest.approx(12.0, abs=1e-9)
+    assert str(contract["metrics"]["pnl"]["as_of_utc"]).startswith("2024-03-01T00:00:00")
+
+
+def test_latest_report_contract_prefers_compare_metric_timestamps_over_snapshot(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    portfolio_slug = "fx_eur_20k"
+    portfolio_id = service.runtime._resolve_portfolio_id(portfolio_slug)
+
+    snapshot_id = service.storage.record_snapshot(
+        {
+            "time_utc": "2024-03-10T00:00:00+00:00",
+            "alpha": 0.95,
+            "timeframe": "H1",
+            "days": 60,
+            "window": 20,
+            "var": {"hist": 910.0},
+            "es": {"hist": 1110.0},
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+
+    compare_csv = root / "reports" / "backtests" / "report_compare_metric_timestamps.csv"
+    compare_csv.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "date": ["2024-03-01T00:00:00Z"],
+            "pnl": [12.0],
+            "var_hist": [50.0],
+            "es_hist": [70.0],
+        }
+    ).to_csv(compare_csv, index=False)
+
+    report_path = root / "reports" / "daily" / "compare_metric_timestamps_report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("# Risk Report - Compare metric timestamps\n", encoding="utf-8")
+    report_id = service.storage.register_artifact(
+        report_path,
+        artifact_type="daily_report",
+        details={
+            "portfolio_slug": portfolio_slug,
+            "compare_csv": str(compare_csv.resolve()),
+            "snapshot_source": "historical",
+            "snapshot_id": int(snapshot_id),
+            "selected_model": "hist",
+        },
+    )
+
+    payload = service.latest_report_content(portfolio_slug=portfolio_slug, report_id=report_id)
+    assert payload is not None
+    contract = payload["report_contract"]
+    assert str(contract["snapshot_timestamp_utc"]).startswith("2024-03-10T00:00:00")
+    assert str(contract["metrics"]["var"]["as_of_utc"]).startswith("2024-03-01T00:00:00")
+    assert str(contract["metrics"]["es"]["as_of_utc"]).startswith("2024-03-01T00:00:00")
+
+
+def test_latest_report_contract_selected_model_supports_legacy_best_model_markdown(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    portfolio_slug = "fx_eur_20k"
+    portfolio_id = service.runtime._resolve_portfolio_id(portfolio_slug)
+
+    snapshot_id = service.storage.record_snapshot(
+        {
+            "time_utc": "2024-03-01T00:00:00+00:00",
+            "alpha": 0.95,
+            "timeframe": "H1",
+            "days": 60,
+            "window": 20,
+            "var": {"hist": 50.0, "mc": 75.0},
+            "es": {"hist": 70.0, "mc": 95.0},
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+
+    compare_csv = root / "reports" / "backtests" / "report_compare_legacy_best_model.csv"
+    compare_csv.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "date": ["2024-03-01T00:00:00Z"],
+            "pnl": [9.0],
+            "var_hist": [50.0],
+            "es_hist": [70.0],
+            "var_mc": [75.0],
+            "es_mc": [95.0],
+        }
+    ).to_csv(compare_csv, index=False)
+
+    report_path = root / "reports" / "daily" / "legacy_best_model_report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        "# Risk Report - Legacy model line\n\n- Best model by score: **MC**\n",
+        encoding="utf-8",
+    )
+    report_id = service.storage.register_artifact(
+        report_path,
+        artifact_type="daily_report",
+        details={
+            "portfolio_slug": portfolio_slug,
+            "compare_csv": str(compare_csv.resolve()),
+            "snapshot_source": "historical",
+            "snapshot_id": int(snapshot_id),
+        },
+    )
+
+    payload = service.latest_report_content(portfolio_slug=portfolio_slug, report_id=report_id)
+    assert payload is not None
+    contract = payload["report_contract"]
+    assert contract["selected_model"] == "mc"
+    assert contract["metrics"]["var"]["value"] == pytest.approx(75.0, abs=1e-9)
+    assert contract["metrics"]["es"]["value"] == pytest.approx(95.0, abs=1e-9)
+
+
+def test_report_scoped_validation_comparison_and_backtest_frame_follow_report_artifact(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+
+    service = DeskApiService(root, bootstrap_storage=True)
+    portfolio_slug = "fx_eur_20k"
+    portfolio_id = service.runtime._resolve_portfolio_id(portfolio_slug)
+
+    snapshot_id = service.storage.record_snapshot(
+        {
+            "time_utc": "2024-03-01T00:00:00+00:00",
+            "alpha": 0.95,
+            "timeframe": "H1",
+            "days": 60,
+            "window": 20,
+            "var": {"hist": 50.0, "mc": 80.0},
+            "es": {"hist": 70.0, "mc": 100.0},
+        },
+        portfolio_id=portfolio_id,
+        source="historical",
+    )
+
+    report_compare = root / "reports" / "backtests" / "report_scoped_compare.csv"
+    report_compare.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "date": ["2024-03-01T00:00:00Z"],
+            "pnl": [10.0],
+            "var_hist": [50.0],
+            "es_hist": [70.0],
+        }
+    ).to_csv(report_compare, index=False)
+    report_compare_artifact = service.storage.register_artifact(
+        report_compare,
+        artifact_type="backtest_compare",
+        details={"portfolio_slug": portfolio_slug},
+    )
+
+    latest_compare = root / "reports" / "backtests" / "report_latest_compare.csv"
+    pd.DataFrame(
+        {
+            "date": ["2024-04-01T00:00:00Z"],
+            "pnl": [20.0],
+            "var_mc": [80.0],
+            "es_mc": [100.0],
+        }
+    ).to_csv(latest_compare, index=False)
+    latest_compare_artifact = service.storage.register_artifact(
+        latest_compare,
+        artifact_type="backtest_compare",
+        details={"portfolio_slug": portfolio_slug},
+    )
+    service.storage.record_backtest_run(
+        portfolio_id=portfolio_id,
+        artifact_id=latest_compare_artifact,
+        timeframe="H1",
+        days=60,
+        alpha=0.95,
+        window=20,
+        n_rows=1,
+        summary={"status": "ok"},
+    )
+
+    service.storage.record_validation_run(
+        _build_validation_summary("hist", alternate_model="mc"),
+        portfolio_id=portfolio_id,
+        source_artifact_id=report_compare_artifact,
+    )
+    service.storage.record_validation_run(
+        _build_validation_summary("mc", alternate_model="hist"),
+        portfolio_id=portfolio_id,
+        source_artifact_id=latest_compare_artifact,
+    )
+
+    report_path = root / "reports" / "daily" / "scoped_artifact_report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("# Risk Report - Scoped artifact\n", encoding="utf-8")
+    report_id = service.storage.register_artifact(
+        report_path,
+        artifact_type="daily_report",
+        details={
+            "portfolio_slug": portfolio_slug,
+            "compare_csv": str(report_compare.resolve()),
+            "source_artifact_id": int(report_compare_artifact),
+            "snapshot_source": "historical",
+            "snapshot_id": int(snapshot_id),
+            "selected_model": "hist",
+        },
+    )
+
+    latest_validation = service.latest_validation(portfolio_slug=portfolio_slug)
+    scoped_validation = service.latest_validation(portfolio_slug=portfolio_slug, report_id=report_id)
+    assert latest_validation is not None and scoped_validation is not None
+    assert latest_validation["source_artifact_id"] == int(latest_compare_artifact)
+    assert scoped_validation["source_artifact_id"] == int(report_compare_artifact)
+
+    latest_comparison = service.latest_model_comparison(portfolio_slug=portfolio_slug)
+    scoped_comparison = service.latest_model_comparison(portfolio_slug=portfolio_slug, report_id=report_id)
+    assert latest_comparison is not None and scoped_comparison is not None
+    assert latest_comparison["champion_model"] == "mc"
+    assert scoped_comparison["champion_model"] == "hist"
+
+    latest_frame = service.latest_backtest_frame(portfolio_slug=portfolio_slug)
+    scoped_frame = service.latest_backtest_frame(portfolio_slug=portfolio_slug, report_id=report_id)
+    assert latest_frame is not None and scoped_frame is not None
+    assert latest_frame["compare_csv"] == str(latest_compare.resolve())
+    assert scoped_frame["compare_csv"] == str(report_compare.resolve())
+    assert latest_frame["rows"][-1]["pnl"] == pytest.approx(20.0, abs=1e-9)
+    assert scoped_frame["rows"][-1]["pnl"] == pytest.approx(10.0, abs=1e-9)
+
+
 def test_trade_exposure_validation_boundaries(tmp_path: Path):
     root = tmp_path
     _write_settings(root)
@@ -542,22 +1280,22 @@ def test_trade_exposure_validation_boundaries(tmp_path: Path):
         )
     )
 
-    for invalid in (0.0, 1.0, 999.0, 1001.0):
+    for invalid in (0.0,):
         decision = client.post(
             "/decisions/evaluate",
             json={"symbol": "EURUSD", "exposure_change": invalid, "note": f"decision invalid {invalid}"},
         )
         assert decision.status_code == 400
-        assert "1,000 EUR" in str(decision.json().get("detail"))
+        assert "finite non-zero" in str(decision.json().get("detail"))
 
         preview = client.post(
             "/execution/preview",
             json={"symbol": "EURUSD", "exposure_change": invalid, "note": f"preview invalid {invalid}"},
         )
         assert preview.status_code == 400
-        assert "1,000 EUR" in str(preview.json().get("detail"))
+        assert "finite non-zero" in str(preview.json().get("detail"))
 
-    for valid in (1000.0, -1000.0):
+    for valid in (1.0, 999.0, 1000.0, 1001.0, -1.0, -999.0, -1000.0, -1001.0):
         decision = client.post(
             "/decisions/evaluate",
             json={"symbol": "EURUSD", "exposure_change": valid, "note": f"decision valid {valid}"},
@@ -569,6 +1307,106 @@ def test_trade_exposure_validation_boundaries(tmp_path: Path):
             json={"symbol": "EURUSD", "exposure_change": valid, "note": f"preview valid {valid}"},
         )
         assert preview.status_code == 200
+
+    invalid_action = client.post(
+        "/decisions/evaluate",
+        json={"symbol": "EURUSD", "exposure_change": 1_000.0, "trade_action": "invalid"},
+    )
+    assert invalid_action.status_code == 422
+
+
+def test_trade_close_action_auto_sizes_to_flatten_symbol_exposure(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+
+    client = TestClient(
+        create_app(
+            repo_root=root,
+            mt5_connector_factory=FakeMT5Connector,
+            bootstrap_storage=True,
+        )
+    )
+
+    decision = client.post(
+        "/decisions/evaluate",
+        json={"symbol": "EURUSD", "trade_action": "close", "note": "auto close"},
+    )
+    assert decision.status_code == 200
+    payload = decision.json()
+    assert payload["trade_action"] == "close"
+    assert payload["requested_exposure_change"] < 0.0
+    assert payload["approved_exposure_change"] <= 0.0
+    assert abs(payload["resulting_exposure"]) <= abs(payload["pre_trade"]["symbol_exposure"]) + 1e-9
+    assert isinstance(payload.get("close_recommendation"), dict)
+    assert payload["close_recommendation"]["recommended"] is True
+
+
+def test_trade_close_action_respects_requested_close_size(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+
+    client = TestClient(
+        create_app(
+            repo_root=root,
+            mt5_connector_factory=FakeMT5Connector,
+            bootstrap_storage=True,
+        )
+    )
+
+    requested_close = 2_000.0
+    decision = client.post(
+        "/decisions/evaluate",
+        json={
+            "symbol": "EURUSD",
+            "trade_action": "close",
+            "exposure_change": requested_close,
+            "note": "partial close",
+        },
+    )
+    assert decision.status_code == 200
+    payload = decision.json()
+    assert payload["trade_action"] == "close"
+
+    current_exposure = float(payload["pre_trade"]["symbol_exposure"])
+    expected_close = min(requested_close, abs(current_exposure))
+    requested_change = float(payload["requested_exposure_change"])
+
+    assert abs(requested_change) == pytest.approx(expected_close, abs=1e-9)
+    assert requested_change * current_exposure <= 1e-9
+    assert isinstance(payload.get("close_recommendation"), dict)
+    assert abs(float(payload["close_recommendation"]["target_exposure_change"])) == pytest.approx(
+        expected_close,
+        abs=1e-9,
+    )
+
+
+def test_trade_decision_allows_symbol_outside_bootstrap_watchlist_when_data_exists(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+    _write_processed_returns(root, "NVDA")
+
+    client = TestClient(
+        create_app(
+            repo_root=root,
+            mt5_connector_factory=FakeMT5Connector,
+            bootstrap_storage=True,
+        )
+    )
+
+    decision = client.post(
+        "/decisions/evaluate",
+        json={"symbol": "NVDA", "exposure_change": 1_250.0, "note": "new symbol coverage"},
+    )
+    assert decision.status_code == 200
+    payload = decision.json()
+    assert payload["symbol"] == "NVDA"
+    assert all("Unknown symbol" not in str(reason) for reason in payload.get("reasons") or [])
 
 
 def test_operator_actions_enqueue_and_complete(tmp_path: Path):
@@ -813,19 +1651,31 @@ def test_list_portfolios_prefers_runtime_slug_over_legacy_singleton_row(tmp_path
     assert listed[0]["mode"] == "live_mt5"
 
 
-def test_live_snapshot_fails_when_mt5_returns_empty_holdings(tmp_path: Path):
+def test_live_snapshot_allows_empty_mt5_book_as_no_exposure(tmp_path: Path):
     root = tmp_path
     _write_settings(root, portfolio_mode="live_mt5")
     FakeMT5Connector.reset()
     FakeMT5Connector.positions_lots = {}
 
     client = TestClient(create_app(repo_root=root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True))
+    sync = client.post("/market-data/sync", json={"portfolio_slug": "fx_eur_20k", "days": 60, "timeframes": ["H1"]})
+    assert sync.status_code == 200
     snapshot = client.post("/snapshots/run", json={})
 
-    assert snapshot.status_code == 503
-    detail = str(snapshot.json().get("detail") or "")
-    assert "mt5_live_unavailable" in detail
-    assert "MT5-only" in detail
+    assert snapshot.status_code == 200
+    payload = snapshot.json()
+    assert Path(payload["artifact_path"]).exists()
+    latest_snapshot = client.get("/snapshots/latest", params={"source": "historical"})
+    assert latest_snapshot.status_code == 200
+    assert latest_snapshot.json().get("payload") is not None
+
+
+def test_live_snapshot_treats_no_live_holdings_error_as_flat_book():
+    error = RuntimeError(
+        "MT5 returned no live holdings. Live portfolios are MT5-only and cannot compute risk/capital from configured fallback exposure."
+    )
+    assert PortfolioRiskCalculator._is_empty_live_holdings_error(error) is True
+    assert PortfolioRiskCalculator._is_empty_live_holdings_error(RuntimeError("Network is unreachable")) is False
 
 
 def test_offline_portfolio_live_holdings_still_use_configured_fallback(tmp_path: Path):
@@ -2169,6 +3019,61 @@ def test_market_data_sync_backfills_richer_history_for_var(tmp_path: Path):
     assert details["coverage"]["USDJPY"]["H1"]["stored_bars"] >= 60 * 24
     assert details["tick_archive"]["summary"]["row_count"] >= 1
     assert status["tick_archive"]["row_count"] >= 1
+
+
+def test_sync_market_data_if_stale_refreshes_when_requested_depth_exceeds_stored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5", market_history_days=365)
+    FakeMT5Connector.reset()
+
+    service = DeskApiService(root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True)
+    market_data = service.runtime.market_data
+    portfolio_slug = service.runtime.portfolio["slug"]
+    synced_at = datetime.now(timezone.utc).isoformat()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        market_data,
+        "market_data_status",
+        lambda **_kwargs: {
+            "status": "ok",
+            "coverage_status": "healthy",
+            "stored_history_days": 60,
+        },
+    )
+    monkeypatch.setattr(
+        service.runtime.storage,
+        "latest_market_data_sync",
+        lambda **_kwargs: {"synced_at": synced_at},
+    )
+
+    def _fake_sync(*, portfolio_slug=None, account_id=None, days=None, timeframes=None):
+        captured["portfolio_slug"] = portfolio_slug
+        captured["account_id"] = account_id
+        captured["days"] = days
+        captured["timeframes"] = list(timeframes or [])
+        return {
+            "status": "ok",
+            "coverage_status": "healthy",
+            "stored_history_days": int(days or 0),
+        }
+
+    monkeypatch.setattr(market_data, "sync_market_data", _fake_sync)
+
+    payload = market_data.sync_market_data_if_stale(
+        portfolio_slug=portfolio_slug,
+        days=240,
+        timeframes=["H1"],
+        max_age_seconds=900.0,
+    )
+
+    assert captured["portfolio_slug"] == portfolio_slug
+    assert captured["days"] == 240
+    assert captured["timeframes"] == ["H1"]
+    assert payload["stored_history_days"] == 240
 
 
 class HistoryWindowTrackingConnector(FakeMT5Connector):

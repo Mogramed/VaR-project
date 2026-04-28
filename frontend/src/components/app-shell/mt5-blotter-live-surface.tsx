@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDeskLive } from "@/components/app-shell/desk-live-provider";
 import { DashboardActiveFilters } from "@/components/app-shell/dashboard-active-filters";
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
@@ -118,6 +118,8 @@ export function Mt5BlotterLiveSurface({
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [reconciliationHistory, setReconciliationHistory] = useState<ReconciliationHistoryEntryResponse[]>([]);
   const [reconciliationError, setReconciliationError] = useState<string | null>(null);
+  const reconciliationRequestSequence = useRef(0);
+  const historyRequestSequence = useRef(0);
   const globalSymbolTokens = useMemo(
     () => symbolFilterTokens(prefs.symbolFilter),
     [prefs.symbolFilter],
@@ -180,6 +182,8 @@ export function Mt5BlotterLiveSurface({
   );
 
   const refreshReconciliation = useCallback(async () => {
+    const requestId = reconciliationRequestSequence.current + 1;
+    reconciliationRequestSequence.current = requestId;
     setReconciliationError(null);
     try {
       const [summary, audit, history] = await Promise.all([
@@ -187,10 +191,17 @@ export function Mt5BlotterLiveSurface({
         api.recentAudit(portfolioSlug, 120),
         api.reconciliationHistory({ portfolioSlug, limit: 20 }),
       ]);
+      if (requestId !== reconciliationRequestSequence.current) {
+        return;
+      }
       setReconciliationState(summary);
       setAuditState(audit);
       setReconciliationHistory(history);
+      setReconciliationError(null);
     } catch (error) {
+      if (requestId !== reconciliationRequestSequence.current) {
+        return;
+      }
       setReconciliationError(
         error instanceof Error ? error.message : "Unable to refresh reconciliation diagnostics.",
       );
@@ -223,6 +234,8 @@ export function Mt5BlotterLiveSurface({
 
   useEffect(() => {
     let cancelled = false;
+    const requestId = historyRequestSequence.current + 1;
+    historyRequestSequence.current = requestId;
 
     async function refreshHistory() {
       setHistoryLoading(true);
@@ -239,18 +252,19 @@ export function Mt5BlotterLiveSurface({
           page: historyPage,
           pageSize: historyPageSize,
         });
-        if (cancelled) {
+        if (cancelled || requestId !== historyRequestSequence.current) {
           return;
         }
         setHistoryState(payload);
+        setHistoryError(null);
       } catch (error) {
-        if (cancelled) {
+        if (cancelled || requestId !== historyRequestSequence.current) {
           return;
         }
         setHistoryState(null);
         setHistoryError(error instanceof Error ? error.message : "Unable to load MT5 transaction history.");
       } finally {
-        if (!cancelled) {
+        if (!cancelled && requestId === historyRequestSequence.current) {
           setHistoryLoading(false);
         }
       }
@@ -271,6 +285,12 @@ export function Mt5BlotterLiveSurface({
   const historyTo = historyTotal === 0 ? 0 : Math.min(historyPage * historyPageSize, historyTotal);
   const historyUsesGlobalSingleSymbol = historyFilters.symbol.length === 0 && inferredGlobalHistorySymbol.length > 0;
   const historyNeedsExplicitSymbol = historyFilters.symbol.length === 0 && globalSymbolTokens.length > 1;
+  const showReconciliationError =
+    Boolean(reconciliationError)
+    && reconciliation == null
+    && reconciliationHistory.length === 0
+    && auditState.length === 0;
+  const showHistoryError = Boolean(historyError) && historyRows.length === 0;
   const historyExportUrl = useMemo(
     () =>
       api.mt5TransactionHistoryExportUrl({
@@ -382,7 +402,7 @@ export function Mt5BlotterLiveSurface({
       ) : null}
 
       <div className="space-y-2">
-        {reconciliationError ? (
+        {showReconciliationError ? (
           <FormError message={reconciliationError} />
         ) : null}
         <div className="space-y-2">
@@ -535,7 +555,7 @@ export function Mt5BlotterLiveSurface({
           ) : null}
 
           <div className="mt-3">
-            {historyError ? (
+            {showHistoryError ? (
               <FormError message={historyError} />
             ) : historyRows.length > 0 ? (
               <MT5TransactionHistoryTable rows={historyRows} />
@@ -587,6 +607,18 @@ export function Mt5BlotterLiveSurface({
                     <StatusBadge label={selectedRow.incident_status ?? "new"} tone={selectedRow.incident_status ? "accent" : "neutral"} />
                   </div>
                   <p className="text-[12px] text-[var(--color-text-soft)]">{selectedRow.reason}</p>
+                  <div className="pt-1">
+                    <ButtonLink
+                      href={
+                        accountId
+                          ? `/desk/execution?portfolio=${encodeURIComponent(portfolioSlug)}&account=${encodeURIComponent(accountId)}&symbol=${encodeURIComponent(selectedRow.symbol)}&action=close`
+                          : `/desk/execution?portfolio=${encodeURIComponent(portfolioSlug)}&symbol=${encodeURIComponent(selectedRow.symbol)}&action=close`
+                      }
+                      variant="secondary"
+                    >
+                      Close now on {selectedRow.symbol}
+                    </ButtonLink>
+                  </div>
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-2">

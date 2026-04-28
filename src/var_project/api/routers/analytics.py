@@ -80,10 +80,11 @@ def run_backtest(payload: RunBacktestRequest, service: DeskApiService = Depends(
 def latest_backtest_frame(
     limit: int = Query(default=400, ge=1, le=5000),
     portfolio_slug: str | None = Query(default=None),
+    report_id: int | None = Query(default=None, ge=1),
     service: DeskApiService = Depends(get_service),
 ) -> BacktestFrameResponse:
     try:
-        frame = service.latest_backtest_frame(limit=limit, portfolio_slug=portfolio_slug)
+        frame = service.latest_backtest_frame(limit=limit, portfolio_slug=portfolio_slug, report_id=report_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if frame is None:
@@ -94,9 +95,10 @@ def latest_backtest_frame(
 @router.get("/validations/latest", response_model=ValidationRunSummary)
 def latest_validation(
     portfolio_slug: str | None = Query(default=None),
+    report_id: int | None = Query(default=None, ge=1),
     service: DeskApiService = Depends(get_service),
 ) -> ValidationRunSummary:
-    validation = service.latest_validation(portfolio_slug=portfolio_slug)
+    validation = service.latest_validation(portfolio_slug=portfolio_slug, report_id=report_id)
     if validation is None:
         raise HTTPException(status_code=404, detail="No validation run found.")
     return ValidationRunSummary.model_validate(validation)
@@ -105,9 +107,10 @@ def latest_validation(
 @router.get("/models/compare/latest", response_model=ModelComparisonResponse)
 def latest_model_comparison(
     portfolio_slug: str | None = Query(default=None),
+    report_id: int | None = Query(default=None, ge=1),
     service: DeskApiService = Depends(get_service),
 ) -> ModelComparisonResponse:
-    comparison = service.latest_model_comparison(portfolio_slug=portfolio_slug)
+    comparison = service.latest_model_comparison(portfolio_slug=portfolio_slug, report_id=report_id)
     if comparison is None:
         raise HTTPException(status_code=404, detail="No model comparison available.")
     return ModelComparisonResponse.model_validate(comparison)

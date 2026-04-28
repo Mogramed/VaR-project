@@ -8,6 +8,7 @@ import time
 
 import numpy as np
 import pandas as pd
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 
@@ -22,6 +23,7 @@ from var_project.execution.mt5_bridge import (
     collect_live_state_from_connector,
 )
 from var_project.storage.models import AuditRecord
+from var_project.validation.model_validation import BacktestModelValidation, ValidationSummary
 
 
 def _write_settings(
@@ -840,6 +842,9 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     assert preview_body["guard"]["margin_ok"] is True
     assert preview_body["guard"]["submit_allowed"] is True
     assert preview_body["guard"]["volume_lots"] > 0.0
+    assert "decision_intelligence" in preview_body
+    assert preview_body["decision_intelligence"]["model_version"] == "decision_alpha_v1"
+    assert preview_body["risk_decision"]["decision_intelligence"]["model_version"] == "decision_alpha_v1"
     assert preview_body["microstructure"]["items"]
     assert preview_body["risk_nowcast"]["pre_trade"]["live_1d_99"]["nowcast_var"] is not None
     assert preview_body["estimated_spread_cost"] is not None
@@ -887,6 +892,84 @@ def test_mt5_execution_preview_and_submit_flow(tmp_path: Path):
     latest_capital = client.get("/capital/latest")
     assert latest_capital.status_code == 200
     assert latest_capital.json()["portfolio_slug"] == "fx_eur_20k"
+
+
+def test_mt5_execution_close_action_auto_flattens_exposure(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+    FakeMT5Connector.reset()
+
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True))
+
+    preview = client.post(
+        "/execution/preview",
+        json={"symbol": "EURUSD", "trade_action": "close", "note": "close preview"},
+    )
+    assert preview.status_code == 200
+    preview_body = preview.json()
+    assert preview_body["risk_decision"]["trade_action"] == "close"
+    assert preview_body["risk_decision"]["requested_exposure_change"] < 0.0
+    assert preview_body["guard"]["side"] == "SELL"
+    assert preview_body["guard"]["submit_allowed"] is True
+    assert preview_body["risk_decision"]["close_recommendation"]["recommended"] is True
+
+    submit = client.post(
+        "/execution/submit",
+        json={"symbol": "EURUSD", "trade_action": "close", "note": "close submit"},
+    )
+    assert submit.status_code == 200
+    submit_body = submit.json()
+    assert submit_body["risk_decision"]["trade_action"] == "close"
+    assert submit_body["requested_exposure_change"] < 0.0
+    assert submit_body["status"] in {"EXECUTED", "PLACED"}
+    assert submit_body["executed_exposure_change"] <= 0.0
+
+
+def test_mt5_execution_close_action_respects_requested_size(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+    FakeMT5Connector.reset()
+
+    client = TestClient(create_app(repo_root=root, mt5_connector_factory=FakeMT5Connector, bootstrap_storage=True))
+
+    requested_close = 2_000.0
+    preview = client.post(
+        "/execution/preview",
+        json={
+            "symbol": "EURUSD",
+            "trade_action": "close",
+            "exposure_change": requested_close,
+            "note": "partial close preview",
+        },
+    )
+    assert preview.status_code == 200
+    preview_body = preview.json()
+    current_exposure = float(preview_body["risk_decision"]["pre_trade"]["symbol_exposure"])
+    expected_close = min(requested_close, abs(current_exposure))
+    preview_requested = float(preview_body["risk_decision"]["requested_exposure_change"])
+
+    assert abs(preview_requested) == pytest.approx(expected_close, abs=1e-9)
+    assert preview_requested * current_exposure <= 1e-9
+    assert preview_body["guard"]["submit_allowed"] is True
+    assert abs(float(preview_body["guard"]["requested_exposure_change"])) == pytest.approx(expected_close, abs=1e-9)
+
+    submit = client.post(
+        "/execution/submit",
+        json={
+            "symbol": "EURUSD",
+            "trade_action": "close",
+            "exposure_change": requested_close,
+            "note": "partial close submit",
+        },
+    )
+    assert submit.status_code == 200
+    submit_body = submit.json()
+    assert submit_body["status"] in {"EXECUTED", "PLACED"}
+    assert abs(float(submit_body["requested_exposure_change"])) == pytest.approx(expected_close, abs=1e-9)
 
 
 def test_recent_execution_activity_filters_by_account_id(tmp_path: Path):
@@ -1890,3 +1973,214 @@ def test_mt5_submit_does_not_double_count_position_scoped_history(tmp_path: Path
     assert payload["fill_ratio"] == 1.0
     assert len(payload["fills"]) == 1
     assert payload["reconciliation_status"] == "match"
+
+
+def test_validation_governance_alerts_aggregate_es_signals_and_mute_thin_samples(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, portfolio_mode="live_mt5")
+    service = DeskApiService(root, bootstrap_storage=True)
+    portfolio_id = service.runtime.portfolio_ids["fx_eur_20k"]
+
+    summary = ValidationSummary(
+        alpha=0.95,
+        expected_rate=0.05,
+        model_results={
+            "hist": BacktestModelValidation(
+                model="hist",
+                n=250,
+                exceptions=14,
+                expected_rate=0.05,
+                actual_rate=14 / 250,
+                lr_uc=0.0,
+                p_uc=0.40,
+                lr_ind=0.0,
+                p_ind=0.40,
+                lr_cc=0.0,
+                p_cc=0.40,
+                exceptions_last_250=14,
+                traffic_light=None,
+                score=60.0,
+                es_tail_observations=11,
+                es_shortfall_ratio=1.30,
+                es_breach_rate=0.64,
+            ),
+            "param": BacktestModelValidation(
+                model="param",
+                n=250,
+                exceptions=12,
+                expected_rate=0.05,
+                actual_rate=12 / 250,
+                lr_uc=0.0,
+                p_uc=0.45,
+                lr_ind=0.0,
+                p_ind=0.45,
+                lr_cc=0.0,
+                p_cc=0.45,
+                exceptions_last_250=12,
+                traffic_light=None,
+                score=63.0,
+                es_tail_observations=9,
+                es_shortfall_ratio=1.18,
+                es_breach_rate=0.41,
+            ),
+            "ewma": BacktestModelValidation(
+                model="ewma",
+                n=250,
+                exceptions=10,
+                expected_rate=0.05,
+                actual_rate=10 / 250,
+                lr_uc=0.0,
+                p_uc=0.50,
+                lr_ind=0.0,
+                p_ind=0.50,
+                lr_cc=0.0,
+                p_cc=0.50,
+                exceptions_last_250=10,
+                traffic_light=None,
+                score=70.0,
+                es_tail_observations=24,
+                es_shortfall_ratio=1.27,
+                es_breach_rate=0.53,
+            ),
+            "mc": BacktestModelValidation(
+                model="mc",
+                n=250,
+                exceptions=9,
+                expected_rate=0.05,
+                actual_rate=9 / 250,
+                lr_uc=0.0,
+                p_uc=0.52,
+                lr_ind=0.0,
+                p_ind=0.52,
+                lr_cc=0.0,
+                p_cc=0.52,
+                exceptions_last_250=9,
+                traffic_light=None,
+                score=74.0,
+                es_tail_observations=22,
+                es_shortfall_ratio=1.16,
+                es_breach_rate=0.38,
+            ),
+        },
+        best_model="mc",
+    )
+    service.runtime.storage.record_validation_run(
+        summary,
+        portfolio_id=portfolio_id,
+        source_artifact_id=None,
+    )
+
+    alerts = service.mt5._validation_governance_alerts(portfolio_slug="fx_eur_20k")
+    codes = [str(item.get("code") or "") for item in alerts]
+
+    assert codes.count("VALIDATION_ES_SHORTFALL_BREACH") == 1
+    assert codes.count("VALIDATION_ES_BREACH_RATE_BREACH") == 1
+    assert "VALIDATION_ES_SHORTFALL_WARN" not in codes
+    assert "VALIDATION_ES_BREACH_RATE_WARN" not in codes
+    assert "VALIDATION_ES_SAMPLE_THIN" in codes
+
+    shortfall_alert = next(item for item in alerts if str(item.get("code") or "") == "VALIDATION_ES_SHORTFALL_BREACH")
+    breach_rate_alert = next(item for item in alerts if str(item.get("code") or "") == "VALIDATION_ES_BREACH_RATE_BREACH")
+    thin_alert = next(item for item in alerts if str(item.get("code") or "") == "VALIDATION_ES_SAMPLE_THIN")
+
+    assert int(dict(shortfall_alert.get("context") or {}).get("model_count") or 0) == 2
+    assert int(dict(breach_rate_alert.get("context") or {}).get("model_count") or 0) == 2
+    assert set(dict(shortfall_alert.get("context") or {}).get("models") or []) == {"ewma", "mc"}
+    assert set(dict(breach_rate_alert.get("context") or {}).get("models") or []) == {"ewma", "mc"}
+    assert int(dict(thin_alert.get("context") or {}).get("suppressed_signal_count") or 0) >= 2
+
+
+def test_decision_alpha_api_contract_on_evaluate_replay_and_forecast(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root)
+    _write_processed_returns(root, "EURUSD")
+    _write_processed_returns(root, "USDJPY")
+    FakeMT5Connector.reset()
+
+    client = TestClient(
+        create_app(
+            repo_root=root,
+            mt5_connector_factory=FakeMT5Connector,
+            bootstrap_storage=True,
+        )
+    )
+
+    evaluate = client.post(
+        "/decisions/evaluate",
+        json={"symbol": "EURUSD", "exposure_change": 1_000.0, "note": "alpha evaluate"},
+    )
+    assert evaluate.status_code == 200
+    evaluate_body = evaluate.json()
+    intelligence = dict(evaluate_body.get("decision_intelligence") or {})
+    assert intelligence.get("model_version") == "decision_alpha_v1"
+    assert intelligence.get("signal") in {"BUY", "SELL", "HOLD"}
+    assert -100.0 <= float(intelligence.get("score") or 0.0) <= 100.0
+    assert 0.0 <= float(intelligence.get("confidence") or 0.0) <= 1.0
+    assert 0.0 <= float(intelligence.get("size_multiplier") or 0.0) <= 1.0
+    assert isinstance(intelligence.get("top_drivers"), list)
+
+    submit = client.post(
+        "/execution/submit",
+        json={"symbol": "EURUSD", "exposure_change": 1_000.0, "note": "alpha replay seed"},
+    )
+    assert submit.status_code == 200
+
+    replay = client.get(
+        "/decisions/replay",
+        params={"portfolio_slug": "fx_eur_20k", "limit": 50, "lookback_days": 90},
+    )
+    assert replay.status_code == 200
+    replay_body = replay.json()
+    assert replay_body["model_version"] == "decision_alpha_v1"
+    assert replay_body["sample_size"] >= 1
+    assert 0.0 <= float(replay_body["hit_rate"]) <= 1.0
+    assert isinstance(replay_body["predicted_vs_realized"], list)
+    assert len(replay_body["predicted_vs_realized"]) == replay_body["sample_size"]
+    assert replay_body["lookback_days"] == 90
+    assert isinstance(replay_body.get("model_runtime"), dict)
+    first_point = replay_body["predicted_vs_realized"][0]
+    assert "predicted_score" in first_point
+    assert "realized_pnl" in first_point
+    assert "cum_pnl" in first_point
+
+    forecast = client.get(
+        "/decisions/forecast",
+        params={"symbol": "EURUSD", "portfolio_slug": "fx_eur_20k", "horizon_days": 5},
+    )
+    assert forecast.status_code == 200
+    forecast_body = forecast.json()
+    assert forecast_body["model_version"] == "decision_alpha_v1"
+    assert forecast_body["symbol"] == "EURUSD"
+    assert forecast_body["horizon_days"] == 5
+    assert isinstance(forecast_body.get("model_runtime"), dict)
+    assert len(forecast_body["scenarios"]) == 3
+    scenario_names = {item["name"] for item in forecast_body["scenarios"]}
+    assert scenario_names == {"bear", "base", "bull"}
+
+    trajectory = client.get(
+        "/decisions/trajectory",
+        params={"symbol": "EURUSD", "portfolio_slug": "fx_eur_20k", "lookback_days": 90},
+    )
+    assert trajectory.status_code == 200
+    trajectory_body = trajectory.json()
+    assert trajectory_body["symbol"] == "EURUSD"
+    assert trajectory_body["lookback_days"] == 90
+    assert trajectory_body["sample_size"] >= 0
+    assert 0.0 <= float(trajectory_body["hit_rate"]) <= 1.0
+    assert isinstance(trajectory_body["predicted_vs_actual"], list)
+    if trajectory_body["sample_size"] > 0:
+        assert "predicted_price" in trajectory_body["predicted_vs_actual"][0]
+        assert "actual_price" in trajectory_body["predicted_vs_actual"][0]
+
+    portfolio_forecast = client.get(
+        "/decisions/portfolio-forecast",
+        params={"portfolio_slug": "fx_eur_20k", "horizon_days": 150},
+    )
+    assert portfolio_forecast.status_code == 200
+    portfolio_forecast_body = portfolio_forecast.json()
+    assert portfolio_forecast_body["model_version"] == "decision_alpha_v1"
+    assert portfolio_forecast_body["horizon_days"] == 150
+    assert portfolio_forecast_body["symbol_count"] >= 1
+    assert isinstance(portfolio_forecast_body["symbols"], list)
+    assert isinstance(portfolio_forecast_body["pnl_scenarios"], list)
+    assert len(portfolio_forecast_body["pnl_scenarios"]) == 3

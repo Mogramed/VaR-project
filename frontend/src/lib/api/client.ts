@@ -5,6 +5,10 @@ import type {
   BacktestRunResponse,
   CapitalRebalanceRequest,
   CapitalUsageSnapshotResponse,
+  DecisionForecastResponse,
+  DecisionBacktestTrajectoryResponse,
+  DecisionPortfolioForecastResponse,
+  DecisionReplayResponse,
   DealHistoryEntryResponse,
   DeskDefinitionResponse,
   DeskSnapshotResponse,
@@ -78,6 +82,7 @@ const NETWORK_TIMEOUT_CODES = new Set([
 ]);
 const NETWORK_RETRY_CODES = new Set([
   ...NETWORK_TIMEOUT_CODES,
+  "UND_ERR_SOCKET",
   "ECONNRESET",
   "ECONNREFUSED",
   "EPIPE",
@@ -273,6 +278,7 @@ export const __apiClientTestables = {
   resolveRequestTimeoutMs,
   resolveTimeoutHint,
   resolveNetworkFailureHint,
+  buildBrowserHref,
 };
 
 function ensureSlash(value: string) {
@@ -287,32 +293,41 @@ function getServerApiBaseUrl() {
   );
 }
 
+function appendQueryParams(target: URL, query?: Query) {
+  if (!query) {
+    return target;
+  }
+  for (const [key, value] of Object.entries(query)) {
+    if (value == null || value === "") {
+      continue;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item == null || item === "") {
+          continue;
+        }
+        target.searchParams.append(key, String(item));
+      }
+      continue;
+    }
+    target.searchParams.set(key, String(value));
+  }
+  return target;
+}
+
 function buildUrl(path: string, query?: Query) {
   const cleanPath = path.startsWith("/") ? path.slice(1) : path;
   const base =
     typeof window === "undefined"
       ? new URL(cleanPath, getServerApiBaseUrl())
       : new URL(`/api/proxy/${cleanPath}`, window.location.origin);
+  return appendQueryParams(base, query).toString();
+}
 
-  if (query) {
-    for (const [key, value] of Object.entries(query)) {
-      if (value == null || value === "") {
-        continue;
-      }
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          if (item == null || item === "") {
-            continue;
-          }
-          base.searchParams.append(key, String(item));
-        }
-        continue;
-      }
-      base.searchParams.set(key, String(value));
-    }
-  }
-
-  return base.toString();
+function buildBrowserHref(path: string, query?: Query) {
+  const cleanPath = path.startsWith("/") ? path.slice(1) : path;
+  const base = appendQueryParams(new URL(`/api/proxy/${cleanPath}`, "http://local.invalid"), query);
+  return `${base.pathname}${base.search}`;
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -371,12 +386,20 @@ async function request<T>(
       : 0;
   const timeoutMs = resolveRequestTimeoutMs(method, normalizedPath, options.timeoutMs);
   const maxAttempts =
-    isOperatorRunStatusRequest ? 3 : (method === "GET" || retryableUnsafeMethod ? 2 : 1);
+    isOperatorRunStatusRequest
+      ? 3
+      : method === "GET"
+        ? (isServer ? 5 : 3)
+        : (retryableUnsafeMethod ? 2 : 1);
   const timeoutHint = resolveTimeoutHint(normalizedPath);
   const networkFailureHint = resolveNetworkFailureHint(normalizedPath);
 
-  const nextRetryDelayMs = (attempt: number) =>
-    Math.min(1_200, Math.max(120, 180 * (2 ** Math.max(attempt - 1, 0))));
+  const nextRetryDelayMs = (attempt: number) => {
+    const isServerGet = isServer && method === "GET";
+    const baseDelay = isServerGet ? 500 : 180;
+    const maxDelay = isServerGet ? 4_000 : 1_200;
+    return Math.min(maxDelay, Math.max(baseDelay, baseDelay * (2 ** Math.max(attempt - 1, 0))));
+  };
 
   const execute = async (): Promise<T> => {
     let response: Response | null = null;
@@ -633,7 +656,7 @@ export const api = {
     sort?: "time_desc" | "time_asc";
     maxRows?: number;
   }) =>
-    buildUrl("/mt5/history/transactions/export", {
+    buildBrowserHref("/mt5/history/transactions/export", {
       portfolio_slug: options?.portfolioSlug,
       account_id: options?.accountId,
       date_from: options?.dateFrom,
@@ -739,17 +762,17 @@ export const api = {
     request<CapitalUsageSnapshotResponse>(`/portfolios/${portfolioSlug}/capital`, {
       query: { source: source ?? "auto" },
     }),
-  latestValidation: (portfolioSlug?: string) =>
+  latestValidation: (portfolioSlug?: string, reportId?: number) =>
     request<ValidationRunSummary>("/validations/latest", {
-      query: { portfolio_slug: portfolioSlug },
+      query: { portfolio_slug: portfolioSlug, report_id: reportId },
     }),
-  latestModelComparison: (portfolioSlug?: string) =>
+  latestModelComparison: (portfolioSlug?: string, reportId?: number) =>
     request<ModelComparisonResponse>("/models/compare/latest", {
-      query: { portfolio_slug: portfolioSlug },
+      query: { portfolio_slug: portfolioSlug, report_id: reportId },
     }),
-  latestBacktestFrame: (portfolioSlug?: string, limit = 320) =>
+  latestBacktestFrame: (portfolioSlug?: string, limit = 320, reportId?: number) =>
     request<BacktestFrameResponse>("/backtests/frame/latest", {
-      query: { portfolio_slug: portfolioSlug, limit },
+      query: { portfolio_slug: portfolioSlug, limit, report_id: reportId },
     }),
   recentAlerts: (limit = 20) =>
     request<AlertSummary[]>("/alerts", { query: { limit } }),
@@ -770,6 +793,53 @@ export const api = {
   recentDecisions: (portfolioSlug?: string, limit = 20, accountId?: string) =>
     request<RiskDecisionResponse[]>("/decisions/recent", {
       query: { portfolio_slug: portfolioSlug, limit, account_id: accountId },
+    }),
+  decisionAlphaReplay: (portfolioSlug?: string, limit = 200) =>
+    request<DecisionReplayResponse>("/decisions/replay", {
+      query: { portfolio_slug: portfolioSlug, limit },
+    }),
+  decisionAlphaReplayWindow: (
+    portfolioSlug?: string,
+    options?: { limit?: number; lookbackDays?: number },
+  ) =>
+    request<DecisionReplayResponse>("/decisions/replay", {
+      query: {
+        portfolio_slug: portfolioSlug,
+        limit: options?.limit ?? 200,
+        lookback_days: options?.lookbackDays,
+      },
+    }),
+  decisionAlphaForecast: (
+    symbol: string,
+    options?: { portfolioSlug?: string; horizonDays?: number },
+  ) =>
+    request<DecisionForecastResponse>("/decisions/forecast", {
+      query: {
+        symbol,
+        portfolio_slug: options?.portfolioSlug,
+        horizon_days: options?.horizonDays,
+      },
+    }),
+  decisionAlphaTrajectory: (
+    symbol: string,
+    options?: { portfolioSlug?: string; lookbackDays?: number },
+  ) =>
+    request<DecisionBacktestTrajectoryResponse>("/decisions/trajectory", {
+      query: {
+        symbol,
+        portfolio_slug: options?.portfolioSlug,
+        lookback_days: options?.lookbackDays,
+      },
+    }),
+  decisionAlphaPortfolioForecast: (
+    options?: { portfolioSlug?: string; horizonDays?: number; symbols?: string[] },
+  ) =>
+    request<DecisionPortfolioForecastResponse>("/decisions/portfolio-forecast", {
+      query: {
+        portfolio_slug: options?.portfolioSlug,
+        horizon_days: options?.horizonDays,
+        symbols: options?.symbols,
+      },
     }),
   evaluateDecision: (payload: TradeProposalRequest) =>
     request<RiskDecisionResponse>("/decisions/evaluate", {

@@ -21,6 +21,8 @@ from var_project.execution.mt5_bridge import build_empty_live_state, collect_liv
 from var_project.execution.mt5_live import ExecutionPreview, ExecutionResult, MT5TerminalStatus
 from var_project.validation.model_validation import ValidationSummary
 
+LIVE_VALIDATION_ES_MIN_TAIL_OBSERVATIONS = 20
+
 
 class DeskMt5Service:
     _shared_startup_import_done: set[tuple[str, str]] = set()
@@ -69,6 +71,49 @@ class DeskMt5Service:
         if normalized == "inspector":
             return min(max(configured * 0.20, 0.15), 0.50)
         return min(max(configured * 0.35, 0.20), 1.00)
+
+    def _max_live_state_response_cache_entries(self) -> int:
+        configured = self._coerce_int(getattr(self.runtime.mt5_config, "live_state_cache_entries", None))
+        if configured is None:
+            return 18
+        return max(min(int(configured), 96), 6)
+
+    def _store_live_state_response_payload(
+        self,
+        *,
+        portfolio_slug: str,
+        detail_level: Literal["summary", "full", "inspector"],
+        account_id: str,
+        payload: Mapping[str, Any],
+        now_monotonic: float,
+    ) -> None:
+        cache_key = self._live_state_response_cache_key(
+            portfolio_slug=portfolio_slug,
+            detail_level=detail_level,
+            account_id=account_id,
+        )
+        self._shared_live_state_response_cache[cache_key] = {
+            "expires_at": now_monotonic + self._detail_cache_ttl_seconds(detail_level),
+            "payload": dict(payload),
+        }
+
+    def _prune_live_state_response_cache(self) -> None:
+        now_monotonic = time.monotonic()
+        for key, entry in list(self._shared_live_state_response_cache.items()):
+            if float(dict(entry).get("expires_at") or 0.0) <= now_monotonic:
+                del self._shared_live_state_response_cache[key]
+
+        max_entries = self._max_live_state_response_cache_entries()
+        overflow = len(self._shared_live_state_response_cache) - max_entries
+        if overflow <= 0:
+            return
+
+        oldest_first = sorted(
+            self._shared_live_state_response_cache.items(),
+            key=lambda item: float(dict(item[1]).get("expires_at") or 0.0),
+        )
+        for key, _ in oldest_first[:overflow]:
+            self._shared_live_state_response_cache.pop(key, None)
 
     def _analytics_fallback_ttl_seconds(self) -> float:
         configured = max(float(self.runtime.mt5_config.live_history_poll_seconds), 5.0)
@@ -591,6 +636,7 @@ class DeskMt5Service:
         portfolio: Mapping[str, Any],
         raw_state: Mapping[str, Any],
     ) -> dict[str, Any]:
+        effective_limits_cfg = self.runtime.effective_limits_config(portfolio)
         snapshot_timestamp = str(
             raw_state.get("market_reference_timestamp")
             or raw_state.get("generated_at")
@@ -600,7 +646,7 @@ class DeskMt5Service:
         preferred_model = self.runtime._preferred_model(portfolio["slug"]) or reference_model
         model_names = sorted(
             {
-                *dict(self.runtime.limits_config.get("model_limits_eur") or {}).keys(),
+                *dict(effective_limits_cfg.get("model_limits_eur") or {}).keys(),
                 reference_model,
                 preferred_model,
             }
@@ -644,7 +690,7 @@ class DeskMt5Service:
                 "total_budget_eur": total_budget,
                 "reserve_ratio": float(
                     budget_template.get("reserve_ratio")
-                    or dict(self.runtime.limits_config.get("capital_management") or {}).get("reserve_ratio")
+                    or dict(effective_limits_cfg.get("capital_management") or {}).get("reserve_ratio")
                     or 0.0
                 ),
                 "reserved_capital_eur": 0.0,
@@ -744,6 +790,7 @@ class DeskMt5Service:
         account_id: str | None = None,
     ) -> dict[str, Any] | None:
         portfolio = self._live_portfolio_scope(raw_state, portfolio_slug=portfolio_slug)
+        effective_limits_cfg = self.runtime.effective_limits_config(portfolio)
         if not list(raw_state.get("holdings") or []):
             return self._empty_book_live_analytics(portfolio=portfolio, raw_state=raw_state)
         bundle = self.runtime._compute_portfolio_state_for_holdings(
@@ -770,7 +817,10 @@ class DeskMt5Service:
         capital_usage = dict(bundle["capital"])
         capital_usage["snapshot_source"] = "mt5_live_bridge"
         capital_usage["snapshot_timestamp"] = snapshot_timestamp
-        validation_alerts = self._validation_governance_alerts(portfolio_slug=portfolio["slug"])
+        # Validation diagnostics are rendered in dedicated analytics screens
+        # (Models/Reports). Keeping them in live operator alerts creates
+        # persistent incident noise without adding execution signal.
+        validation_alerts: list[dict[str, Any]] = []
         return {
             "bundle": bundle,
             "risk_summary": {
@@ -807,7 +857,7 @@ class DeskMt5Service:
                             "es": bundle["snapshot"].es_dict(),
                             "model_diagnostics": dict(bundle["risk_surface"].get("model_diagnostics") or {}),
                         },
-                        self.runtime.limits_config,
+                        effective_limits_cfg,
                     )
                 ],
                 *validation_alerts,
@@ -833,6 +883,19 @@ class DeskMt5Service:
             "VALIDATION_SURFACE_SAMPLE_THIN",
             "VALIDATION_HORIZON_SAMPLE_THIN",
         }
+        es_signal_codes = {
+            "VALIDATION_ES_SHORTFALL_BREACH",
+            "VALIDATION_ES_SHORTFALL_WARN",
+            "VALIDATION_ES_BREACH_RATE_BREACH",
+            "VALIDATION_ES_BREACH_RATE_WARN",
+        }
+        es_grouped_alerts: dict[str, list[dict[str, Any]]] = {
+            "shortfall": [],
+            "breach_rate": [],
+        }
+        suppressed_es_sample_thin_count = 0
+        suppressed_es_sample_thin_models: set[str] = set()
+        suppressed_es_sample_thin_max_tail_observations = 0
         for alert in alerts_from_validation_summary(summary):
             code = str(alert.code or "")
             if not code.startswith("VALIDATION_"):
@@ -848,7 +911,99 @@ class DeskMt5Service:
             if validation_run_id is not None:
                 context.setdefault("validation_run_id", validation_run_id)
             row["context"] = context
+            if code in es_signal_codes:
+                tail_observations = max(0, int(context.get("es_tail_observations") or 0))
+                if tail_observations < int(LIVE_VALIDATION_ES_MIN_TAIL_OBSERVATIONS):
+                    suppressed_es_sample_thin_count += 1
+                    suppressed_es_sample_thin_max_tail_observations = max(
+                        suppressed_es_sample_thin_max_tail_observations,
+                        tail_observations,
+                    )
+                    model_name = str(context.get("model") or "").strip().lower()
+                    if model_name:
+                        suppressed_es_sample_thin_models.add(model_name)
+                    continue
+                metric = "shortfall" if "SHORTFALL" in code else "breach_rate"
+                es_grouped_alerts[metric].append(row)
+                continue
             payload.append(row)
+
+        for metric in ("shortfall", "breach_rate"):
+            grouped = list(es_grouped_alerts.get(metric) or [])
+            if not grouped:
+                continue
+            grouped.sort(
+                key=lambda item: (
+                    0 if str(item.get("severity") or "").upper() == "BREACH" else 1,
+                    -float(dict(item.get("context") or {}).get("es_shortfall_ratio") or 0.0)
+                    if metric == "shortfall"
+                    else -float(dict(item.get("context") or {}).get("es_breach_rate") or 0.0),
+                    str(dict(item.get("context") or {}).get("model") or ""),
+                )
+            )
+            primary = dict(grouped[0])
+            primary_context = dict(primary.get("context") or {})
+            models = sorted(
+                {
+                    str(dict(item.get("context") or {}).get("model") or "").strip().lower()
+                    for item in grouped
+                    if str(dict(item.get("context") or {}).get("model") or "").strip()
+                }
+            )
+            tail_observations = [
+                max(0, int(dict(item.get("context") or {}).get("es_tail_observations") or 0))
+                for item in grouped
+            ]
+            if metric == "shortfall":
+                metric_values = [
+                    float(dict(item.get("context") or {}).get("es_shortfall_ratio") or 0.0)
+                    for item in grouped
+                ]
+                peak_value = max(metric_values, default=float(primary_context.get("es_shortfall_ratio") or 0.0))
+                primary_context["es_shortfall_ratio"] = peak_value
+                primary["message"] = (
+                    f"ES shortfall ratio alert on {len(grouped)} model(s) "
+                    f"(max {peak_value:.3f})."
+                )
+            else:
+                metric_values = [
+                    float(dict(item.get("context") or {}).get("es_breach_rate") or 0.0)
+                    for item in grouped
+                ]
+                peak_value = max(metric_values, default=float(primary_context.get("es_breach_rate") or 0.0))
+                primary_context["es_breach_rate"] = peak_value
+                primary["message"] = (
+                    f"ES breach-rate alert on {len(grouped)} model(s) "
+                    f"(max {peak_value:.2%})."
+                )
+            primary_context["model_count"] = len(grouped)
+            primary_context["models"] = models
+            if tail_observations:
+                primary_context["es_tail_observations"] = max(tail_observations)
+                primary_context["es_tail_observations_min"] = min(tail_observations)
+            primary["context"] = primary_context
+            payload.append(primary)
+
+        if suppressed_es_sample_thin_count > 0:
+            payload.append(
+                {
+                    "source": "validation_es",
+                    "severity": "INFO",
+                    "code": "VALIDATION_ES_SAMPLE_THIN",
+                    "message": (
+                        f"ES validation alerts were muted on {suppressed_es_sample_thin_count} model signal(s) "
+                        f"because tail sample depth is below {int(LIVE_VALIDATION_ES_MIN_TAIL_OBSERVATIONS)}."
+                    ),
+                    "context": {
+                        "portfolio_slug": portfolio_slug,
+                        "validation_run_id": validation_run_id,
+                        "suppressed_signal_count": suppressed_es_sample_thin_count,
+                        "suppressed_models": sorted(suppressed_es_sample_thin_models),
+                        "max_tail_observations": suppressed_es_sample_thin_max_tail_observations,
+                        "min_tail_observations_required": int(LIVE_VALIDATION_ES_MIN_TAIL_OBSERVATIONS),
+                    },
+                }
+            )
         return payload
 
     def _dedupe_alerts(self, alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2405,45 +2560,29 @@ class DeskMt5Service:
                     payload=enriched,
                     account_id=resolved_account_id,
                 )
-            payload_summary = self._apply_live_detail_level(enriched, detail_level="summary")
-            payload_full = self._apply_live_detail_level(enriched, detail_level="full")
-            payload_inspector = self._apply_live_detail_level(enriched, detail_level="inspector")
             now_monotonic = time.monotonic()
-            self._shared_live_state_response_cache[
-                self._live_state_response_cache_key(
-                    portfolio_slug=portfolio["slug"],
-                    detail_level="summary",
-                    account_id=resolved_account_id,
-                )
-            ] = {
-                "expires_at": now_monotonic + self._detail_cache_ttl_seconds("summary"),
-                "payload": deepcopy(payload_summary),
-            }
-            self._shared_live_state_response_cache[
-                self._live_state_response_cache_key(
-                    portfolio_slug=portfolio["slug"],
-                    detail_level="full",
-                    account_id=resolved_account_id,
-                )
-            ] = {
-                "expires_at": now_monotonic + self._detail_cache_ttl_seconds("full"),
-                "payload": deepcopy(payload_full),
-            }
-            self._shared_live_state_response_cache[
-                self._live_state_response_cache_key(
-                    portfolio_slug=portfolio["slug"],
-                    detail_level="inspector",
-                    account_id=resolved_account_id,
-                )
-            ] = {
-                "expires_at": now_monotonic + self._detail_cache_ttl_seconds("inspector"),
-                "payload": deepcopy(payload_inspector),
-            }
+            payload_summary = self._apply_live_detail_level(enriched, detail_level="summary")
+            self._store_live_state_response_payload(
+                portfolio_slug=portfolio["slug"],
+                detail_level="summary",
+                account_id=resolved_account_id,
+                payload=payload_summary,
+                now_monotonic=now_monotonic,
+            )
             if detail_level == "summary":
+                self._prune_live_state_response_cache()
                 return payload_summary
-            if detail_level == "inspector":
-                return payload_inspector
-            return payload_full
+
+            requested_payload = self._apply_live_detail_level(enriched, detail_level=detail_level)
+            self._store_live_state_response_payload(
+                portfolio_slug=portfolio["slug"],
+                detail_level=detail_level,
+                account_id=resolved_account_id,
+                payload=requested_payload,
+                now_monotonic=now_monotonic,
+            )
+            self._prune_live_state_response_cache()
+            return requested_payload
 
     def live_events(
         self,
@@ -2782,6 +2921,7 @@ class DeskMt5Service:
         symbol: str,
         exposure_change: float | None = None,
         delta_position_eur: float | None = None,
+        trade_action: str | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
         account_id: str | None = None,
@@ -2790,9 +2930,11 @@ class DeskMt5Service:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         portfolio_id = self.runtime._resolve_portfolio_id(portfolio["slug"])
         resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
-        normalized_exposure_change = (
-            float(exposure_change) if exposure_change is not None else float(delta_position_eur or 0.0)
-        )
+        normalized_exposure_change = None
+        if exposure_change is not None or delta_position_eur is not None:
+            normalized_exposure_change = (
+                float(exposure_change) if exposure_change is not None else float(delta_position_eur or 0.0)
+            )
         with self.runtime._mt5_gateway(account_id=resolved_account_id) as live:
             terminal_status = live.terminal_status()
             account = live.account_snapshot()
@@ -2803,6 +2945,7 @@ class DeskMt5Service:
                 bundle=bundle,
                 symbol=symbol,
                 exposure_change=normalized_exposure_change,
+                trade_action=trade_action,
                 note=note,
                 account_id=resolved_account_id,
                 persist=False,
@@ -2902,6 +3045,14 @@ class DeskMt5Service:
                         expected_slippage_points = float(live_spread) * multiplier
                 except (TypeError, ValueError, ZeroDivisionError):
                     expected_slippage_points = None
+            decision = self.runtime.decisions.attach_decision_intelligence(
+                decision_payload=decision,
+                symbol=str(symbol).upper(),
+                bundle=bundle,
+                microstructure=microstructure,
+                spread_cost=estimated_spread_cost,
+                slippage_points=expected_slippage_points,
+            )
             preview_timestamp = datetime.now(timezone.utc).isoformat()
             preview = ExecutionPreview(
                 time_utc=preview_timestamp,
@@ -2912,6 +3063,7 @@ class DeskMt5Service:
                 live_positions=live_positions,
                 pending_orders=pending_orders,
                 risk_decision=decision,
+                decision_intelligence=dict(decision.get("decision_intelligence") or {}),
                 guard=guard,
                 order_request=order_request,
                 order_check=order_check,
@@ -2929,7 +3081,7 @@ class DeskMt5Service:
             ).to_dict()
             preview["account_id"] = resolved_account_id
             preview_result_payload = self._preview_execution_result_payload(
-                requested_exposure_change=normalized_exposure_change,
+                requested_exposure_change=float(decision.get("requested_exposure_change", 0.0)),
                 portfolio_slug=portfolio["slug"],
                 account_id=resolved_account_id,
                 symbol=str(symbol).upper(),
@@ -3182,6 +3334,7 @@ class DeskMt5Service:
         symbol: str,
         exposure_change: float | None = None,
         delta_position_eur: float | None = None,
+        trade_action: str | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
         account_id: str | None = None,
@@ -3190,9 +3343,11 @@ class DeskMt5Service:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         portfolio_id = self.runtime._resolve_portfolio_id(portfolio["slug"])
         resolved_account_id = self.runtime.resolve_mt5_account_id(account_id)
-        normalized_exposure_change = (
-            float(exposure_change) if exposure_change is not None else float(delta_position_eur or 0.0)
-        )
+        normalized_exposure_change = None
+        if exposure_change is not None or delta_position_eur is not None:
+            normalized_exposure_change = (
+                float(exposure_change) if exposure_change is not None else float(delta_position_eur or 0.0)
+            )
         with self.runtime._mt5_gateway(account_id=resolved_account_id) as live:
             terminal_status = live.terminal_status()
             account_before = live.account_snapshot()
@@ -3201,6 +3356,7 @@ class DeskMt5Service:
                 bundle=bundle,
                 symbol=symbol,
                 exposure_change=normalized_exposure_change,
+                trade_action=trade_action,
                 note=note,
                 account_id=resolved_account_id,
                 persist=True,
@@ -3312,7 +3468,7 @@ class DeskMt5Service:
                 portfolio_slug=portfolio["slug"],
                 symbol=str(symbol).upper(),
                 status=status,
-                requested_exposure_change=normalized_exposure_change,
+                requested_exposure_change=float(decision.get("requested_exposure_change", 0.0)),
                 approved_exposure_change=float(decision.get("approved_exposure_change", 0.0)),
                 executed_exposure_change=executed_exposure_change,
                 terminal_status=terminal_status,

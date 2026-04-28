@@ -113,14 +113,34 @@ function barGradient(hex: string) {
 /*  Formatting helpers                                                */
 /* ------------------------------------------------------------------ */
 
+const SHORT_MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+function formatTimestampLabel(raw: string): string {
+  const ts = timestampFromLabel(raw);
+  if (ts == null) {
+    return raw;
+  }
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) {
+    return raw;
+  }
+  const day = d.getUTCDate();
+  const mon = SHORT_MONTHS[d.getUTCMonth()];
+  return `${day} ${mon}`;
+}
+
 function formatCategoryLabel(value: string, mode: ChartMode) {
   const normalized = String(value ?? "").replace(/[_-]+/g, " ").trim();
+  const formatted = formatTimestampLabel(normalized);
 
   if (mode !== "sparse" && mode !== "comparison") {
-    return normalized;
+    return formatted;
   }
 
-  const words = normalized.split(/\s+/).filter(Boolean);
+  const words = formatted.split(/\s+/).filter(Boolean);
   if (words.length <= 2) {
     return words.join("\n");
   }
@@ -346,6 +366,7 @@ type NormalizedBacktestPoint = {
   var_hist: number | null;
   var_garch: number | null;
   var_fhs: number | null;
+  var_alpha: number | null;
 };
 
 function normalizeBacktestPoints(points: BacktestSeriesPoint[]): NormalizedBacktestPoint[] {
@@ -364,6 +385,7 @@ function normalizeBacktestPoints(points: BacktestSeriesPoint[]): NormalizedBackt
         var_hist: toFiniteNumber(point?.var_hist),
         var_garch: toFiniteNumber(point?.var_garch),
         var_fhs: toFiniteNumber(point?.var_fhs),
+        var_alpha: toFiniteNumber(point?.var_alpha),
         sortKey: parsedLabelTs,
         sourceIndex: index,
       };
@@ -377,18 +399,20 @@ function normalizeBacktestPoints(points: BacktestSeriesPoint[]): NormalizedBackt
         var_hist: number | null;
         var_garch: number | null;
         var_fhs: number | null;
+        var_alpha: number | null;
         sortKey: number | null;
         sourceIndex: number;
       } => point != null,
     );
 
   const ordered = resolveTimeOrder(normalized);
-  return ordered.map(({ label, pnl, var_hist, var_garch, var_fhs }) => ({
+  return ordered.map(({ label, pnl, var_hist, var_garch, var_fhs, var_alpha }) => ({
     label,
     pnl,
     var_hist,
     var_garch,
     var_fhs,
+    var_alpha,
   }));
 }
 
@@ -534,6 +558,27 @@ function xAxisForMode(count: number, mode: ChartMode, labels: string[]) {
   };
 }
 
+function formatAxisValue(value: number | string): string {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return String(value);
+  }
+  const abs = Math.abs(num);
+  if (abs >= 1_000_000) {
+    return `${(num / 1_000_000).toFixed(1)}M`;
+  }
+  if (abs >= 1_000) {
+    return `${(num / 1_000).toFixed(1)}k`;
+  }
+  if (abs >= 100) {
+    return num.toFixed(1);
+  }
+  if (abs >= 1) {
+    return num.toFixed(2);
+  }
+  return num.toFixed(3);
+}
+
 function yAxisBase() {
   return {
     type: "value" as const,
@@ -543,6 +588,7 @@ function yAxisBase() {
       fontSize: 10,
       fontFamily: "IBM Plex Mono, monospace",
       margin: 12,
+      formatter: formatAxisValue,
     },
     splitLine: {
       lineStyle: { color: gridLine, type: "dashed" as const, width: 1 },
@@ -728,9 +774,79 @@ export function makeBacktestOption(points: BacktestSeriesPoint[]) {
       point.var_hist,
       point.var_garch,
       point.var_fhs,
+      point.var_alpha,
     ]),
     { includeZero: true },
   );
+
+  const alphaSeriesData = normalizedPoints.map((point) =>
+    point.var_alpha == null ? null : roundValue(point.var_alpha),
+  );
+  const hasAlphaSeries = alphaSeriesData.some((value) => value != null);
+
+  const series: Array<Record<string, unknown>> = [
+    {
+      name: "PnL",
+      type: "line",
+      smooth: false,
+      symbol: "none",
+      lineStyle: { width: 2, color: CHART_PALETTE.blue, ...lineGlow(CHART_PALETTE.blue, 0.25) },
+      areaStyle: { color: areaGradient(CHART_PALETTE.blue) },
+      data: normalizedPoints.map((point) => roundValue(point.pnl)),
+      z: 4,
+      markLine: {
+        silent: true,
+        symbol: "none",
+        lineStyle: { color: "rgba(255,255,255,0.12)", type: "dashed", width: 1 },
+        data: [{ yAxis: 0 }],
+        label: { show: false },
+      },
+    },
+    {
+      name: "Hist VaR",
+      type: "line",
+      smooth: 0.3,
+      symbol: "none",
+      lineStyle: { width: 1.5, color: CHART_PALETTE.gold, ...lineGlow(CHART_PALETTE.gold, 0.2) },
+      data: normalizedPoints.map((point) =>
+        point.var_hist == null ? null : roundValue(point.var_hist),
+      ),
+      z: 3,
+    },
+    {
+      name: "GARCH VaR",
+      type: "line",
+      smooth: 0.3,
+      symbol: "none",
+      lineStyle: { width: 1.5, color: CHART_PALETTE.green, ...lineGlow(CHART_PALETTE.green, 0.2) },
+      data: normalizedPoints.map((point) =>
+        point.var_garch == null ? null : roundValue(point.var_garch),
+      ),
+      z: 2,
+    },
+    {
+      name: "FHS VaR",
+      type: "line",
+      smooth: 0.3,
+      symbol: "none",
+      lineStyle: { width: 1.5, color: CHART_PALETTE.red, ...lineGlow(CHART_PALETTE.red, 0.2) },
+      data: normalizedPoints.map((point) =>
+        point.var_fhs == null ? null : roundValue(point.var_fhs),
+      ),
+      z: 1,
+    },
+  ];
+  if (hasAlphaSeries) {
+    series.push({
+      name: "Alpha VaR",
+      type: "line",
+      smooth: 0.35,
+      symbol: "none",
+      lineStyle: { width: 1.5, color: CHART_PALETTE.teal, ...lineGlow(CHART_PALETTE.teal, 0.22) },
+      data: alphaSeriesData,
+      z: 2,
+    });
+  }
 
   return {
     animationDuration: 800,
@@ -742,58 +858,7 @@ export function makeBacktestOption(points: BacktestSeriesPoint[]) {
     xAxis: xAxisForMode(count, mode, labels),
     yAxis,
     dataZoom: zoomForMode(count, mode),
-    series: [
-      {
-        name: "PnL",
-        type: "line",
-        smooth: false,
-        symbol: "none",
-        lineStyle: { width: 2, color: CHART_PALETTE.blue, ...lineGlow(CHART_PALETTE.blue, 0.25) },
-        areaStyle: { color: areaGradient(CHART_PALETTE.blue) },
-        data: normalizedPoints.map((point) => roundValue(point.pnl)),
-        z: 4,
-        markLine: {
-          silent: true,
-          symbol: "none",
-          lineStyle: { color: "rgba(255,255,255,0.12)", type: "dashed", width: 1 },
-          data: [{ yAxis: 0 }],
-          label: { show: false },
-        },
-      },
-      {
-        name: "Hist VaR",
-        type: "line",
-        smooth: 0.3,
-        symbol: "none",
-        lineStyle: { width: 1.5, color: CHART_PALETTE.gold, ...lineGlow(CHART_PALETTE.gold, 0.2) },
-        data: normalizedPoints.map((point) =>
-          point.var_hist == null ? null : roundValue(point.var_hist),
-        ),
-        z: 3,
-      },
-      {
-        name: "GARCH VaR",
-        type: "line",
-        smooth: 0.3,
-        symbol: "none",
-        lineStyle: { width: 1.5, color: CHART_PALETTE.green, ...lineGlow(CHART_PALETTE.green, 0.2) },
-        data: normalizedPoints.map((point) =>
-          point.var_garch == null ? null : roundValue(point.var_garch),
-        ),
-        z: 2,
-      },
-      {
-        name: "FHS VaR",
-        type: "line",
-        smooth: 0.3,
-        symbol: "none",
-        lineStyle: { width: 1.5, color: CHART_PALETTE.red, ...lineGlow(CHART_PALETTE.red, 0.2) },
-        data: normalizedPoints.map((point) =>
-          point.var_fhs == null ? null : roundValue(point.var_fhs),
-        ),
-        z: 1,
-      },
-    ],
+    series,
   };
 }
 

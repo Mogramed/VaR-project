@@ -22,10 +22,11 @@ export interface TimeSeriesPoint {
 
 export interface BacktestSeriesPoint {
   label: string;
-  pnl: number;
+  pnl?: number;
   var_hist?: number;
   var_garch?: number;
   var_fhs?: number;
+  var_alpha?: number;
 }
 
 export interface FlatAttributionRow {
@@ -132,10 +133,11 @@ export function buildAlertSeverityCounts(alerts: AlertSummary[]) {
 export function buildBacktestSeries(frame: BacktestFrameResponse): BacktestSeriesPoint[] {
   return frame.rows.map((row, index) => ({
     label: normalizeBacktestLabel(row.date ?? row.time ?? row.time_utc ?? row.timestamp, index),
-    pnl: Number(row.pnl ?? 0),
+    pnl: row.pnl == null ? undefined : Number(row.pnl),
     var_hist: row.var_hist == null ? undefined : Number(row.var_hist),
     var_garch: row.var_garch == null ? undefined : Number(row.var_garch),
     var_fhs: row.var_fhs == null ? undefined : Number(row.var_fhs),
+    var_alpha: row.var_alpha == null ? undefined : Number(row.var_alpha),
   }));
 }
 

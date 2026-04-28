@@ -1,5 +1,5 @@
 import { api } from "@/lib/api/client";
-import type { MT5LiveStateResponse, ReportContentResponse } from "@/lib/api/types";
+import type { AuditEventResponse, MT5LiveStateResponse, ReportContentResponse } from "@/lib/api/types";
 import { formatCurrency, formatPercent, formatTimestamp, slugifyHeading } from "@/lib/utils";
 import {
   averageDecisionFillRatio,
@@ -87,6 +87,8 @@ interface ValidationAcademicBlock {
   warnCount: number;
   failCount: number;
   totalPoints: number;
+  effectivePoints: number;
+  insufficientSampleCount: number;
   coverageFailCount: number;
   independenceFailCount: number;
   conditionalFailCount: number;
@@ -98,6 +100,10 @@ interface ValidationAcademicBlock {
 }
 
 const DEFAULT_P_VALUE_THRESHOLD = 0.05;
+const INITIAL_REPORT_DECISION_LIMIT = 12;
+const INITIAL_REPORT_CAPITAL_LIMIT = 8;
+const INITIAL_REPORT_AUDIT_LIMIT = 16;
+const EXPANDED_REPORT_HISTORY_LIMIT = 200;
 
 function toRecord(value: unknown): Record<string, unknown> {
   return value != null && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -140,17 +146,116 @@ function normalizeDecimalSetting(value: unknown, fallback: number) {
   return parsed;
 }
 
+function toUtcMillis(value: string | null | undefined): number | null {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+  const parsed = Date.parse(value.trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeSource(value: string | null | undefined): string | null {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+  return value.trim().toLowerCase();
+}
+
+function selectLatestReportRunEvent(
+  events: AuditEventResponse[],
+  report: ReportContentResponse | null,
+): AuditEventResponse | undefined {
+  const reportPath = typeof report?.report_markdown === "string" ? report.report_markdown.trim() : "";
+  const reportId = report?.report_id == null ? null : Number(report.report_id);
+  const reportAccountId = typeof report?.account_id === "string" ? report.account_id.trim() : "";
+  const hasReportIdentity = Boolean(reportPath) || reportId != null;
+
+  const reportRunEvents = events.filter((event) => event.action_type === "report.run");
+  const matching = reportRunEvents.find((event) => {
+    const payload = toRecord(event.payload);
+    const payloadReportPath =
+      typeof payload.report_markdown === "string" ? payload.report_markdown.trim() : "";
+    if (reportPath && payloadReportPath && payloadReportPath === reportPath) {
+      return true;
+    }
+
+    const payloadReportId = toNumber(payload.report_id);
+    if (reportId != null && payloadReportId != null && Number(payloadReportId) === reportId) {
+      return true;
+    }
+
+    if (reportAccountId) {
+      const payloadAccountId = typeof payload.account_id === "string" ? payload.account_id.trim() : "";
+      if (payloadAccountId && payloadAccountId === reportAccountId && reportPath && payloadReportPath) {
+        return payloadReportPath.endsWith(reportPath.split("/").pop() ?? reportPath);
+      }
+    }
+    return false;
+  });
+
+  if (matching) {
+    return matching;
+  }
+  return hasReportIdentity ? undefined : reportRunEvents[0];
+}
+
+function selectReportCutoffTimestamp(
+  reportContract: ResolvedReportContract | null,
+  latestReportEvent: Record<string, unknown> | undefined,
+): string | null {
+  const fromContract = reportContract?.generatedAtUtc ?? null;
+  if (fromContract) {
+    return fromContract;
+  }
+  const fromEvent = typeof latestReportEvent?.created_at === "string" && latestReportEvent.created_at.trim()
+    ? latestReportEvent.created_at.trim()
+    : null;
+  if (fromEvent) {
+    return fromEvent;
+  }
+  return reportContract?.snapshotTimestampUtc ?? null;
+}
+
+function isAtOrBeforeCutoff(
+  timestamp: string | null | undefined,
+  cutoffMillis: number | null,
+): boolean {
+  if (cutoffMillis == null) {
+    return true;
+  }
+  const itemMillis = toUtcMillis(timestamp);
+  if (itemMillis == null) {
+    return false;
+  }
+  return itemMillis <= cutoffMillis;
+}
+
+function isPlaceholderMetricDisplay(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  if (normalized === "-" || normalized === "--") {
+    return true;
+  }
+  const compact = normalized.replace(/\s+/g, "");
+  return compact === "n/a" || compact === "na" || compact === "null" || compact === "none";
+}
+
 function resolveContractMetric(value: unknown): ResolvedReportContractMetric {
   const record = toRecord(value);
   const display = typeof record.display === "string" && record.display.trim()
     ? record.display.trim()
     : null;
+  const normalizedDisplay = display != null && isPlaceholderMetricDisplay(display)
+    ? null
+    : display;
   const asOfUtc = typeof record.as_of_utc === "string" && record.as_of_utc.trim()
     ? record.as_of_utc.trim()
     : null;
   return {
     value: toNumber(record.value),
-    display,
+    display: normalizedDisplay,
     asOfUtc,
   };
 }
@@ -249,6 +354,8 @@ function buildValidationAcademicBlock(args: {
   const warnCount = toInteger(statusCounts.WARN) ?? 0;
   const failCount = toInteger(statusCounts.FAIL) ?? 0;
   const totalPoints = toInteger(governance.total_points) ?? passCount + warnCount + failCount;
+  const effectivePoints = toInteger(governance.effective_points) ?? 0;
+  const insufficientSampleCount = toInteger(governance.insufficient_sample_count) ?? Math.max(totalPoints - effectivePoints, 0);
   const passRate = toNumber(governance.pass_rate);
   const coverageFailCount = toInteger(governance.coverage_fail_count) ?? 0;
   const independenceFailCount = toInteger(governance.independence_fail_count) ?? 0;
@@ -351,6 +458,8 @@ function buildValidationAcademicBlock(args: {
     warnCount,
     failCount,
     totalPoints,
+    effectivePoints,
+    insufficientSampleCount,
     coverageFailCount,
     independenceFailCount,
     conditionalFailCount,
@@ -362,15 +471,81 @@ function buildValidationAcademicBlock(args: {
   };
 }
 
+const TABLE_SEPARATOR_PATTERN = /^\|\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/;
+
+function insertBlankLineBeforeTablesAfterBullets(lines: string[]) {
+  const output: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("|")) {
+      const previousNonEmpty = [...output].reverse().find((item) => item.trim().length > 0) ?? null;
+      if (previousNonEmpty?.trim().startsWith("- ") && (output.length === 0 || output[output.length - 1].trim() !== "")) {
+        output.push("");
+      }
+    }
+    output.push(line);
+  }
+  return output;
+}
+
+function moveEsTailNoteBelowTable(lines: string[]) {
+  const output: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    output.push(line);
+    if (!TABLE_SEPARATOR_PATTERN.test(line.trim())) {
+      index += 1;
+      continue;
+    }
+
+    let cursor = index + 1;
+    while (cursor < lines.length && lines[cursor].trim() === "") {
+      cursor += 1;
+    }
+
+    let deferredNote: string | null = null;
+    if (cursor < lines.length && /^_ES tail diagnostics/i.test(lines[cursor].trim())) {
+      deferredNote = lines[cursor];
+      cursor += 1;
+      while (cursor < lines.length && lines[cursor].trim() === "") {
+        cursor += 1;
+      }
+    }
+
+    while (cursor < lines.length && lines[cursor].trim().startsWith("|")) {
+      output.push(lines[cursor]);
+      cursor += 1;
+    }
+
+    if (deferredNote) {
+      if (output[output.length - 1]?.trim() !== "") {
+        output.push("");
+      }
+      output.push(deferredNote);
+      output.push("");
+    }
+    index = cursor;
+  }
+  return output;
+}
+
+function repairLegacyReportTables(markdown: string) {
+  const lines = markdown.split(/\r?\n/);
+  const withSpacing = insertBlankLineBeforeTablesAfterBullets(lines);
+  const withMovedNote = moveEsTailNoteBelowTable(withSpacing);
+  return withMovedNote.join("\n");
+}
+
 export function normalizeReportContent(content: string) {
-  return content
+  const normalized = content
     .replace(/^#\s+Risk Report.*$/m, "# Daily Risk Report")
     .replace(/^[*-]\s*Generated.*(?:\r?\n)?/gm, "")
     .replace(/^[*-]\s*Compare CSV.*(?:\r?\n)?/gm, "")
     .replace(/^Generated.*(?:\r?\n)?/gm, "")
     .replace(/^Compare CSV.*(?:\r?\n)?/gm, "")
-    .replace(/^## Charts[\s\S]*?(?=\n##\s|\s*$)/m, "")
-    .trim();
+    .replace(/^## Charts[\s\S]*?(?=\n##\s|\s*$)/m, "");
+  return repairLegacyReportTables(normalized).trim();
 }
 
 export function extractMarkdownHeadings(markdown: string): ReportHeading[] {
@@ -396,7 +571,11 @@ function executiveSignal(
 
 export async function loadDeskReportViewModel(
   portfolioSlug?: string,
-  options?: { liveState?: MT5LiveStateResponse | null; accountId?: string | null },
+  options?: {
+    liveState?: MT5LiveStateResponse | null;
+    accountId?: string | null;
+    freezeToReportScope?: boolean;
+  },
 ) {
   const health = await api.safeHealth();
   const resolvedPortfolio = portfolioSlug ?? health.portfolio_slug;
@@ -414,17 +593,32 @@ export async function loadDeskReportViewModel(
   const preferredSnapshotSource =
     liveState?.risk_summary?.source
     ?? (persistedLiveSnapshot ? "mt5_live_bridge" : "auto");
-  const [report, decisions, capitalHistory, audit, comparison, validation, frame, desk] = await Promise.all([
+  const [report, initialDecisionHistory, initialCapitalHistory, initialAuditHistory, desk] = await Promise.all([
     api.latestReport(resolvedPortfolio, undefined, accountId).catch(() => null),
-    api.reportDecisionHistory(resolvedPortfolio, 12, accountId).catch(() => []),
-    api.reportCapitalHistory(resolvedPortfolio, 8, preferredSnapshotSource).catch(() => []),
-    api.recentAudit(resolvedPortfolio, 16).catch(() => []),
-    api.latestModelComparison(resolvedPortfolio).catch(() => null),
-    api.latestValidation(resolvedPortfolio).catch(() => null),
-    api.latestBacktestFrame(resolvedPortfolio, 260).catch(() => null),
+    api.reportDecisionHistory(resolvedPortfolio, INITIAL_REPORT_DECISION_LIMIT, accountId).catch(() => []),
+    api.reportCapitalHistory(resolvedPortfolio, INITIAL_REPORT_CAPITAL_LIMIT, preferredSnapshotSource).catch(() => []),
+    api.recentAudit(resolvedPortfolio, INITIAL_REPORT_AUDIT_LIMIT).catch(() => []),
     api.deskOverview(health.desk_slug ?? "main").catch(() => null),
   ]);
-  const capital = liveState?.capital_usage ?? (await api.latestCapital(resolvedPortfolio).catch(() => null));
+  const reportId = typeof report?.report_id === "number" && Number.isFinite(report.report_id)
+    ? report.report_id
+    : undefined;
+  const [comparison, validation, frame] = await Promise.all([
+    api.latestModelComparison(resolvedPortfolio, reportId).catch(() => null),
+    api.latestValidation(resolvedPortfolio, reportId).catch(() => null),
+    api.latestBacktestFrame(resolvedPortfolio, 260, reportId).catch(() => null),
+  ]);
+  let decisionHistoryRaw = initialDecisionHistory;
+  let auditRaw = initialAuditHistory;
+  const reportContract = resolveReportContract(report);
+  const strictReportScope = Boolean(options?.freezeToReportScope ?? true) && report != null;
+  let latestReportEvent = selectLatestReportRunEvent(auditRaw, report);
+  if (strictReportScope && latestReportEvent == null && auditRaw.length >= INITIAL_REPORT_AUDIT_LIMIT) {
+    auditRaw = await api
+      .recentAudit(resolvedPortfolio, EXPANDED_REPORT_HISTORY_LIMIT)
+      .catch(() => auditRaw);
+    latestReportEvent = selectLatestReportRunEvent(auditRaw, report);
+  }
   let snapshot =
     preferredSnapshotSource === "mt5_live_bridge"
       ? persistedLiveSnapshot
@@ -433,41 +627,150 @@ export async function loadDeskReportViewModel(
     snapshot = await api.latestSnapshot(resolvedPortfolio, "auto").catch(() => null);
   }
 
-  const reportContract = resolveReportContract(report);
-  const contractModel = reportContract?.selectedModel ?? null;
+  const reportSnapshotSource = strictReportScope
+    ? (reportContract?.snapshotSource ?? preferredSnapshotSource)
+    : preferredSnapshotSource;
+
+  let capitalHistory = initialCapitalHistory;
+  if (
+    strictReportScope
+    && reportContract?.snapshotSource
+    && normalizeSource(reportContract.snapshotSource) !== normalizeSource(preferredSnapshotSource)
+  ) {
+    capitalHistory = await api
+      .reportCapitalHistory(resolvedPortfolio, INITIAL_REPORT_CAPITAL_LIMIT, reportContract.snapshotSource)
+      .catch(() => initialCapitalHistory);
+  }
+
+  if (strictReportScope && normalizeSource(reportSnapshotSource) !== normalizeSource(preferredSnapshotSource)) {
+    snapshot = reportSnapshotSource === "mt5_live_bridge"
+      ? persistedLiveSnapshot
+      : await api.latestSnapshot(resolvedPortfolio, reportSnapshotSource).catch(() => snapshot);
+  }
+
+  const reportCutoffTimestamp = strictReportScope
+    ? selectReportCutoffTimestamp(reportContract, latestReportEvent)
+    : null;
+  const reportCutoffMillis = toUtcMillis(reportCutoffTimestamp);
+  const reportSourceFilter = strictReportScope ? normalizeSource(reportContract?.snapshotSource ?? null) : null;
+  const filterReportScopedDecisions = (rows: typeof decisionHistoryRaw) => strictReportScope
+    ? rows.filter((decision) =>
+      isAtOrBeforeCutoff(decision.time_utc ?? decision.created_at ?? null, reportCutoffMillis))
+    : rows;
+  const filterReportScopedAudit = (rows: typeof auditRaw) => strictReportScope
+    ? rows.filter((event) => isAtOrBeforeCutoff(event.created_at ?? null, reportCutoffMillis))
+    : rows;
+  const filterReportScopedCapitalHistory = (rows: typeof capitalHistory) => strictReportScope
+    ? rows.filter((entry) => {
+      const entrySource = normalizeSource(
+        (entry.snapshot_source ?? entry.source ?? null) as string | null | undefined,
+      );
+      if (reportSourceFilter != null && entrySource != null && entrySource !== reportSourceFilter) {
+        return false;
+      }
+      return isAtOrBeforeCutoff(entry.snapshot_timestamp ?? entry.created_at ?? null, reportCutoffMillis);
+    })
+    : rows;
+  let decisions = filterReportScopedDecisions(decisionHistoryRaw);
+  let audit = filterReportScopedAudit(auditRaw);
+  let scopedCapitalHistory = filterReportScopedCapitalHistory(capitalHistory);
+
+  if (
+    strictReportScope
+    && reportCutoffMillis != null
+    && decisions.length === 0
+    && decisionHistoryRaw.length >= INITIAL_REPORT_DECISION_LIMIT
+  ) {
+    decisionHistoryRaw = await api
+      .reportDecisionHistory(resolvedPortfolio, EXPANDED_REPORT_HISTORY_LIMIT, accountId)
+      .catch(() => decisionHistoryRaw);
+    decisions = filterReportScopedDecisions(decisionHistoryRaw);
+  }
+
+  if (
+    strictReportScope
+    && reportCutoffMillis != null
+    && audit.length === 0
+    && auditRaw.length >= INITIAL_REPORT_AUDIT_LIMIT
+  ) {
+    auditRaw = await api
+      .recentAudit(resolvedPortfolio, EXPANDED_REPORT_HISTORY_LIMIT)
+      .catch(() => auditRaw);
+    audit = filterReportScopedAudit(auditRaw);
+  }
+
+  if (
+    strictReportScope
+    && reportCutoffMillis != null
+    && scopedCapitalHistory.length === 0
+    && capitalHistory.length >= INITIAL_REPORT_CAPITAL_LIMIT
+  ) {
+    capitalHistory = await api
+      .reportCapitalHistory(resolvedPortfolio, EXPANDED_REPORT_HISTORY_LIMIT, reportSnapshotSource)
+      .catch(() => capitalHistory);
+    scopedCapitalHistory = filterReportScopedCapitalHistory(capitalHistory);
+  }
+
+  const sortedCapitalHistory = scopedCapitalHistory
+    .slice()
+    .sort((left, right) => {
+      const leftMs = toUtcMillis(left.snapshot_timestamp ?? left.created_at ?? null) ?? Number.NEGATIVE_INFINITY;
+      const rightMs = toUtcMillis(right.snapshot_timestamp ?? right.created_at ?? null) ?? Number.NEGATIVE_INFINITY;
+      return rightMs - leftMs;
+    });
+  const reportScopedCapital = sortedCapitalHistory[0] ?? null;
+  const liveOrLatestCapital = liveState?.capital_usage ?? (await api.latestCapital(resolvedPortfolio).catch(() => null));
+  const capital = strictReportScope ? reportScopedCapital : liveOrLatestCapital;
+
+  const payload = (snapshot?.payload ?? {}) as {
+    var?: Record<string, number>;
+    es?: Record<string, number>;
+  };
+  const snapshotModel =
+    Object.keys(payload.var ?? {}).find((model) => Boolean(model))?.toLowerCase()
+    ?? Object.keys(payload.es ?? {}).find((model) => Boolean(model))?.toLowerCase()
+    ?? null;
+  const contractModel = strictReportScope
+    ? (reportContract?.selectedModel?.toLowerCase() ?? null)
+    : null;
   const selectedModel =
     contractModel ??
-    liveState?.risk_summary?.reference_model ??
+    snapshotModel ??
     comparison?.champion_model ??
     capital?.reference_model ??
+    liveState?.risk_summary?.reference_model ??
     "hist";
   const validationAcademic = buildValidationAcademicBlock({
     comparison,
     validation,
     selectedModel,
   });
-  const payload = (snapshot?.payload ?? {}) as {
-    var?: Record<string, number>;
-    es?: Record<string, number>;
-  };
   const contractVar = reportContract?.metrics.var.value ?? null;
   const contractEs = reportContract?.metrics.es.value ?? null;
-  const varValue = Number(
-    contractVar ??
-      liveState?.risk_summary?.var?.[selectedModel] ??
-      Object.values(liveState?.risk_summary?.var ?? {})[0] ??
-      payload.var?.[selectedModel] ??
-      Object.values(payload.var ?? {})[0] ??
-      0,
-  );
-  const esValue = Number(
-    contractEs ??
-      liveState?.risk_summary?.es?.[selectedModel] ??
-      Object.values(liveState?.risk_summary?.es ?? {})[0] ??
-      payload.es?.[selectedModel] ??
-      Object.values(payload.es ?? {})[0] ??
-      0,
-  );
+  const fallbackVar = Object.values(payload.var ?? {})
+    .map((value) => toNumber(value))
+    .find((value): value is number => value != null) ?? null;
+  const fallbackEs = Object.values(payload.es ?? {})
+    .map((value) => toNumber(value))
+    .find((value): value is number => value != null) ?? null;
+  const varValueRaw = strictReportScope
+    ? (contractVar ?? toNumber(payload.var?.[selectedModel]) ?? fallbackVar)
+    : (
+      toNumber(liveState?.risk_summary?.var?.[selectedModel])
+      ?? toNumber(Object.values(liveState?.risk_summary?.var ?? {})[0])
+      ?? toNumber(payload.var?.[selectedModel])
+      ?? fallbackVar
+    );
+  const esValueRaw = strictReportScope
+    ? (contractEs ?? toNumber(payload.es?.[selectedModel]) ?? fallbackEs)
+    : (
+      toNumber(liveState?.risk_summary?.es?.[selectedModel])
+      ?? toNumber(Object.values(liveState?.risk_summary?.es ?? {})[0])
+      ?? toNumber(payload.es?.[selectedModel])
+      ?? fallbackEs
+    );
+  const varValue = Number(varValueRaw ?? 0);
+  const esValue = Number(esValueRaw ?? 0);
   const backtestRows = Array.isArray(frame?.rows) ? frame.rows : [];
   let latestBacktestPnl: number | null = null;
   let latestBacktestPnlTimestamp: string | null = null;
@@ -488,19 +791,26 @@ export async function loadDeskReportViewModel(
     latestBacktestPnlTimestamp = candidateTimestamp?.trim() ?? null;
     break;
   }
-  const pnlValue = Number(reportContract?.metrics.pnl.value ?? latestBacktestPnl ?? 0);
-  const pnlTimestamp = reportContract?.metrics.pnl.asOfUtc ?? latestBacktestPnlTimestamp;
+  const contractPnl = reportContract?.metrics.pnl.value ?? null;
+  const pnlValueRaw = strictReportScope ? contractPnl : latestBacktestPnl;
+  const pnlValue = Number(pnlValueRaw ?? 0);
+  const pnlTimestamp = reportContract?.metrics.pnl.asOfUtc ?? (strictReportScope ? null : latestBacktestPnlTimestamp);
   const moneyDecimals = reportContract?.moneyDecimals ?? 2;
-  const varDisplay = reportContract?.metrics.var.display ?? formatCurrency(varValue, moneyDecimals);
-  const esDisplay = reportContract?.metrics.es.display ?? formatCurrency(esValue, moneyDecimals);
-  const pnlDisplay = reportContract?.metrics.pnl.display ?? formatCurrency(pnlValue, moneyDecimals);
+  const varDisplay = strictReportScope
+    ? (reportContract?.metrics.var.display ?? (varValueRaw == null ? "n/a" : formatCurrency(varValue, moneyDecimals)))
+    : (varValueRaw == null ? "n/a" : formatCurrency(varValue, moneyDecimals));
+  const esDisplay = strictReportScope
+    ? (reportContract?.metrics.es.display ?? (esValueRaw == null ? "n/a" : formatCurrency(esValue, moneyDecimals)))
+    : (esValueRaw == null ? "n/a" : formatCurrency(esValue, moneyDecimals));
+  const pnlDisplay = strictReportScope
+    ? (reportContract?.metrics.pnl.display ?? (pnlValueRaw == null ? "n/a" : formatCurrency(pnlValue, moneyDecimals)))
+    : (pnlValueRaw == null ? "n/a" : formatCurrency(pnlValue, moneyDecimals));
   const fillRatio = averageDecisionFillRatio(decisions);
   const decisionSizeSeries = buildDecisionDeltaComparison(decisions);
-  const capitalSeries = buildCapitalHistorySeries(capitalHistory);
+  const capitalSeries = buildCapitalHistorySeries(scopedCapitalHistory);
   const deskSeries = desk ? buildDeskConsumptionSeries(desk) : [];
   const normalizedReportContent = report ? normalizeReportContent(report.content) : "";
   const headings = report ? extractMarkdownHeadings(normalizedReportContent) : [];
-  const latestReportEvent = audit.find((event) => event.action_type === "report.run");
 
   const executiveSummary = [
     executiveSignal(
@@ -508,6 +818,8 @@ export async function loadDeskReportViewModel(
       varDisplay,
       reportContract?.metrics.var.asOfUtc
         ? `Canonical report contract value as of ${formatTimestamp(reportContract.metrics.var.asOfUtc)}.`
+        : strictReportScope
+          ? "Report-scoped risk level reconstructed from persisted snapshot inputs."
         : liveState?.risk_summary?.latest_observation
           ? `Live selected-model risk level from the MT5 bridge sample ending ${formatTimestamp(liveState.risk_summary.latest_observation)}.`
           : "Current selected model risk level for the latest persisted portfolio snapshot.",
@@ -518,6 +830,8 @@ export async function loadDeskReportViewModel(
       esDisplay,
       reportContract?.metrics.es.asOfUtc
         ? `Canonical report contract value as of ${formatTimestamp(reportContract.metrics.es.asOfUtc)}.`
+        : strictReportScope
+          ? "Report-scoped tail-loss expectation derived from persisted snapshot inputs."
         : liveState?.risk_summary
           ? "Tail-loss expectation derived from the live bridge risk summary."
           : "Tail-loss expectation carried into the report baseline.",
@@ -535,21 +849,27 @@ export async function loadDeskReportViewModel(
       "Capital headroom",
       capital ? formatPercent(capital.headroom_ratio ?? 0, 0) : "n/a",
       capital
-        ? `Remaining ${formatCurrency(capital.total_capital_remaining_eur, moneyDecimals)} before hitting current budget boundaries.`
+        ? `${strictReportScope ? "Report snapshot remaining" : "Remaining"} ${formatCurrency(
+          capital.total_capital_remaining_eur,
+          moneyDecimals,
+        )} before hitting current budget boundaries.`
         : "No persisted capital snapshot yet.",
       "success",
     ),
     executiveSignal(
       "Average fill ratio",
       fillRatio == null ? "n/a" : formatPercent(fillRatio, 0),
-      "Advisory decisions approved versus requested exposure changes over recent runs.",
+      strictReportScope
+        ? "Advisory decisions approved versus requested exposure changes up to the report cutoff."
+        : "Advisory decisions approved versus requested exposure changes over recent runs.",
       "neutral",
     ),
   ];
 
+  const narrativeChampion = strictReportScope ? selectedModel : (comparison?.champion_model ?? selectedModel);
   const narrativeSummary = [
-    `Champion model: ${(comparison?.champion_model ?? selectedModel).toUpperCase()} with a score gap of ${
-      comparison?.score_gap != null ? comparison.score_gap.toFixed(1) : "n/a"
+    `Champion model: ${narrativeChampion.toUpperCase()} with a score gap of ${
+      strictReportScope ? "n/a" : (comparison?.score_gap != null ? comparison.score_gap.toFixed(1) : "n/a")
     }.`,
     `Latest report PnL point: ${pnlDisplay}${pnlTimestamp ? ` at ${formatTimestamp(pnlTimestamp)}` : ""}.`,
     capital
@@ -563,9 +883,11 @@ export async function loadDeskReportViewModel(
           fillRatio == null ? "n/a" : formatPercent(fillRatio, 0)
         }.`
       : "No recent decisions are persisted yet.",
-    liveState?.reconciliation
+    !strictReportScope && liveState?.reconciliation
       ? `${liveState.reconciliation.manual_event_count} manual MT5 event(s) and ${liveState.reconciliation.unmatched_execution_count} unmatched execution attempt(s) are currently visible from the live bridge.`
-      : "Live reconciliation telemetry is not currently available.",
+      : strictReportScope
+        ? "Live reconciliation telemetry is intentionally excluded from report-scoped narratives."
+        : "Live reconciliation telemetry is not currently available.",
   ];
 
   return {
@@ -573,7 +895,7 @@ export async function loadDeskReportViewModel(
     liveState,
     report,
     decisions,
-    capitalHistory,
+    capitalHistory: scopedCapitalHistory,
     audit,
     capital,
     comparison,
@@ -611,7 +933,7 @@ export async function loadDeskReportViewModel(
       reportPath: report?.report_markdown ?? "",
       chartCount: report?.chart_paths?.length ?? 0,
       baseCurrency: capital?.base_currency ?? "EUR",
-      preferredSnapshotSource: reportContract?.snapshotSource ?? preferredSnapshotSource,
+      preferredSnapshotSource: reportSnapshotSource,
       reportContractVersion: reportContract?.version ?? null,
       reportTimezone: reportContract?.timezone ?? "UTC",
       moneyDecimals,

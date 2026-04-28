@@ -38,9 +38,17 @@ def _coerce_utc_datetime(value: Any) -> datetime | None:
     return parsed.to_pydatetime()
 
 
-def _is_fx_weekend_closed(now: datetime | None = None) -> bool:
+def _is_fx_symbol(symbol: str) -> bool:
+    normalized = str(symbol or "").strip().upper()
+    return len(normalized) == 6 and normalized.isalpha()
+
+
+def _is_fx_weekend_closed(now: datetime | None = None, *, symbols: Iterable[str] | None = None) -> bool:
     current = _utcnow() if now is None else now.astimezone(timezone.utc)
     weekday = current.weekday()
+    normalized_symbols = [str(symbol).upper() for symbol in symbols or [] if str(symbol or "").strip()]
+    if normalized_symbols and not all(_is_fx_symbol(symbol) for symbol in normalized_symbols):
+        return weekday in {5, 6}
     if weekday == 4 and current.hour >= 21:
         return True
     if weekday == 5:
@@ -348,7 +356,9 @@ class DeskMarketDataService:
         now: datetime,
     ) -> int:
         base_days = min(max(int(requested_days or 0), 7), 30)
-        if _is_fx_weekend_closed(now):
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        portfolio_symbols = list((portfolio.get("watchlist_symbols") or []) or (portfolio.get("symbols") or []))
+        if _is_fx_weekend_closed(now, symbols=portfolio_symbols):
             base_days = max(base_days, 3)
         oldest_unresolved: datetime | None = None
         for execution in self.runtime.storage.recent_execution_results(limit=500, portfolio_slug=portfolio_slug):
@@ -457,6 +467,7 @@ class DeskMarketDataService:
         status = self.market_data_status(portfolio_slug=portfolio["slug"])
         latest_sync = self.runtime.storage.latest_market_data_sync(portfolio_slug=portfolio["slug"])
         needs_refresh = status["status"] != "ok" or latest_sync is None
+        age_seconds: float | None = None
 
         if not needs_refresh and latest_sync is not None:
             synced_at = pd.to_datetime(latest_sync.get("synced_at"), utc=True, errors="coerce")
@@ -465,6 +476,27 @@ class DeskMarketDataService:
             else:
                 age_seconds = max(0.0, (_utcnow() - synced_at.to_pydatetime()).total_seconds())
                 needs_refresh = age_seconds >= max(float(max_age_seconds), 1.0)
+
+        requested_days: int | None = None
+        if days not in {None, "", "null"}:
+            try:
+                requested_days = max(int(days), 1)
+            except (TypeError, ValueError):
+                requested_days = None
+
+        try:
+            stored_history_days = int(status.get("stored_history_days") or 0)
+        except (TypeError, ValueError):
+            stored_history_days = 0
+        coverage_status = str(status.get("coverage_status") or "").strip().lower()
+
+        if not needs_refresh and requested_days is not None:
+            if stored_history_days > 0 and stored_history_days < requested_days:
+                needs_refresh = True
+            elif coverage_status in {"thin_history", "incomplete"}:
+                # If history quality is thin, retry periodically even when freshness checks pass.
+                retry_after = max(min(float(max_age_seconds), 60.0), 15.0)
+                needs_refresh = age_seconds is None or age_seconds >= retry_after
 
         if not needs_refresh:
             return status
@@ -870,7 +902,7 @@ class DeskMarketDataService:
             coverage_status = "stale"
         elif thin_history or tick_archive.get("coverage_status") == "thin_history":
             coverage_status = "thin_history"
-        market_closed = bool(details.get("market_closed", False)) or _is_fx_weekend_closed()
+        market_closed = bool(details.get("market_closed", False)) or _is_fx_weekend_closed(symbols=tracked_symbols)
         return {
             "portfolio_slug": portfolio["slug"],
             "portfolio_mode": portfolio.get("mode"),
@@ -940,7 +972,8 @@ class DeskMarketDataService:
             now=started_at,
         )
         history_bootstrap_days = max(int(stored_history_days), int(history_reconciliation_days), 1)
-        market_closed = _is_fx_weekend_closed(started_at)
+        tracked_symbols = self._portfolio_symbols_from_details(portfolio)
+        market_closed = _is_fx_weekend_closed(started_at, symbols=tracked_symbols)
         latest_sync_before = self.runtime.storage.latest_market_data_sync(portfolio_slug=portfolio["slug"])
         resume_hint = self._resume_hint_from_latest_sync(latest_sync_before)
         history_windows = self._history_sync_windows(
@@ -948,7 +981,6 @@ class DeskMarketDataService:
             started_at=started_at,
             bootstrap_days=history_bootstrap_days,
         )
-        tracked_symbols = self._portfolio_symbols_from_details(portfolio)
         running_details = {
             "symbols": tracked_symbols,
             "timeframes": selected_timeframes,
@@ -2211,7 +2243,9 @@ class DeskMarketDataService:
         ):
             summary_severity = "warn"
 
-        market_closed = bool(market_status.get("market_closed")) or _is_fx_weekend_closed()
+        market_closed = bool(market_status.get("market_closed")) or _is_fx_weekend_closed(
+            symbols=[*desk_exposure.keys(), *live_exposure.keys()]
+        )
         live_portfolio = self.runtime.is_live_portfolio(portfolio)
         if live_evidence_present or market_closed:
             operational_truth = "broker"
@@ -2326,7 +2360,9 @@ class DeskMarketDataService:
             reference_timestamp = latest_sync
             reference_source = "market_sync"
 
-        market_closed = bool(live_state.get("market_closed", False)) or _is_fx_weekend_closed()
+        market_closed = bool(live_state.get("market_closed", False)) or _is_fx_weekend_closed(
+            symbols=live_state.get("symbols") or []
+        )
         return {
             "market_closed": market_closed,
             "market_closed_reason": live_state.get("market_closed_reason") or ("weekend" if market_closed else None),
@@ -2432,7 +2468,7 @@ class DeskMarketDataService:
         holdings = self.live_holdings(portfolio_slug=portfolio["slug"])
         pending_orders: list[dict[str, Any]] = list(status.get("pending_orders") or [])
         effective_history_lookback_minutes = int(self.runtime.mt5_config.live_history_lookback_minutes or 0)
-        if _is_fx_weekend_closed():
+        if _is_fx_weekend_closed(symbols=portfolio.get("symbols") or []):
             effective_history_lookback_minutes = max(effective_history_lookback_minutes, 72 * 60)
         if self.should_use_mt5_market_data(portfolio):
             with self.runtime._mt5_gateway() as live:

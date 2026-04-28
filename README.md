@@ -148,26 +148,118 @@ The Docker stack exposes:
 - API debug health: `http://localhost:8000/health`
 - API debug docs: `http://localhost:8000/docs`
 - Frontend: `http://localhost:3000`
-- Nginx front door: `http://localhost:8080`
-- Frontend through Nginx: `http://localhost:8080/`
-- API through Nginx: `http://localhost:8080/backend/health`
+- Nginx front door: `http://localhost:8081` (override with `VAR_PROJECT_NGINX_PORT`)
+- Frontend through Nginx: `http://localhost:8081/`
+- API through Nginx: `http://localhost:8081/backend/health`
 
-Run:
+Run (optimized default profile):
 
 ```bash
-docker compose build
-docker compose up
+docker compose up -d --build
+docker compose logs -f
+```
+
+Enable observability when needed:
+
+```bash
+docker compose --profile observability up -d --build
+docker compose logs -f prometheus alertmanager grafana
+```
+
+Windows safe helper (recommended on Docker Compose `v5.x`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\docker_up_safe.ps1 -FollowLogs
+```
+
+With observability:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\docker_up_safe.ps1 -WithObservability -FollowLogs
+```
+
+If you use Git Bash, use forward slashes:
+
+```bash
+powershell -ExecutionPolicy Bypass -File ./scripts/docker_up_safe.ps1 -FollowLogs
+```
+
+Or use the cmd wrapper (works from `cmd.exe` / PowerShell):
+
+```cmd
+scripts\docker_up_safe.cmd -FollowLogs
 ```
 
 Notes:
 
-- `db-migrate` is a one-shot service that runs `var-project db upgrade` before `api`, `worker`, and `celery-worker`.
+- `db-migrate` is a one-shot service that runs `var-project db upgrade` before `api`, `worker`, `celery-worker`, and `celery-worker-2`.
 - `api` and `worker` no longer create the schema silently at startup.
 - `GET /health` is strict on DB schema integrity (critical tables/columns + Alembic head revision) and returns `status=unhealthy` when drift is detected.
-- `redis` + `celery-worker` provide asynchronous execution for operator actions triggered from the frontend.
+- `redis` + `celery-worker` + `celery-worker-2` provide asynchronous execution for operator actions triggered from the frontend (two parallel operator workers by default).
 - `seed-demo` is the supported way to generate a demo-ready database state beyond the tracked fixtures.
-- `localhost:8080` is the operator-facing front door. `localhost:8000` remains the direct FastAPI debug surface.
+- `localhost:${VAR_PROJECT_NGINX_PORT:-8081}` is the operator-facing front door. `localhost:8000` remains the direct FastAPI debug surface.
 - `GET /` on `localhost:8000` now returns a small discovery payload that points to `/health` and `/docs` instead of a raw `404`.
+- On Docker Compose `v5.x`, `docker compose up --build` in attached mode can panic in the Compose monitor on some hosts. Prefer detached mode (`-d`) plus `docker compose logs -f`.
+- `GET /api/alerts` returning `404` in Grafana logs is expected on Grafana `11.x` (legacy endpoint removed); use `/api/alertmanager/grafana/api/v2/alerts` instead.
+
+Resource tuning defaults:
+
+- Docker defaults are optimized for lower RAM pressure (`VAR_PROJECT_API_WORKERS=1`, reduced DB pools, slower worker polling cadence).
+- Worker cadence can be tuned with:
+  - `VAR_PROJECT_WORKER_LOOP_SLEEP_SECONDS`
+  - `VAR_PROJECT_WORKER_SNAPSHOT_INTERVAL_SECONDS`
+  - `VAR_PROJECT_WORKER_LIVE_REFRESH_INTERVAL_SECONDS`
+  - `VAR_PROJECT_WORKER_BACKTEST_INTERVAL_SECONDS`
+  - `VAR_PROJECT_WORKER_REPORT_INTERVAL_SECONDS`
+- Operator queue throughput can be tuned with:
+  - `VAR_PROJECT_CELERY_WORKER_CONCURRENCY`
+- Frontend live/refresh cadence can be tuned with:
+  - `NEXT_PUBLIC_MT5_STREAM_MODE`
+  - `NEXT_PUBLIC_MT5_POLL_INTERVAL_MS`
+  - `NEXT_PUBLIC_MT5_MAX_POLL_INTERVAL_MS`
+  - `NEXT_PUBLIC_DESK_ARTIFACT_QUERY_REFETCH_MS`
+
+## Observability & Alerting (VAR-019)
+
+Observability services are profile-gated and only run when `--profile observability` is used.
+
+Backend telemetry now exposes:
+
+- structured/correlated logs with `request_id`, `run_id`, `account_id`, and `action`.
+- Prometheus metrics at `GET /metrics` (not part of OpenAPI schema).
+- critical operational metrics for:
+  - API latency/error rate
+  - operator run status/failure ratio/stale closures
+  - market-data sync status
+  - MT5 bridge health
+  - reconciliation mismatch/drift counters
+
+Grafana is provisioned with a ready-to-use dashboard:
+
+- **VaR Platform Observability** (folder: `VaR Platform`)
+
+Prometheus alert rules are preloaded for:
+
+- sustained API 5xx rate
+- operator failure bursts
+- MT5 bridge disconnection
+- incomplete market-data sync runs
+- stale operator run closures
+- critical reconciliation mismatches
+
+Quick links:
+
+- [`docs/observability_runbook.md`](docs/observability_runbook.md)
+- [`infra/observability/prometheus/alerts/var_project_alerts.yml`](infra/observability/prometheus/alerts/var_project_alerts.yml)
+
+Logging defaults to `INFO` for both console and rotating file output. Raise verbosity explicitly only when needed:
+
+```bash
+VAR_PROJECT_LOG_LEVEL=DEBUG
+# optional fine-grained overrides
+VAR_PROJECT_LOG_CONSOLE_LEVEL=INFO
+VAR_PROJECT_LOG_FILE_LEVEL=DEBUG
+```
 
 Regenerate frontend API types after backend schema changes:
 
@@ -184,10 +276,11 @@ Recommended order on a fresh workspace:
 ```bash
 var-project db upgrade
 var-project seed-demo
-docker compose up --build
+docker compose up -d --build
+docker compose logs -f
 ```
 
-This produces a migrated database, a seeded report/snapshot/backtest baseline, and the full API-worker-frontend stack.
+This produces a migrated database and the API-worker-frontend stack with memory-friendly defaults.
 
 ## MT5 Demo Execution
 

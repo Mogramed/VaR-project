@@ -129,8 +129,11 @@ export function CapitalLiveSurface({
         </div>
         {resolved ? (
           <CapitalRebalancePanel
+            key={`${resolved.portfolio_slug}:${resolved.total_capital_budget_eur}:${resolved.budget?.reserve_ratio ?? "na"}`}
             portfolioSlug={resolved.portfolio_slug}
             referenceModel={resolved.reference_model}
+            initialBudgetEur={resolved.total_capital_budget_eur}
+            initialReserveRatio={resolved.budget?.reserve_ratio ?? null}
             onRebalanced={(result) => {
               queryClient.setQueryData<CapitalUsageSnapshotResponse | null>(capitalQueryKey, result);
               queryClient.setQueryData<CapitalUsageSnapshotResponse[]>(

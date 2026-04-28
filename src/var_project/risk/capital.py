@@ -169,6 +169,7 @@ def build_capital_usage_snapshot(
     overrides = dict(overrides or {})
     capital_cfg = dict(limits_cfg.get("capital_management") or {})
     risk_budget_cfg = dict(limits_cfg.get("risk_budget") or {})
+    enforce_limits = bool(capital_cfg.get("enforce_limits", True))
 
     warn = float(risk_budget_cfg.get("utilisation_warn", 0.85))
     breach = float(risk_budget_cfg.get("utilisation_breach", 1.0))
@@ -180,8 +181,20 @@ def build_capital_usage_snapshot(
     if ref_budget is None:
         raise ValueError(f"Reference model '{resolved_model}' not available in risk budget snapshot.")
 
+    explicit_total_budget = overrides.get("total_budget_eur")
+    configured_total_budget = capital_cfg.get("total_budget_eur")
     model_budgets_cfg = dict(capital_cfg.get("model_budgets_eur") or {})
     raw_symbol_budget_cfg = dict(overrides.get("symbol_weights") or capital_cfg.get("symbol_weights") or {})
+    explicit_budget_inputs = any(
+        key in overrides for key in ("total_budget_eur", "reserve_ratio", "symbol_weights")
+    )
+    capital_limits_enforced = (
+        enforce_limits
+        or configured_total_budget is not None
+        or bool(model_budgets_cfg)
+        or bool(raw_symbol_budget_cfg)
+        or explicit_budget_inputs
+    )
     symbol_budget_cfg: dict[str, float] = {}
     for symbol, value in raw_symbol_budget_cfg.items():
         normalized_symbol = str(symbol or "").upper().strip()
@@ -197,8 +210,6 @@ def build_capital_usage_snapshot(
         auto_budget_floor = float(total_consumed / max(1.0 - reserve_ratio, 1e-9))
     auto_total_budget = float(max(default_total_budget, auto_budget_floor))
 
-    explicit_total_budget = overrides.get("total_budget_eur")
-    configured_total_budget = capital_cfg.get("total_budget_eur")
     if explicit_total_budget is not None:
         total_budget = float(explicit_total_budget)
     elif configured_total_budget is not None:
@@ -209,7 +220,15 @@ def build_capital_usage_snapshot(
     total_reserved = float(total_budget * reserve_ratio)
     total_remaining = float(total_budget - total_consumed - total_reserved)
     headroom_ratio = None if total_budget <= 0.0 else float(total_remaining / total_budget)
-    overall_status = _status_from_utilization(None if total_budget <= 0.0 else total_consumed / total_budget, warn=warn, breach=breach)
+    overall_status = (
+        _status_from_utilization(
+            None if total_budget <= 0.0 else total_consumed / total_budget,
+            warn=warn,
+            breach=breach,
+        )
+        if capital_limits_enforced
+        else "OK"
+    )
 
     models: dict[str, ModelCapitalBudget] = {}
     for model_name, model_budget in budget.models.items():
@@ -224,7 +243,7 @@ def build_capital_usage_snapshot(
             consumed_eur=model_consumed,
             remaining_eur=model_remaining,
             utilization=utilization,
-            status=_status_from_utilization(utilization, warn=warn, breach=breach),
+            status=_status_from_utilization(utilization, warn=warn, breach=breach) if capital_limits_enforced else "OK",
         )
 
     positions = {str(symbol).upper(): item for symbol, item in ref_budget.positions.items()}
@@ -262,16 +281,17 @@ def build_capital_usage_snapshot(
         reserved = float(total_reserved * normalized_weights.get(symbol, 0.0))
         remaining = float(target_capital - consumed - reserved)
         utilization = None if target_capital <= 0.0 else float(consumed / target_capital)
-        status = _status_from_utilization(utilization, warn=warn, breach=breach)
+        status = _status_from_utilization(utilization, warn=warn, breach=breach) if capital_limits_enforced else "OK"
         action = "HOLD"
-        if remaining < -rebalance_min_gap:
-            action = "REDUCE"
-            overloaded.append((symbol, abs(remaining), status))
-        elif remaining > rebalance_min_gap:
-            action = "ADD"
-            underused.append((symbol, remaining))
-        elif item is not None and item.action == "HEDGE":
-            action = "HEDGE"
+        if capital_limits_enforced:
+            if remaining < -rebalance_min_gap:
+                action = "REDUCE"
+                overloaded.append((symbol, abs(remaining), status))
+            elif remaining > rebalance_min_gap:
+                action = "ADD"
+                underused.append((symbol, remaining))
+            elif item is not None and item.action == "HEDGE":
+                action = "HEDGE"
 
         allocations[symbol] = CapitalAllocation(
             symbol=symbol,

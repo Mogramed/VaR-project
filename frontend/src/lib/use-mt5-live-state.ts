@@ -7,7 +7,13 @@ import type { MT5LiveEventResponse, MT5LiveStateResponse } from "@/lib/api/types
 type LiveDetailLevel = "summary" | "full" | "inspector";
 
 const LIVE_STATE_FETCH_TIMEOUT_MS = 8_000;
-const LIVE_STATE_POLL_INTERVAL_MS = 1_000;
+const LIVE_STATE_POLL_INTERVAL_MS = (() => {
+  const parsed = Number(process.env.NEXT_PUBLIC_MT5_POLL_INTERVAL_MS ?? "1000");
+  if (!Number.isFinite(parsed)) {
+    return 1_000;
+  }
+  return Math.max(parsed, 500);
+})();
 const LIVE_STATE_POLL_BACKOFF_MAX_MS = (() => {
   const parsed = Number(process.env.NEXT_PUBLIC_MT5_POLL_BACKOFF_MAX_MS ?? "4000");
   if (!Number.isFinite(parsed)) {

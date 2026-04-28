@@ -65,6 +65,32 @@ describe("chart option resilience", () => {
     expect(option).toMatchSnapshot();
   });
 
+  it("does not chart backtest rows with missing pnl values", () => {
+    const option = makeBacktestOption([
+      { label: "2026-03-01T00:00:00Z", pnl: 10, var_hist: 6, var_garch: 5, var_fhs: 4 },
+      { label: "2026-03-02T00:00:00Z", var_hist: 9, var_garch: 8, var_fhs: 7 },
+      { label: "2026-03-03T00:00:00Z", pnl: 30, var_hist: 15, var_garch: 14, var_fhs: 13 },
+    ]);
+
+    expect(readXAxisLabels(option)).toEqual(["2026 03 01T00:00:00Z", "2026 03 03T00:00:00Z"]);
+    expect(readSeriesData(option, 0)).toEqual([10, 30]);
+    expect(readSeriesData(option, 1)).toEqual([6, 15]);
+    expect(readSeriesData(option, 2)).toEqual([5, 14]);
+    expect(readSeriesData(option, 3)).toEqual([4, 13]);
+  });
+
+  it("adds alpha series when var_alpha is available", () => {
+    const option = makeBacktestOption([
+      { label: "2026-03-01T00:00:00Z", pnl: 10, var_hist: 6, var_garch: 5, var_fhs: 4, var_alpha: 5.5 },
+      { label: "2026-03-02T00:00:00Z", pnl: 12, var_hist: 7, var_garch: 6, var_fhs: 5, var_alpha: Number.NaN },
+      { label: "2026-03-03T00:00:00Z", pnl: 9, var_hist: 8, var_garch: 7, var_fhs: 6, var_alpha: 6.2 },
+    ]);
+
+    const series = option.series as Array<{ name?: string }>;
+    expect(series.map((item) => item.name)).toContain("Alpha VaR");
+    expect(readSeriesData(option, 4)).toEqual([5.5, null, 6.2]);
+  });
+
   it("drops grouped categories where all series are invalid", () => {
     const option = makeGroupedBarOption(
       ["A", "B", "C", "D"],

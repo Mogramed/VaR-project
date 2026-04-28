@@ -1047,7 +1047,9 @@ class StorageReadRepository:
                 if portfolio_id is None:
                     return None
                 stmt = stmt.where(BacktestRunRecord.portfolio_id == portfolio_id)
-            record = session.scalars(stmt.order_by(BacktestRunRecord.created_at.desc(), BacktestRunRecord.id.desc())).first()
+            record = session.scalars(
+                stmt.order_by(BacktestRunRecord.created_at.desc(), BacktestRunRecord.id.desc()).limit(1)
+            ).first()
             return None if record is None else backtest_to_dict(record)
 
     def latest_validation_run(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
@@ -1058,7 +1060,29 @@ class StorageReadRepository:
                 if portfolio_id is None:
                     return None
                 stmt = stmt.where(ValidationRunRecord.portfolio_id == portfolio_id)
-            record = session.scalars(stmt.order_by(ValidationRunRecord.created_at.desc(), ValidationRunRecord.id.desc())).first()
+            record = session.scalars(
+                stmt.order_by(ValidationRunRecord.created_at.desc(), ValidationRunRecord.id.desc()).limit(1)
+            ).first()
+            return None if record is None else validation_to_dict(record)
+
+    def latest_validation_run_for_artifact(
+        self,
+        *,
+        source_artifact_id: int,
+        portfolio_slug: str | None = None,
+    ) -> dict[str, Any] | None:
+        with self.session_factory() as session:
+            stmt = select(ValidationRunRecord).where(
+                ValidationRunRecord.source_artifact_id == int(source_artifact_id)
+            )
+            if portfolio_slug:
+                portfolio_id = self._portfolio_id(session, portfolio_slug)
+                if portfolio_id is None:
+                    return None
+                stmt = stmt.where(ValidationRunRecord.portfolio_id == portfolio_id)
+            record = session.scalars(
+                stmt.order_by(ValidationRunRecord.created_at.desc(), ValidationRunRecord.id.desc()).limit(1)
+            ).first()
             return None if record is None else validation_to_dict(record)
 
     def recent_alerts(self, *, limit: int = 25) -> list[dict[str, Any]]:
@@ -1306,7 +1330,9 @@ class StorageReadRepository:
             stmt = select(MarketDataSyncRecord)
             if portfolio_slug:
                 stmt = stmt.where(MarketDataSyncRecord.portfolio_slug == str(portfolio_slug))
-            record = session.scalars(stmt.order_by(MarketDataSyncRecord.synced_at.desc(), MarketDataSyncRecord.id.desc())).first()
+            record = session.scalars(
+                stmt.order_by(MarketDataSyncRecord.synced_at.desc(), MarketDataSyncRecord.id.desc()).limit(1)
+            ).first()
             return None if record is None else market_data_sync_to_dict(record)
 
     def list_market_data_sync_runs(

@@ -6,6 +6,10 @@ import { DashboardActiveFilters } from "@/components/app-shell/dashboard-active-
 import { LiveOperatorAlerts } from "@/components/app-shell/live-operator-alerts";
 import { LivePostureBanner } from "@/components/app-shell/live-posture-banner";
 import { LiveRuntimeBadgeGroup } from "@/components/app-shell/live-runtime-badge-group";
+import {
+  DecisionAlphaForecastPanel,
+  DecisionAlphaReplayPanel,
+} from "@/components/app-shell/decision-alpha-panels";
 import { PageHeader } from "@/components/app-shell/page-header";
 import { ChartSurface } from "@/components/charts/chart-surface";
 import { DecisionHistoryTable } from "@/components/data/risk-tables";
@@ -13,7 +17,11 @@ import { TradeDecisionPanel } from "@/components/forms/trade-decision-panel";
 import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
 import { api } from "@/lib/api/client";
-import type { RiskDecisionResponse } from "@/lib/api/types";
+import type {
+  DecisionForecastResponse,
+  DecisionReplayResponse,
+  RiskDecisionResponse,
+} from "@/lib/api/types";
 import { CHART_PALETTE, makeBarOption, makeGroupedBarOption } from "@/lib/chart-options";
 import {
   deskArtifactQueryKey,
@@ -24,10 +32,18 @@ import { averageDecisionFillRatio, buildDecisionDeltaComparison, buildDecisionIm
 import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
 
 export function DecisionsLiveSurface({
-  portfolioSlug, initialDecisions,
-}: { portfolioSlug: string; initialDecisions: RiskDecisionResponse[] }) {
+  portfolioSlug,
+  initialDecisions,
+  initialReplay,
+  initialForecast,
+}: {
+  portfolioSlug: string;
+  initialDecisions: RiskDecisionResponse[];
+  initialReplay?: DecisionReplayResponse | null;
+  initialForecast?: DecisionForecastResponse | null;
+}) {
   const { liveState, transport, accountId } = useDeskLive();
-  const { matchesSymbol } = useDashboardPrefs();
+  const { matchesSymbol, preferredHorizonDays } = useDashboardPrefs();
   const queryClient = useQueryClient();
   const decisionsQueryKey = deskArtifactQueryKey("decisions", portfolioSlug, accountId ?? "default", 12);
   const decisionsQuery = useQuery({
@@ -44,6 +60,36 @@ export function DecisionsLiveSurface({
   const impactSeries = buildDecisionImpactSeries(decisions);
   const latest = decisions[0] ?? null;
   const liveCapital = liveState?.capital_usage ?? null;
+  const forecastSymbol = latest?.symbol ?? initialForecast?.symbol ?? "EURUSD";
+  const replayQuery = useQuery({
+    queryKey: deskArtifactQueryKey("decision-alpha-replay", portfolioSlug, accountId ?? "default", 200),
+    queryFn: () => api.decisionAlphaReplay(portfolioSlug, 200),
+    initialData: initialReplay ?? undefined,
+    ...deskArtifactQueryOptions,
+  });
+  const forecastQuery = useQuery({
+    queryKey: [
+      "decision-alpha-forecast",
+      portfolioSlug,
+      accountId ?? "default",
+      forecastSymbol,
+      preferredHorizonDays,
+    ],
+    queryFn: () =>
+      api.decisionAlphaForecast(forecastSymbol, {
+        portfolioSlug,
+        horizonDays: preferredHorizonDays,
+      }),
+    initialData:
+      initialForecast != null
+      && initialForecast.symbol === forecastSymbol
+      && initialForecast.horizon_days === preferredHorizonDays
+        ? initialForecast
+        : undefined,
+    ...deskArtifactQueryOptions,
+  });
+  const replay = replayQuery.data ?? initialReplay ?? null;
+  const forecast = forecastQuery.data ?? null;
 
   return (
     <div className="desk-page space-y-4">
@@ -119,6 +165,21 @@ export function DecisionsLiveSurface({
         <div className="space-y-2">
           <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Decision history</h4>
           <DecisionHistoryTable rows={decisions} />
+        </div>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <div className="space-y-2">
+          <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+            Decision Alpha replay
+          </h4>
+          <DecisionAlphaReplayPanel replay={replay} />
+        </div>
+        <div className="space-y-2">
+          <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+            Decision Alpha forecast ({forecastSymbol})
+          </h4>
+          <DecisionAlphaForecastPanel forecast={forecast} />
         </div>
       </div>
     </div>

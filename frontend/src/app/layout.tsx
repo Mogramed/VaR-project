@@ -14,6 +14,9 @@ export const metadata: Metadata = {
     template: "%s | VaR Risk Desk",
   },
   description: "MT5-first risk desk for portfolio VaR, execution guardrails, reconciliation and audit.",
+  icons: {
+    icon: "/favicon.ico",
+  },
 };
 
 export default function RootLayout({

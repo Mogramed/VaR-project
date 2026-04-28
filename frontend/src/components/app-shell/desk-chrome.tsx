@@ -49,6 +49,8 @@ const navItems: ReadonlyArray<{ href: string; label: string; icon: typeof Gauge;
   { href: "/desk/attribution", label: "Attribution", icon: BarChart3, pageId: "attribution" },
   { href: "/desk/capital", label: "Capital", icon: Landmark, pageId: "capital" },
   { href: "/desk/decisions", label: "Decisions", icon: ShieldCheck, pageId: "decisions" },
+  { href: "/desk/alpha/features", label: "Alpha Features", icon: Radar, pageId: "alpha-features" },
+  { href: "/desk/alpha/performance", label: "Alpha Replay", icon: BarChart3, pageId: "alpha-performance" },
   { href: "/desk/execution", label: "Execution", icon: BriefcaseBusiness, pageId: "execution" },
   { href: "/desk/stress", label: "Stress", icon: Flame, pageId: "stress" },
   { href: "/desk/blotter", label: "Blotter", icon: Orbit, pageId: "blotter" },
@@ -74,6 +76,49 @@ function StatusDot({ status }: { status: "ok" | "warn" | "off" }) {
         ? "bg-[var(--color-amber)]"
         : "bg-[var(--color-text-muted)]";
   return <span className={cn("inline-block size-1.5 rounded-full", color)} />;
+}
+
+function topbarButtonClassName(extra?: string) {
+  return cn(
+    "flex h-8 items-center gap-2 rounded-[12px] border border-[var(--color-border)] bg-[linear-gradient(180deg,rgba(24,28,36,0.96),rgba(11,14,20,0.98))] px-3 text-[11px] font-semibold tracking-[0.02em] text-[var(--color-text-soft)] transition-all duration-150 hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)] hover:shadow-[0_10px_30px_rgba(0,0,0,0.18)]",
+    extra,
+  );
+}
+
+function topbarPanelClassName(extra?: string) {
+  return cn(
+    "rounded-[18px] border border-[var(--color-border)] bg-[linear-gradient(180deg,rgba(18,22,30,0.96),rgba(9,11,17,0.99))] px-3 py-2 shadow-[0_18px_40px_rgba(0,0,0,0.16),inset_0_1px_0_rgba(255,255,255,0.03)]",
+    extra,
+  );
+}
+
+function RuntimeChip({
+  label,
+  status,
+  detail,
+  emphasis,
+}: {
+  label: string;
+  status: "ok" | "warn" | "off";
+  detail?: string | null;
+  emphasis?: string | null;
+}) {
+  return (
+    <div className="flex h-8 items-center gap-2 rounded-[12px] border border-[var(--color-border)] bg-[linear-gradient(180deg,rgba(20,23,31,0.96),rgba(10,12,18,0.98))] px-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+      <StatusDot status={status} />
+      <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--color-text-muted)]">
+        {label}
+      </span>
+      {detail ? (
+        <span className="text-[11px] text-[var(--color-text-soft)]">{detail}</span>
+      ) : null}
+      {emphasis ? (
+        <span className="mono text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--color-text-muted)]">
+          {emphasis}
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 function isAlertScopedToPortfolio(
@@ -194,11 +239,11 @@ export function DeskChrome({
   initialMt5Accounts: MT5AccountsResponse | null;
 }) {
   const router = useRouter();
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "/desk";
   const searchParams = useSearchParams();
-  const searchParamsText = searchParams.toString();
-  const requestedPortfolioSlug = searchParams.get("portfolio");
-  const requestedAccountId = searchParams.get("account");
+  const searchParamsText = searchParams?.toString() ?? "";
+  const requestedPortfolioSlug = searchParams?.get("portfolio") ?? null;
+  const requestedAccountId = searchParams?.get("account") ?? null;
   const [rememberedAccountId] = useState<string | null>(() => {
     if (typeof window === "undefined") {
       return null;
@@ -456,182 +501,233 @@ function DeskChromeFrame({
         {/* Topbar */}
         <header
           data-desk-topbar
-          className="flex h-11 shrink-0 items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg)] px-4"
+          className="grid shrink-0 gap-2.5 border-b border-[var(--color-border)] bg-[linear-gradient(180deg,rgba(13,15,20,0.98),rgba(8,10,14,0.98))] px-3 py-2.5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:px-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]"
         >
-          {/* Left: Portfolio + status */}
-          <div className="flex items-center gap-3">
-            {/* Portfolio dropdown */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => {
-                  setPortfolioDropdownOpen(!portfolioDropdownOpen);
-                  setAccountDropdownOpen(false);
-                }}
-                className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 text-xs font-medium text-[var(--color-text)] transition-colors hover:border-[var(--color-border-strong)]"
-              >
-                <BriefcaseBusiness className="size-3 text-[var(--color-text-muted)]" />
-                {portfolioSlug}
-                <ChevronDown className="size-3 text-[var(--color-text-muted)]" />
-              </button>
-              {portfolioDropdownOpen ? (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setPortfolioDropdownOpen(false)}
-                  />
-                  <div className="absolute left-0 top-full z-50 mt-1 min-w-[160px] rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-strong)] py-1 shadow-xl">
-                    {portfolios.map((p) => (
-                      <Link
-                        key={p.slug}
-                        href={buildDeskHref(pathname, p.slug)}
+          {/* Left: portfolio + runtime */}
+          <div className="flex min-w-0 flex-col gap-2">
+            <section className={topbarPanelClassName()}>
+              <div className="flex flex-wrap items-start justify-between gap-2.5">
+                <div className="min-w-0">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--color-text-muted)]">
+                    Desk Context
+                  </div>
+                </div>
+                {freshestUpdateAt ? (
+                  <div className="rounded-full border border-[var(--color-border)] bg-[rgba(255,255,255,0.02)] px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] text-[var(--color-text-muted)]">
+                    Updated {liveRelativeTime}
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                {/* Portfolio dropdown */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPortfolioDropdownOpen(!portfolioDropdownOpen);
+                      setAccountDropdownOpen(false);
+                    }}
+                    className={topbarButtonClassName("max-w-[240px] text-[var(--color-text)]")}
+                  >
+                    <BriefcaseBusiness className="size-3 text-[var(--color-text-muted)]" />
+                    <span className="max-w-[180px] truncate">{portfolioSlug}</span>
+                    <ChevronDown className="size-3 text-[var(--color-text-muted)]" />
+                  </button>
+                  {portfolioDropdownOpen ? (
+                    <>
+                      <div
+                        className="fixed inset-0 z-40"
                         onClick={() => setPortfolioDropdownOpen(false)}
-                        className={cn(
-                          "flex items-center gap-2 px-3 py-1.5 text-xs transition-colors",
-                          p.slug === portfolioSlug
-                            ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                            : "text-[var(--color-text-soft)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]",
-                        )}
-                      >
-                        {p.slug}
-                      </Link>
-                    ))}
-                  </div>
-                </>
-              ) : null}
-            </div>
-
-            {/* MT5 account dropdown */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => {
-                  setAccountDropdownOpen(!accountDropdownOpen);
-                  setPortfolioDropdownOpen(false);
-                }}
-                className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 text-xs font-medium text-[var(--color-text)] transition-colors hover:border-[var(--color-border-strong)]"
-              >
-                <Activity className="size-3 text-[var(--color-text-muted)]" />
-                <span className="hidden sm:inline">{activeAccountLabel}</span>
-                <span className="sm:hidden">{accountId ?? "account"}</span>
-                <ChevronDown className="size-3 text-[var(--color-text-muted)]" />
-              </button>
-              {accountDropdownOpen ? (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setAccountDropdownOpen(false)}
-                  />
-                  <div className="absolute left-0 top-full z-50 mt-1 min-w-[220px] rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-strong)] py-1 shadow-xl">
-                    {accountOptions.length === 0 ? (
-                      <div className="px-3 py-2 text-xs text-[var(--color-text-muted)]">
-                        No MT5 account available.
+                      />
+                      <div className="absolute left-0 top-full z-50 mt-1 min-w-[160px] rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-strong)] py-1 shadow-xl">
+                        {portfolios.map((p) => (
+                          <Link
+                            key={p.slug}
+                            href={buildDeskHref(pathname, p.slug)}
+                            onClick={() => setPortfolioDropdownOpen(false)}
+                            className={cn(
+                              "flex items-center gap-2 px-3 py-1.5 text-xs transition-colors",
+                              p.slug === portfolioSlug
+                                ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
+                                : "text-[var(--color-text-soft)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]",
+                            )}
+                          >
+                            {p.slug}
+                          </Link>
+                        ))}
                       </div>
-                    ) : (
-                      accountOptions.map((account) => (
-                        <Link
-                          key={account.account_id}
-                          href={buildDeskHref(pathname, portfolioSlug, account.account_id)}
-                          onClick={() => setAccountDropdownOpen(false)}
-                          className={cn(
-                            "flex items-center justify-between gap-2 px-3 py-1.5 text-xs transition-colors",
-                            account.account_id === accountId
-                              ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                              : "text-[var(--color-text-soft)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]",
-                          )}
-                        >
-                          <span className="truncate">{account.label}</span>
-                          {account.is_default ? (
-                            <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
-                              default
-                            </span>
-                          ) : null}
-                        </Link>
-                      ))
-                    )}
-                  </div>
-                </>
-              ) : null}
-            </div>
+                    </>
+                  ) : null}
+                </div>
 
-            {/* Status indicators */}
-            <div className="hidden items-center gap-3 text-[11px] text-[var(--color-text-muted)] md:flex">
-              <span className="flex items-center gap-1.5">
-                <StatusDot status={apiStatus as "ok" | "warn" | "off"} />
-                API
-              </span>
-              <span className="flex items-center gap-1.5">
-                {mt5Status === "ok" ? (
-                  <span className="relative inline-block size-1.5">
-                    <span className="absolute inset-0 animate-ping rounded-full bg-[var(--color-green)] opacity-40" />
-                    <span className="relative inline-block size-1.5 rounded-full bg-[var(--color-green)]" />
+                {/* MT5 account dropdown */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAccountDropdownOpen(!accountDropdownOpen);
+                      setPortfolioDropdownOpen(false);
+                    }}
+                    className={topbarButtonClassName("max-w-[260px] text-[var(--color-text)]")}
+                  >
+                    <Activity className="size-3 text-[var(--color-text-muted)]" />
+                    <span className="max-w-[170px] truncate">{activeAccountLabel}</span>
+                    <ChevronDown className="size-3 text-[var(--color-text-muted)]" />
+                  </button>
+                  {accountDropdownOpen ? (
+                    <>
+                      <div
+                        className="fixed inset-0 z-40"
+                        onClick={() => setAccountDropdownOpen(false)}
+                      />
+                      <div className="absolute left-0 top-full z-50 mt-1 min-w-[220px] rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-surface-strong)] py-1 shadow-xl">
+                        {accountOptions.length === 0 ? (
+                          <div className="px-3 py-2 text-xs text-[var(--color-text-muted)]">
+                            No MT5 account available.
+                          </div>
+                        ) : (
+                          accountOptions.map((account) => (
+                            <Link
+                              key={account.account_id}
+                              href={buildDeskHref(pathname, portfolioSlug, account.account_id)}
+                              onClick={() => setAccountDropdownOpen(false)}
+                              className={cn(
+                                "flex items-center justify-between gap-2 px-3 py-1.5 text-xs transition-colors",
+                                account.account_id === accountId
+                                  ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
+                                  : "text-[var(--color-text-soft)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]",
+                              )}
+                            >
+                              <span className="truncate">{account.label}</span>
+                              {account.is_default ? (
+                                <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
+                                  default
+                                </span>
+                              ) : null}
+                            </Link>
+                          ))
+                        )}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <RuntimeChip
+                  label="API"
+                  status={apiStatus as "ok" | "warn" | "off"}
+                  detail={health.status === "ok" ? "healthy" : String(health.status || "offline")}
+                />
+                <div className="flex h-8 items-center gap-2 rounded-[12px] border border-[var(--color-border)] bg-[linear-gradient(180deg,rgba(20,23,31,0.96),rgba(10,12,18,0.98))] px-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+                  {mt5Status === "ok" ? (
+                    <span className="relative inline-block size-1.5">
+                      <span className="absolute inset-0 animate-ping rounded-full bg-[var(--color-green)] opacity-40" />
+                      <span className="relative inline-block size-1.5 rounded-full bg-[var(--color-green)]" />
+                    </span>
+                  ) : (
+                    <StatusDot status={mt5Status as "ok" | "warn" | "off"} />
+                  )}
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--color-text-muted)]">
+                    MT5
                   </span>
-                ) : (
-                  <StatusDot status={mt5Status as "ok" | "warn" | "off"} />
-                )}
-                MT5
-                {transportLabel ? ` | ${transportLabel}` : ""}
-                {phaseLabel ? ` | ${phaseLabel}` : ""}
-                {runtimeDiagnostics.isRetrying && retryDelayLabel ? ` | retry ${retryDelayLabel}` : ""}
-                {runtimeDiagnostics.failureCount > 0 ? ` | fail ${runtimeDiagnostics.failureCount}` : ""}
-              </span>
-              <span className="mono text-[10px] tabular-nums">
-                {accountId ? `acct ${accountId}` : "acct n/a"}
-              </span>
-              {liveProfit != null ? (
-                <span className={cn(
-                  "mono text-[11px] font-semibold tabular-nums",
-                  liveProfit >= 0 ? "text-[var(--color-green)]" : "text-[var(--color-red)]",
-                )}>
-                  {liveProfit >= 0 ? "+" : ""}{liveProfit.toFixed(2)}
-                </span>
-              ) : null}
-              {freshestUpdateAt ? (
-                <span className="mono text-[10px] tabular-nums" title={formatTimestamp(freshestUpdateAt)}>
-                  {liveRelativeTime}
-                </span>
-              ) : null}
-            </div>
+                  <span className="text-[11px] text-[var(--color-text-soft)]">
+                    {[transportLabel, phaseLabel].filter(Boolean).join(" | ") || "linked"}
+                  </span>
+                  {runtimeDiagnostics.isRetrying && retryDelayLabel ? (
+                    <span className="mono text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--color-amber)]">
+                      retry {retryDelayLabel}
+                    </span>
+                  ) : null}
+                  {runtimeDiagnostics.failureCount > 0 ? (
+                    <span className="mono text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--color-red)]">
+                      fail {runtimeDiagnostics.failureCount}
+                    </span>
+                  ) : null}
+                </div>
+                <RuntimeChip
+                  label="Account"
+                  status="off"
+                  detail={activeAccountLabel}
+                  emphasis={accountId ?? "n/a"}
+                />
+                {liveProfit != null ? (
+                  <RuntimeChip
+                    label="PnL"
+                    status={liveProfit >= 0 ? "ok" : "warn"}
+                    detail={`${liveProfit >= 0 ? "+" : ""}${liveProfit.toFixed(2)}`}
+                  />
+                ) : null}
+                {freshestUpdateAt ? (
+                  <RuntimeChip
+                    label="Freshness"
+                    status={mt5Status as "ok" | "warn" | "off"}
+                    detail={liveRelativeTime}
+                    emphasis={formatTimestamp(freshestUpdateAt)}
+                  />
+                ) : null}
+              </div>
+            </section>
           </div>
 
-          {/* Center spacer */}
-          <div className="flex-1" />
+          {/* Right: operator controls */}
+          <div className="flex min-w-0 flex-col gap-2">
+            <section className={topbarPanelClassName("flex flex-wrap items-start justify-between gap-2.5")}>
+              <div className="min-w-0">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[var(--color-text-muted)]">
+                  Operator Controls
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {alertCount > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setInspectorOpen(true)}
+                    className={topbarButtonClassName("border-[var(--color-red)]/22 bg-[linear-gradient(180deg,rgba(84,24,24,0.26),rgba(27,16,18,0.98))] text-[var(--color-red)]")}
+                  >
+                    <AlertTriangle className="size-3.5" />
+                    <span>Alerts</span>
+                    <span className="rounded-full border border-[currentColor]/20 bg-[currentColor]/10 px-1.5 py-0.5 text-[10px] leading-none">
+                      {alertCount}
+                    </span>
+                  </button>
+                ) : null}
 
-          {/* Right: Actions + alerts */}
-          <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfigOpen(true);
+                    setInspectorOpen(false);
+                  }}
+                  title="Configure my view"
+                  className={topbarButtonClassName(
+                    cn(
+                      "hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]",
+                      configOpen && "border-[var(--color-accent)]/24 bg-[var(--color-accent-soft)] text-[var(--color-accent)]",
+                    ),
+                  )}
+                >
+                  <Settings2 className="size-3.5" />
+                  <span>Configure</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setInspectorOpen(true)}
+                  className={topbarButtonClassName(
+                    inspectorOpen
+                      ? "border-[var(--color-border-strong)] bg-[linear-gradient(180deg,rgba(31,35,46,0.98),rgba(15,18,24,0.98))] text-[var(--color-text)]"
+                      : undefined,
+                  )}
+                >
+                  <BarChart3 className="size-3.5" />
+                  <span>Panel</span>
+                </button>
+              </div>
+            </section>
+
             <OperatorActions portfolioSlug={portfolioSlug} accountId={accountId ?? undefined} />
-
-            {alertCount > 0 ? (
-              <button
-                type="button"
-                onClick={() => setInspectorOpen(true)}
-                className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-red)]/20 bg-[var(--color-red-soft)] px-2 text-[11px] font-medium text-[var(--color-red)] transition-colors hover:bg-[var(--color-red)]/20"
-              >
-                <AlertTriangle className="size-3" />
-                {alertCount}
-              </button>
-            ) : null}
-
-            <button
-              type="button"
-              onClick={() => {
-                setConfigOpen(true);
-                setInspectorOpen(false);
-              }}
-              title="Configure my view"
-              className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 text-[11px] text-[var(--color-text-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
-            >
-              <Settings2 className="size-3" />
-              <span className="hidden sm:inline">Configure</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setInspectorOpen(true)}
-              className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 text-[11px] text-[var(--color-text-muted)] transition-colors hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-soft)]"
-            >
-              Panel
-            </button>
           </div>
         </header>
 

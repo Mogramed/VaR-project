@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from var_project.api.dependencies import get_service
 from var_project.api.schemas import (
@@ -11,6 +11,7 @@ from var_project.api.schemas import (
     WorkerStatusResponse,
 )
 from var_project.api.service import DeskApiService
+from var_project.observability.metrics import build_metrics_payload
 
 
 router = APIRouter(tags=["health"])
@@ -52,3 +53,9 @@ def jobs_status(service: DeskApiService = Depends(get_service)) -> WorkerStatusR
 @router.get("/portfolios", response_model=list[PortfolioSummary])
 def list_portfolios(service: DeskApiService = Depends(get_service)) -> list[PortfolioSummary]:
     return [PortfolioSummary.model_validate(item) for item in service.list_portfolios()]
+
+
+@router.get("/metrics", include_in_schema=False)
+def metrics(service: DeskApiService = Depends(get_service)) -> Response:
+    payload, content_type = build_metrics_payload(service=service)
+    return Response(content=payload, headers={"Content-Type": content_type})

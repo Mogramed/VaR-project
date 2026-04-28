@@ -67,8 +67,8 @@ export function ModelsLiveSurface({
     ...deskArtifactQueryOptions,
   });
   const frameQuery = useQuery({
-    queryKey: deskArtifactQueryKey("models", "backtest-frame", portfolioSlug, 240),
-    queryFn: () => api.latestBacktestFrame(portfolioSlug, 240),
+    queryKey: deskArtifactQueryKey("models", "backtest-frame", portfolioSlug, 500),
+    queryFn: () => api.latestBacktestFrame(portfolioSlug, 500),
     initialData: initialFrame,
     ...deskArtifactQueryOptions,
   });
@@ -77,6 +77,11 @@ export function ModelsLiveSurface({
   const frame = frameQuery.data ?? initialFrame;
 
   const ranking = comparison?.ranking ?? [];
+  const championRow = (
+    ranking.find((row) => row.model === (comparison?.champion_model ?? "").toLowerCase())
+    ?? ranking[0]
+    ?? null
+  );
   const backtestSeries = frame ? buildBacktestSeries(frame) : [];
   const scoreSeries = comparison ? buildModelScoreSeries(comparison) : [];
   const fallbackSelectedModel = liveState?.risk_summary?.reference_model ?? comparison?.champion_model ?? validation?.best_model ?? "hist";
@@ -95,14 +100,18 @@ export function ModelsLiveSurface({
   const validationSummary = toRecord(validation?.summary);
   const validationModels = toRecord(validationSummary?.models);
   const selectedValidationModel = resolveValidationModelMetrics(validationModels, selectedModel, comparison?.champion_model ?? undefined);
+  const resolvedValidationAlpha = toNumber(validation?.alpha) ?? toNumber(comparison?.alpha);
+  const resolvedExpectedRate = toNumber(validation?.expected_rate) ?? toNumber(championRow?.expected_rate);
+  const resolvedExceptionRate = toNumber(championRow?.actual_rate) ?? resolvedExpectedRate;
   const selectedEsShortfallRatio = toNumber(selectedValidationModel?.es_shortfall_ratio);
   const selectedEsBreachRate = toNumber(selectedValidationModel?.es_breach_rate);
   const selectedEsTailObservations = toNumber(selectedValidationModel?.es_tail_observations);
   const selectedEsAcerbiStat = toNumber(selectedValidationModel?.es_acerbi_stat ?? selectedValidationModel?.es_acerbi_z);
-  const selectedEsAcerbiPValue = toNumber(selectedValidationModel?.es_acerbi_p_value ?? selectedValidationModel?.es_acerbi_p);
+  const selectedEsAcerbiPValue = toNumber(selectedValidationModel?.es_acerbi_p_value ?? selectedValidationModel?.es_acerbi_p)
+    ?? toNumber(championRow?.es_acerbi_p_value);
   const selectedEsAcerbiObservations = toNumber(
     selectedValidationModel?.es_acerbi_observations ?? selectedValidationModel?.es_acerbi_n,
-  );
+  ) ?? toNumber(championRow?.es_acerbi_observations);
   const hasEsAcerbiSample = selectedEsAcerbiObservations != null && selectedEsAcerbiObservations >= ES_ACERBI_MIN_OBSERVATIONS;
   const esAcerbiVerdict: ValidationVerdict = !hasEsAcerbiSample || selectedEsAcerbiPValue == null
     ? "N/A"
@@ -114,6 +123,8 @@ export function ModelsLiveSurface({
   const governanceSummary = toRecord(validationSurface?.governance_summary);
   const governanceStatusCounts = toRecord(governanceSummary?.status_counts);
   const governanceTotalPoints = toNumber(governanceSummary?.total_points);
+  const governanceEffectivePoints = toNumber(governanceSummary?.effective_points);
+  const governanceInsufficientSampleCount = toNumber(governanceSummary?.insufficient_sample_count);
   const governancePassCount = toNumber(governanceStatusCounts?.PASS);
   const governanceWarnCount = toNumber(governanceStatusCounts?.WARN);
   const governanceFailCount = toNumber(governanceStatusCounts?.FAIL);
@@ -147,7 +158,9 @@ export function ModelsLiveSurface({
     const rowWarnCount = toInteger(rowStatusCounts.WARN) ?? 0;
     const rowFailCount = toInteger(rowStatusCounts.FAIL) ?? 0;
     const rowTotalPoints = toInteger(row.total_points) ?? rowPassCount + rowWarnCount + rowFailCount;
-    const rowPassRate = toNumber(row.pass_rate) ?? (rowTotalPoints > 0 ? rowPassCount / rowTotalPoints : null);
+    const rowEffectivePoints = toInteger(row.effective_points) ?? 0;
+    const rowInsufficientSampleCount = toInteger(row.insufficient_sample_count) ?? Math.max(rowTotalPoints - rowEffectivePoints, 0);
+    const rowEffectivePassRate = toNumber(row.effective_pass_rate) ?? (rowEffectivePoints > 0 ? rowPassCount / rowEffectivePoints : null);
     const rowVerdict =
       normalizeValidationVerdict(row.verdict)
       ?? (rowFailCount > 0 ? "FAIL" : rowWarnCount > 0 ? "WARN" : rowPassCount > 0 ? "PASS" : "N/A");
@@ -157,13 +170,15 @@ export function ModelsLiveSurface({
       horizonDays,
       championModel: toUpper(row.champion_model),
       verdict: rowVerdict,
-      passRate: rowPassRate,
       passCount: rowPassCount,
       warnCount: rowWarnCount,
       failCount: rowFailCount,
       totalPoints: rowTotalPoints,
+      effectivePoints: rowEffectivePoints,
+      insufficientSampleCount: rowInsufficientSampleCount,
       confidenceLevel: rowConfidenceLevel,
       confidenceScore: rowConfidenceScore,
+      effectivePassRate: rowEffectivePassRate,
     };
   });
   const globalVerdict =
@@ -178,9 +193,25 @@ export function ModelsLiveSurface({
             ? "PASS"
             : "N/A"
     );
-  const governancePassRate = governanceTotalPoints && governanceTotalPoints > 0 && governancePassCount != null
-    ? governancePassCount / governanceTotalPoints
+  const governanceEffectivePassRate = governanceEffectivePoints && governanceEffectivePoints > 0 && governancePassCount != null
+    ? governancePassCount / governanceEffectivePoints
     : null;
+  const topRank = ranking.length > 0
+    ? Math.min(...ranking.map((row) => Number(row.rank ?? Number.POSITIVE_INFINITY)))
+    : null;
+  const tiedTopModels = topRank == null || !Number.isFinite(topRank)
+    ? []
+    : ranking
+      .filter((row) => Number(row.rank) === topRank)
+      .map((row) => row.model.toUpperCase());
+  const modelsSurfaceAlerts = (liveState?.operator_alerts ?? []).filter((alert) => {
+    const code = String(alert.code ?? "").toUpperCase();
+    return !(
+      code === "VALIDATION_ES_SAMPLE_THIN"
+      || code === "VALIDATION_SURFACE_SAMPLE_THIN"
+      || code === "VALIDATION_HORIZON_SAMPLE_THIN"
+    );
+  });
 
   return (
     <div className="desk-page space-y-4">
@@ -196,17 +227,28 @@ export function ModelsLiveSurface({
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-8">
         <MetricBlock label="Champion" value={(comparison?.champion_model ?? "n/a").toUpperCase()} />
         <MetricBlock label="Reporting champion" value={(comparison?.champion_model_reporting ?? comparison?.challenger_model ?? "n/a").toUpperCase()} />
-        <MetricBlock label="Exception rate" value={validation ? formatPercent(validation.expected_rate) : "n/a"} tone="warning" />
+        <MetricBlock
+          label="Exception rate"
+          value={resolvedExceptionRate == null ? "n/a" : formatPercent(resolvedExceptionRate)}
+          hint={resolvedExpectedRate == null ? undefined : `Expected ${formatPercent(resolvedExpectedRate)}`}
+          tone={
+            resolvedExceptionRate == null || resolvedExpectedRate == null
+              ? "neutral"
+              : resolvedExceptionRate > resolvedExpectedRate * 1.5
+                ? "warning"
+                : "success"
+          }
+        />
         <MetricBlock label="Score gap" value={comparison?.score_gap != null ? comparison.score_gap.toFixed(1) : "n/a"} tone="accent" />
         <MetricBlock
-          label="Stat checks"
-          value={governancePassRate == null ? "n/a" : formatPercent(governancePassRate, 0)}
+          label="Effective checks"
+          value={governanceEffectivePassRate == null ? "n/a" : formatPercent(governanceEffectivePassRate, 0)}
           hint={
             joinLabelParts(
               globalVerdict === "N/A" ? null : `Global ${globalVerdict}`,
-              governanceTotalPoints == null || governancePassCount == null
+              governanceEffectivePoints == null || governanceTotalPoints == null || governancePassCount == null
                 ? null
-                : `${Math.round(governancePassCount)}/${Math.round(governanceTotalPoints)} pass`,
+                : `${Math.round(governancePassCount)} PASS on ${Math.round(governanceEffectivePoints)}/${Math.round(governanceTotalPoints)} sampled points`,
               governanceConfidenceLevel === "UNKNOWN"
                 ? null
                 : governanceConfidenceScore == null
@@ -215,7 +257,9 @@ export function ModelsLiveSurface({
             ) || undefined
           }
           tone={
-            governanceFailCount == null
+            governanceEffectivePoints == null || governanceEffectivePoints <= 0
+              ? "neutral"
+              : governanceFailCount == null
               ? "neutral"
               : governanceFailCount > 0
                 ? "danger"
@@ -247,7 +291,12 @@ export function ModelsLiveSurface({
           hint={
             joinLabelParts(
               selectedEsAcerbiStat == null ? null : `z ${selectedEsAcerbiStat.toFixed(2)}`,
-              selectedEsAcerbiObservations == null ? null : `${Math.round(selectedEsAcerbiObservations)} obs`,
+              selectedEsAcerbiObservations == null
+                ? null
+                : hasEsAcerbiSample
+                  ? `${Math.round(selectedEsAcerbiObservations)} obs`
+                  : `${Math.round(selectedEsAcerbiObservations)}/${ES_ACERBI_MIN_OBSERVATIONS} obs`,
+              !hasEsAcerbiSample ? "insufficient sample" : null,
               esAcerbiVerdict === "N/A" ? null : esAcerbiVerdict,
             ) || undefined
           }
@@ -269,7 +318,26 @@ export function ModelsLiveSurface({
         />
       </section>
 
-      <LiveOperatorAlerts alerts={liveState?.operator_alerts ?? []} />
+      <LiveOperatorAlerts alerts={modelsSurfaceAlerts} />
+
+      {(governanceInsufficientSampleCount ?? 0) > 0 ? (
+        <div className="rounded-[var(--radius-lg)] border border-amber-500/25 bg-amber-500/8 px-3 py-2 text-[12px] text-[var(--color-text-soft)]">
+          The validation surface is still under-sampled:{" "}
+          <span className="font-semibold text-[var(--color-text)]">
+            {Math.round(governanceEffectivePoints ?? 0)}/{Math.round(governanceTotalPoints ?? 0)}
+          </span>{" "}
+          points currently meet the statistical floor, so zero rejection counts should be read as{" "}
+          <span className="font-semibold text-[var(--color-text)]">inconclusive</span>, not perfect.
+        </div>
+      ) : null}
+
+      {tiedTopModels.length > 1 ? (
+        <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-[12px] text-[var(--color-text-soft)]">
+          Multiple models are statistically tied at rank {topRank}:{" "}
+          <span className="font-semibold text-[var(--color-text)]">{tiedTopModels.join(", ")}</span>.{" "}
+          The current champion is the preferred tie-break candidate, not a materially dominant winner.
+        </div>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_300px]">
         <ChartSurface
@@ -292,7 +360,7 @@ export function ModelsLiveSurface({
               </div>
               <div className="flex items-center justify-between text-xs">
                 <span className="text-[var(--color-text-muted)]">Alpha</span>
-                <span className="mono text-[var(--color-text)]">{validation ? formatPercent(validation.alpha, 0) : "n/a"}</span>
+                <span className="mono text-[var(--color-text)]">{resolvedValidationAlpha == null ? "n/a" : formatPercent(resolvedValidationAlpha, 0)}</span>
               </div>
               <div className="flex items-center justify-between text-xs">
                 <span className="text-[var(--color-text-muted)]">Headroom</span>
@@ -307,9 +375,11 @@ export function ModelsLiveSurface({
               <div className="flex items-center justify-between text-xs">
                 <span className="text-[var(--color-text-muted)]">ES Acerbi z / p</span>
                 <span className="mono text-[var(--color-text)]">
-                  {selectedEsAcerbiStat == null || selectedEsAcerbiPValue == null
+                  {selectedEsAcerbiPValue == null
                     ? "n/a"
-                    : `${selectedEsAcerbiStat.toFixed(2)} / ${selectedEsAcerbiPValue.toFixed(4)}`}
+                    : selectedEsAcerbiStat == null
+                      ? `n/a / ${selectedEsAcerbiPValue.toFixed(4)}`
+                      : `${selectedEsAcerbiStat.toFixed(2)} / ${selectedEsAcerbiPValue.toFixed(4)}`}
                 </span>
               </div>
               <div className="flex items-center justify-between text-xs">
@@ -329,20 +399,28 @@ export function ModelsLiveSurface({
                 <StatusBadge label={globalVerdict} tone={verdictTone(globalVerdict)} />
               </div>
               <div className="flex items-center justify-between text-xs">
-                <span className="text-[var(--color-text-muted)]">Coverage fails</span>
+                <span className="text-[var(--color-text-muted)]">Sampled points</span>
                 <span className="mono text-[var(--color-text)]">
+                  {governanceEffectivePoints == null || governanceTotalPoints == null
+                    ? "n/a"
+                    : `${Math.round(governanceEffectivePoints)}/${Math.round(governanceTotalPoints)}`}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-[var(--color-text-muted)]">Coverage rejects</span>
+                <span className={`mono ${governanceEffectivePoints != null && governanceEffectivePoints <= 0 ? "text-[var(--color-text-muted)]" : "text-[var(--color-text)]"}`}>
                   {governanceCoverageFails == null ? "n/a" : Math.round(governanceCoverageFails)}
                 </span>
               </div>
               <div className="flex items-center justify-between text-xs">
-                <span className="text-[var(--color-text-muted)]">Independence fails</span>
-                <span className="mono text-[var(--color-text)]">
+                <span className="text-[var(--color-text-muted)]">Independence rejects</span>
+                <span className={`mono ${governanceEffectivePoints != null && governanceEffectivePoints <= 0 ? "text-[var(--color-text-muted)]" : "text-[var(--color-text)]"}`}>
                   {governanceIndependenceFails == null ? "n/a" : Math.round(governanceIndependenceFails)}
                 </span>
               </div>
               <div className="flex items-center justify-between text-xs">
-                <span className="text-[var(--color-text-muted)]">Conditional fails</span>
-                <span className="mono text-[var(--color-text)]">
+                <span className="text-[var(--color-text-muted)]">Conditional rejects</span>
+                <span className={`mono ${governanceEffectivePoints != null && governanceEffectivePoints <= 0 ? "text-[var(--color-text-muted)]" : "text-[var(--color-text)]"}`}>
                   {governanceConditionalFails == null ? "n/a" : Math.round(governanceConditionalFails)}
                 </span>
               </div>
@@ -374,8 +452,9 @@ export function ModelsLiveSurface({
                         H{row.horizonDays}d {row.championModel ? `(${row.championModel})` : ""}
                       </span>
                       <span className="mono text-[var(--color-text-soft)]">
-                        {row.passCount}/{row.totalPoints}
-                        {row.passRate == null ? "" : ` ${formatPercent(row.passRate, 0)}`}
+                        {row.effectivePoints}/{row.totalPoints} sampled
+                        {row.effectivePassRate == null ? "" : ` | PASS ${formatPercent(row.effectivePassRate, 0)}`}
+                        {row.insufficientSampleCount > 0 ? ` | under floor ${row.insufficientSampleCount}` : ""}
                         {row.confidenceScore == null ? "" : ` | ${row.confidenceLevel} ${row.confidenceScore.toFixed(0)}/100`}
                       </span>
                       <StatusBadge label={row.verdict} tone={verdictTone(row.verdict)} />
@@ -413,11 +492,20 @@ export function ModelsLiveSurface({
           {validationSurfacePoints.length > 0 ? (
             <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-[11px] text-[var(--color-text-soft)]">
               Validation surface loaded with {validationSurfacePoints.length} model / alpha / horizon points.
+              {governanceEffectivePoints != null && governanceTotalPoints != null ? (
+                <span className="block pt-1.5">
+                  Sampled points: {Math.round(governanceEffectivePoints)} / {Math.round(governanceTotalPoints)}
+                  {governanceInsufficientSampleCount != null ? ` | under floor ${Math.round(governanceInsufficientSampleCount)}` : ""}
+                </span>
+              ) : null}
               {governancePassCount != null && governanceWarnCount != null && governanceFailCount != null ? (
                 <span className="block pt-1.5">
                   Statistical checks: PASS {Math.round(governancePassCount)} | WARN {Math.round(governanceWarnCount)} | FAIL {Math.round(governanceFailCount)}
                 </span>
               ) : null}
+              <span className="block pt-1.5 text-[10px] text-[var(--color-text-muted)]">
+                Signal shows the primary VaR diagnostic. ES validation is reported separately in the ES columns.
+              </span>
             </div>
           ) : null}
         </div>

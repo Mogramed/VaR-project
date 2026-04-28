@@ -185,6 +185,7 @@ exports[`chart option resilience > anchors bar axis to zero when all values are 
       "color": "rgba(234,236,239,0.55)",
       "fontFamily": "IBM Plex Mono, monospace",
       "fontSize": 10,
+      "formatter": [Function],
       "margin": 12,
     },
     "axisLine": {
@@ -427,6 +428,7 @@ exports[`chart option resilience > drops grouped categories where all series are
       "color": "rgba(234,236,239,0.55)",
       "fontFamily": "IBM Plex Mono, monospace",
       "fontSize": 10,
+      "formatter": [Function],
       "margin": 12,
     },
     "axisLine": {
@@ -666,6 +668,7 @@ exports[`chart option resilience > filters invalid backtest rows and keeps null 
       "color": "rgba(234,236,239,0.55)",
       "fontFamily": "IBM Plex Mono, monospace",
       "fontSize": 10,
+      "formatter": [Function],
       "margin": 12,
     },
     "axisLine": {
@@ -842,6 +845,7 @@ exports[`chart option resilience > normalizes and sorts line series when timesta
       "color": "rgba(234,236,239,0.55)",
       "fontFamily": "IBM Plex Mono, monospace",
       "fontSize": 10,
+      "formatter": [Function],
       "margin": 12,
     },
     "axisLine": {
@@ -990,6 +994,7 @@ exports[`chart option resilience > returns a safe empty chart shape when all bar
       "color": "rgba(234,236,239,0.55)",
       "fontFamily": "IBM Plex Mono, monospace",
       "fontSize": 10,
+      "formatter": [Function],
       "margin": 12,
     },
     "axisLine": {
@@ -1166,6 +1171,7 @@ exports[`chart option resilience > sorts valid timestamps first and appends inva
       "color": "rgba(234,236,239,0.55)",
       "fontFamily": "IBM Plex Mono, monospace",
       "fontSize": 10,
+      "formatter": [Function],
       "margin": 12,
     },
     "axisLine": {

@@ -15,6 +15,7 @@ export default async function DeskReportsPage({
   const reportView = await loadDeskReportViewModel(portfolioSlug, {
     liveState: null,
     accountId,
+    freezeToReportScope: false,
   });
 
   return (

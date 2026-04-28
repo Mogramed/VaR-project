@@ -39,6 +39,7 @@ export function ExecutionPanel({
   terminalStatus,
   onSubmitted,
   initialSymbol,
+  initialTradeAction,
   initialExposureChange,
   initialSide,
 }: {
@@ -47,11 +48,13 @@ export function ExecutionPanel({
   terminalStatus: MT5TerminalStatusResponse;
   onSubmitted?: (result: ExecutionResultResponse) => void;
   initialSymbol?: string;
+  initialTradeAction?: "open" | "close";
   initialExposureChange?: number | null;
   initialSide?: "buy" | "sell";
 }) {
   const router = useRouter();
   const [symbol, setSymbol] = useState(initialSymbol ?? "EURUSD");
+  const [tradeAction, setTradeAction] = useState<"open" | "close">(initialTradeAction ?? "open");
   const [side, setSide] = useState<"buy" | "sell">(
     initialSide ?? ((initialExposureChange ?? 0) < 0 ? "sell" : "buy"),
   );
@@ -68,6 +71,10 @@ export function ExecutionPanel({
       setValidationError("Symbol is required");
       return false;
     }
+    if (tradeAction === "close" && exposureChange.trim() === "") {
+      setValidationError(null);
+      return true;
+    }
     const exposureValidation = validateExposureMagnitude(exposureChange);
     if (!exposureValidation.ok) {
       setValidationError(exposureValidation.error);
@@ -75,7 +82,22 @@ export function ExecutionPanel({
     }
     setValidationError(null);
     return true;
-  }, [symbol, exposureChange]);
+  }, [symbol, exposureChange, tradeAction]);
+
+  const normalizedExposureChange = useMemo(() => {
+    const parsedMagnitude = Number(exposureChange);
+    if (!Number.isFinite(parsedMagnitude)) {
+      return undefined;
+    }
+    const magnitude = Math.abs(parsedMagnitude);
+    if (magnitude <= 0) {
+      return undefined;
+    }
+    if (tradeAction === "close") {
+      return magnitude;
+    }
+    return (side === "buy" ? 1 : -1) * magnitude;
+  }, [exposureChange, side, tradeAction]);
 
   const previewMutation = useMutation({
     mutationFn: async () =>
@@ -83,7 +105,8 @@ export function ExecutionPanel({
         portfolio_slug: portfolioSlug,
         account_id: accountId,
         symbol,
-        exposure_change: (side === "buy" ? 1 : -1) * Number(exposureChange),
+        trade_action: tradeAction,
+        exposure_change: normalizedExposureChange,
         note,
       }),
   });
@@ -94,7 +117,8 @@ export function ExecutionPanel({
         portfolio_slug: portfolioSlug,
         account_id: accountId,
         symbol,
-        exposure_change: (side === "buy" ? 1 : -1) * Number(exposureChange),
+        trade_action: tradeAction,
+        exposure_change: normalizedExposureChange,
         note,
       }),
     onSuccess: (payload) => {
@@ -185,14 +209,21 @@ export function ExecutionPanel({
         ) : null}
 
         <FormSection title="Order parameters">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div>
+              <FieldLabel htmlFor="exec-action">Action</FieldLabel>
+              <FieldSelect id="exec-action" value={tradeAction} onChange={(e) => setTradeAction(e.target.value as "open" | "close")}>
+                <option value="open">Open / Adjust</option>
+                <option value="close">Close position</option>
+              </FieldSelect>
+            </div>
             <div>
               <FieldLabel htmlFor="exec-symbol">Symbol</FieldLabel>
               <FieldInputWithIcon icon={TrendingUp} id="exec-symbol" value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())} />
             </div>
             <div>
               <FieldLabel htmlFor="exec-side">Side</FieldLabel>
-              <FieldSelect id="exec-side" value={side} onChange={(e) => setSide(e.target.value as "buy" | "sell")}>
+              <FieldSelect id="exec-side" value={side} onChange={(e) => setSide(e.target.value as "buy" | "sell")} disabled={tradeAction === "close"}>
                 <option value="buy">Buy</option>
                 <option value="sell">Sell</option>
               </FieldSelect>
@@ -211,16 +242,19 @@ export function ExecutionPanel({
             value={exposureChange}
             onChange={(e) => setExposureChange(e.target.value)}
           />
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {executionPresets.map((p) => (
-              <PresetPill key={p} active={p === exposureChange} onClick={() => setExposureChange(p)}>
-                {formatCurrency(Number(p))}
-              </PresetPill>
-            ))}
-          </div>
+          {tradeAction === "open" ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {executionPresets.map((p) => (
+                <PresetPill key={p} active={p === exposureChange} onClick={() => setExposureChange(p)}>
+                  {formatCurrency(Number(p))}
+                </PresetPill>
+              ))}
+            </div>
+          ) : null}
           <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
-            Enter the portfolio exposure change you want. The platform converts it into broker lots,
-            runs guardrails, and shows the resulting risk and margin posture before submit.
+            {tradeAction === "close"
+              ? "Close mode uses this amount as the de-risking size. Leave it blank to close the full symbol exposure; any amount above current exposure is automatically capped."
+              : "Enter the portfolio exposure change you want. The platform converts it into broker lots, runs guardrails, and shows the resulting risk and margin posture before submit."}
           </p>
         </FormSection>
 
@@ -450,6 +484,22 @@ function ExecutionOutput({
           </div>
         </div>
       </div>
+
+      {riskDecision?.close_recommendation ? (
+        <div
+          className={`mt-3 rounded-[var(--radius-md)] border p-3 text-[11px] text-[var(--color-text-soft)] ${
+            riskDecision.close_recommendation.recommended
+              ? "border-[var(--color-amber)]/20 bg-[var(--color-amber-soft)]"
+              : "border-[var(--color-border)] bg-[var(--color-bg)]"
+          }`}
+        >
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Close recommendation</div>
+          <div className="mt-1">{riskDecision.close_recommendation.reason}</div>
+          <div className="mt-1.5 mono text-[var(--color-text)]">
+            Target change {formatSignedCurrency(riskDecision.close_recommendation.target_exposure_change)} (urgency {riskDecision.close_recommendation.urgency}, confidence {formatPercent(riskDecision.close_recommendation.confidence, 0)})
+          </div>
+        </div>
+      ) : null}
 
       {/* Reasons */}
       {(guard.reasons ?? []).length > 0 ? (

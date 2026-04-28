@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,29 @@ class WorkerSettings:
     backtest: ScheduledJob = ScheduledJob(enabled=True, interval_seconds=3600)
     live_refresh: ScheduledJob = ScheduledJob(enabled=False, interval_seconds=15)
     report: ScheduledJob = ScheduledJob(enabled=True, interval_seconds=3600)
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    raw = os.getenv(name)
+    if raw in {None, "", "null"}:
+        return max(int(default), int(minimum))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = int(default)
+    return max(int(value), int(minimum))
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw in {None, "", "null"}:
+        return bool(default)
+    normalized = str(raw).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
 
 
 def _scheduled_job(
@@ -110,10 +134,10 @@ def load_worker_settings(root: Path) -> WorkerSettings:
         enabled_default=True,
         interval_default=3600,
         timeframe_default=default_timeframe,
-        days_default=default_days,
+        days_default=None,
         min_coverage_default=data_defaults["min_coverage"],
         alpha_default=default_alpha,
-        window_default=default_window,
+        window_default=None,
         n_sims_default=mc_defaults["n_sims"],
         dist_default=mc_defaults["dist"],
         df_t_default=mc_defaults["df_t"],
@@ -142,8 +166,50 @@ def load_worker_settings(root: Path) -> WorkerSettings:
         interval_default=3600,
     )
 
+    snapshot = replace(
+        snapshot,
+        enabled=_env_bool("VAR_PROJECT_WORKER_SNAPSHOT_ENABLED", snapshot.enabled),
+        interval_seconds=_env_int(
+            "VAR_PROJECT_WORKER_SNAPSHOT_INTERVAL_SECONDS",
+            int(snapshot.interval_seconds),
+            minimum=1,
+        ),
+    )
+    backtest = replace(
+        backtest,
+        enabled=_env_bool("VAR_PROJECT_WORKER_BACKTEST_ENABLED", backtest.enabled),
+        interval_seconds=_env_int(
+            "VAR_PROJECT_WORKER_BACKTEST_INTERVAL_SECONDS",
+            int(backtest.interval_seconds),
+            minimum=1,
+        ),
+    )
+    live_refresh = replace(
+        live_refresh,
+        enabled=_env_bool("VAR_PROJECT_WORKER_LIVE_REFRESH_ENABLED", live_refresh.enabled),
+        interval_seconds=_env_int(
+            "VAR_PROJECT_WORKER_LIVE_REFRESH_INTERVAL_SECONDS",
+            int(live_refresh.interval_seconds),
+            minimum=1,
+        ),
+    )
+    report = replace(
+        report,
+        enabled=_env_bool("VAR_PROJECT_WORKER_REPORT_ENABLED", report.enabled),
+        interval_seconds=_env_int(
+            "VAR_PROJECT_WORKER_REPORT_INTERVAL_SECONDS",
+            int(report.interval_seconds),
+            minimum=1,
+        ),
+    )
+    loop_sleep_seconds = _env_int(
+        "VAR_PROJECT_WORKER_LOOP_SLEEP_SECONDS",
+        int(jobs_cfg.get("loop_sleep_seconds", 30)),
+        minimum=1,
+    )
+
     return WorkerSettings(
-        loop_sleep_seconds=int(jobs_cfg.get("loop_sleep_seconds", 30)),
+        loop_sleep_seconds=loop_sleep_seconds,
         snapshot=snapshot,
         backtest=backtest,
         live_refresh=live_refresh,
@@ -369,6 +435,64 @@ class JobRunner:
             "detail": detail,
         }
 
+    @staticmethod
+    def _scheduled_job_explicit_days(job_cfg: ScheduledJob) -> int | None:
+        raw_days = job_cfg.days
+        if raw_days in {None, "", "null"}:
+            return None
+        return max(int(raw_days), 1)
+
+    def _scheduled_backtest_sync_days(self, service: Any, job_cfg: ScheduledJob) -> int:
+        explicit_days = self._scheduled_job_explicit_days(job_cfg)
+        if explicit_days is not None:
+            return explicit_days
+        analytics = getattr(service, "analytics", None)
+        runtime = getattr(service, "runtime", None)
+        if analytics is None or runtime is None:
+            default_days = None
+            if runtime is not None:
+                default_days_fn = getattr(runtime, "_default_days", None)
+                if callable(default_days_fn):
+                    try:
+                        default_days = int(default_days_fn())
+                    except Exception:
+                        default_days = None
+            return max(int(default_days or 30), 1)
+        _, effective_days, _ = analytics._resolve_backtest_days(
+            requested_days=None,
+            window=int(job_cfg.window or analytics._default_backtest_window()),
+            alphas=[float(item) for item in runtime.risk_defaults["alphas"]],
+            horizons=[int(item) for item in runtime.risk_defaults["horizons"]],
+        )
+        return max(int(effective_days), 1)
+
+    def _scheduled_backtest_kwargs(
+        self,
+        service: Any,
+        job_cfg: ScheduledJob,
+        *,
+        portfolio_slug: str | None = None,
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {}
+        for key, value in {
+            "timeframe": job_cfg.timeframe,
+            "min_coverage": job_cfg.min_coverage,
+            "alpha": job_cfg.alpha,
+            "window": job_cfg.window,
+            "n_sims": job_cfg.n_sims,
+            "dist": job_cfg.dist,
+            "df_t": job_cfg.df_t,
+            "seed": job_cfg.seed,
+        }.items():
+            if value not in {None, "", "null"}:
+                kwargs[key] = value
+        explicit_days = self._scheduled_job_explicit_days(job_cfg)
+        if explicit_days is not None:
+            kwargs["days"] = explicit_days
+        if portfolio_slug not in {None, "", "null"}:
+            kwargs["portfolio_slug"] = str(portfolio_slug)
+        return kwargs
+
     def _run_job(self, job_name: str, job_cfg: ScheduledJob) -> dict[str, Any]:
         from var_project.api.service import DeskApiService
 
@@ -422,6 +546,7 @@ class JobRunner:
         if job_name == "backtest":
             portfolio = service.runtime._resolve_portfolio_context(None)
             portfolio_slug = str(portfolio.get("slug") or "")
+            sync_days = self._scheduled_backtest_sync_days(service, job_cfg)
             try:
                 if (
                     str(portfolio.get("mode") or "").lower() == "live_mt5"
@@ -430,20 +555,10 @@ class JobRunner:
                     service.runtime.market_data.sync_market_data_if_stale(
                         portfolio_slug=portfolio["slug"],
                         max_age_seconds=300.0,
-                        days=job_cfg.days,
+                        days=sync_days,
                         timeframes=[job_cfg.timeframe] if job_cfg.timeframe else None,
                     )
-                result = service.run_backtest(
-                    timeframe=job_cfg.timeframe,
-                    days=job_cfg.days,
-                    min_coverage=job_cfg.min_coverage,
-                    alpha=job_cfg.alpha,
-                    window=job_cfg.window,
-                    n_sims=job_cfg.n_sims,
-                    dist=job_cfg.dist,
-                    df_t=job_cfg.df_t,
-                    seed=job_cfg.seed,
-                )
+                result = service.run_backtest(**self._scheduled_backtest_kwargs(service, job_cfg))
             except Exception as exc:
                 degraded = self._build_mt5_unavailable_job_result(
                     job_name=job_name,
@@ -531,9 +646,11 @@ class JobRunner:
                                 compare_path = None if artifact is None else artifact.get("path")
                         if compare_path is None:
                             backtest_result = service.run_backtest(
-                                portfolio_slug=slug,
-                                timeframe=service.runtime._default_timeframe(),
-                                days=service.runtime._default_days(),
+                                **self._scheduled_backtest_kwargs(
+                                    service,
+                                    self.settings.backtest,
+                                    portfolio_slug=slug,
+                                )
                             )
                             compare_path = backtest_result.get("compare_csv")
                         fallback_report_result = service.run_report(compare_path=compare_path, portfolio_slug=slug)

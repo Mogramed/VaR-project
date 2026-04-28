@@ -6,6 +6,33 @@ import type { ChartMode } from "@/lib/chart-options";
 import { cn } from "@/lib/utils";
 import { countRenderablePoints } from "@/components/charts/chart-data-utils";
 
+const CHART_CHUNK_RELOAD_SESSION_KEY = "var:desk:chart-chunk-reload-at";
+const CHART_CHUNK_RELOAD_THROTTLE_MS = 45_000;
+
+function isChunkImportError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const normalized = message.toLowerCase();
+  return normalized.includes("chunkloaderror")
+    || normalized.includes("failed to load chunk")
+    || normalized.includes("loading chunk")
+    || normalized.includes("dynamically imported module")
+    || normalized.includes("/_next/static/chunks");
+}
+
+function maybeReloadForChunkImportError(error: unknown) {
+  if (typeof window === "undefined" || !isChunkImportError(error)) {
+    return;
+  }
+  const lastReloadAtRaw = window.sessionStorage.getItem(CHART_CHUNK_RELOAD_SESSION_KEY);
+  const lastReloadAt = lastReloadAtRaw == null ? 0 : Number.parseInt(lastReloadAtRaw, 10);
+  const now = Date.now();
+  if (Number.isFinite(lastReloadAt) && now - lastReloadAt < CHART_CHUNK_RELOAD_THROTTLE_MS) {
+    return;
+  }
+  window.sessionStorage.setItem(CHART_CHUNK_RELOAD_SESSION_KEY, String(now));
+  window.location.reload();
+}
+
 function ChartSkeleton({ height }: { height: number }) {
   return (
     <div className="relative overflow-hidden" style={{ height }}>
@@ -30,7 +57,12 @@ function ChartSkeleton({ height }: { height: number }) {
 }
 
 const ChartCore = dynamic(
-  () => import("@/components/charts/chart-core").then((module) => module.ChartCore),
+  () => import("@/components/charts/chart-core")
+    .then((module) => module.ChartCore)
+    .catch((error) => {
+      maybeReloadForChunkImportError(error);
+      throw error;
+    }),
   {
     ssr: false,
     loading: () => <ChartSkeleton height={340} />,

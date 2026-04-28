@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 import os
 from pathlib import Path
@@ -280,6 +281,28 @@ class DeskServiceRuntime:
     def strict_live_sources(self) -> tuple[str, ...]:
         return ("mt5_live_bridge", "mt5_live")
 
+    def effective_limits_config(self, portfolio: Mapping[str, Any]) -> dict[str, Any]:
+        limits_cfg = deepcopy(dict(self.limits_config or {}))
+        if not self.mt5_is_business_source_of_truth(portfolio):
+            return limits_cfg
+
+        # In live MT5 mode, broker state is the business source of truth.
+        # Avoid static local limits that can drift from the account reality.
+        limits_cfg.pop("model_limits_eur", None)
+
+        risk_budget_cfg = dict(limits_cfg.get("risk_budget") or {})
+        risk_budget_cfg["enforce_limits"] = False
+        risk_budget_cfg.pop("symbol_weights", None)
+        limits_cfg["risk_budget"] = risk_budget_cfg
+
+        capital_cfg = dict(limits_cfg.get("capital_management") or {})
+        capital_cfg["enforce_limits"] = False
+        capital_cfg.pop("symbol_weights", None)
+        capital_cfg.pop("model_budgets_eur", None)
+        capital_cfg.pop("total_budget_eur", None)
+        limits_cfg["capital_management"] = capital_cfg
+        return limits_cfg
+
     def strict_live_unavailable_error(
         self,
         *,
@@ -433,6 +456,7 @@ class DeskServiceRuntime:
         symbol: str,
         exposure_change: float | None = None,
         delta_position_eur: float | None = None,
+        trade_action: str | None = None,
         note: str | None,
         account_id: str | None = None,
         persist: bool,
@@ -443,6 +467,7 @@ class DeskServiceRuntime:
             symbol=symbol,
             exposure_change=exposure_change,
             delta_position_eur=delta_position_eur,
+            trade_action=trade_action,
             note=note,
             account_id=account_id,
             persist=persist,

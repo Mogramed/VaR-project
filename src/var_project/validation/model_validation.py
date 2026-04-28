@@ -155,6 +155,7 @@ class ValidationSurfacePoint:
     independence_pass: bool | None = None
     conditional_pass: bool | None = None
     statistical_status: str = VALIDATION_STATUS_WARN
+    raw_observations: int | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -177,6 +178,8 @@ class RankedModelComparison:
     es_acerbi_status: str = "N/A"
     es_acerbi_p_value: float | None = None
     es_acerbi_observations: int = 0
+    signal: str | None = None
+    signal_reason: str | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -273,6 +276,73 @@ def _es_acerbi_status(item: BacktestModelValidation) -> str:
     if bucket == 3:
         return VALIDATION_STATUS_FAIL
     return "N/A"
+
+
+def _format_probability_label(value: float | None) -> str:
+    numeric = _finite_float(value)
+    if numeric is None:
+        return "n/a"
+    if numeric < 1e-4:
+        return "<0.0001"
+    return f"{numeric:.4f}"
+
+
+def _format_rate_label(value: float | None) -> str:
+    numeric = _finite_float(value)
+    if numeric is None:
+        return "n/a"
+    return f"{numeric * 100.0:.2f}%"
+
+
+def _primary_model_signal(item: BacktestModelValidation) -> tuple[str, str]:
+    observed_rate = _format_rate_label(item.actual_rate)
+    expected_rate = _format_rate_label(item.expected_rate)
+    issues: list[str] = [f"Observed exception rate {observed_rate} versus expected {expected_rate}."]
+
+    uc_pass = _pvalue_pass(item.p_uc)
+    ind_pass = _pvalue_pass(item.p_ind)
+    cc_pass = _pvalue_pass(item.p_cc)
+    es_status = _es_acerbi_status(item)
+    traffic_light = str(item.traffic_light or "").strip().upper() or None
+
+    if uc_pass is False:
+        issues.append(f"Kupiec UC rejected coverage (p={_format_probability_label(item.p_uc)}).")
+    if ind_pass is False:
+        issues.append(f"Christoffersen IND rejected exception independence (p={_format_probability_label(item.p_ind)}).")
+    if cc_pass is False:
+        issues.append(f"Christoffersen CC rejected conditional coverage (p={_format_probability_label(item.p_cc)}).")
+    if traffic_light in {"GREEN", "YELLOW", "RED"}:
+        issues.append(f"Basel traffic light is {traffic_light} on the last 250 observations.")
+    if es_status not in {"", "N/A"} and int(item.es_acerbi_observations or 0) >= ES_ACERBI_MIN_OBSERVATIONS:
+        issues.append(
+            f"ES Acerbi status is {es_status} "
+            f"(p={_format_probability_label(item.es_acerbi_p_value)}, n={int(item.es_acerbi_observations or 0)})."
+        )
+
+    if cc_pass is False:
+        if uc_pass is False and ind_pass is False:
+            return "UC+IND FAIL", " ".join(issues)
+        if uc_pass is False:
+            return "UC FAIL", " ".join(issues)
+        if ind_pass is False:
+            return "IND FAIL", " ".join(issues)
+        return "CC FAIL", " ".join(issues)
+
+    if uc_pass is False:
+        return "UC WARN", " ".join(issues)
+    if ind_pass is False:
+        return "IND WARN", " ".join(issues)
+    if es_status == VALIDATION_STATUS_FAIL:
+        return "ES FAIL", " ".join(issues)
+    if es_status == VALIDATION_STATUS_WARN:
+        return "ES WARN", " ".join(issues)
+    if traffic_light == "RED":
+        return "BASEL RED", " ".join(issues)
+    if traffic_light == "YELLOW":
+        return "BASEL YELLOW", " ".join(issues)
+    if traffic_light == "GREEN":
+        return "BASEL GREEN", " ".join(issues)
+    return "PASS", " ".join(issues)
 
 
 def _finite_float(value: Any) -> float | None:
@@ -475,12 +545,32 @@ def _surface_dimensions(df: pd.DataFrame) -> tuple[list[str], list[float], list[
 
 
 def _surface_exc_series(df: pd.DataFrame, *, model: str, alpha: float, horizon_days: int) -> pd.Series | None:
+    stride = max(int(horizon_days), 1)
     for alpha_token in alpha_lookup_tokens(alpha):
         surface_col = f"exc_{model}_a{alpha_token}_h{int(horizon_days)}"
         if surface_col in df.columns:
-            return pd.to_numeric(df[surface_col], errors="coerce")
+            series = pd.to_numeric(df[surface_col], errors="coerce")
+            return series if stride <= 1 else series.iloc[::stride]
     if int(horizon_days) == 1 and f"exc_{model}" in df.columns:
         return pd.to_numeric(df[f"exc_{model}"], errors="coerce")
+    return None
+
+
+def _surface_exc_observation_count(
+    df: pd.DataFrame,
+    *,
+    model: str,
+    alpha: float,
+    horizon_days: int,
+) -> int | None:
+    for alpha_token in alpha_lookup_tokens(alpha):
+        surface_col = f"exc_{model}_a{alpha_token}_h{int(horizon_days)}"
+        if surface_col in df.columns:
+            series = pd.to_numeric(df[surface_col], errors="coerce")
+            return int(series.notna().sum())
+    if int(horizon_days) == 1 and f"exc_{model}" in df.columns:
+        series = pd.to_numeric(df[f"exc_{model}"], errors="coerce")
+        return int(series.notna().sum())
     return None
 
 
@@ -584,6 +674,33 @@ def _surface_min_required_observations(
     return int(max(int(VALIDATION_SURFACE_MIN_OBSERVATIONS), int(horizon_floor), expected_exception_floor))
 
 
+def recommended_backtest_history_days(
+    *,
+    alphas: Sequence[float],
+    horizons: Sequence[int],
+    window: int,
+) -> int:
+    resolved_window = max(int(window), 1)
+    resolved_horizons = sorted({int(item) for item in horizons if int(item) > 0})
+    resolved_alphas = sorted({float(item) for item in alphas if 0.0 < float(item) < 1.0})
+
+    if not resolved_horizons:
+        resolved_horizons = [1]
+    if not resolved_alphas:
+        resolved_alphas = [0.95]
+
+    max_required_observations = max(
+        _surface_min_required_observations(
+            max(1.0 - float(alpha), 1e-9),
+            horizon_days=int(horizon_days),
+        )
+        for alpha in resolved_alphas
+        for horizon_days in resolved_horizons
+    )
+    max_horizon = max(resolved_horizons, default=1)
+    return int(max_required_observations + resolved_window + max_horizon - 1)
+
+
 def _surface_has_sufficient_observations(
     n: int,
     expected_rate: float,
@@ -592,6 +709,18 @@ def _surface_has_sufficient_observations(
 ) -> bool:
     required = _surface_min_required_observations(expected_rate, horizon_days=horizon_days)
     return int(n) >= int(required)
+
+
+def _surface_point_observation_count(point: ValidationSurfacePoint) -> int:
+    raw_observations = point.raw_observations
+    if raw_observations is not None:
+        try:
+            resolved = int(raw_observations)
+        except (TypeError, ValueError):
+            resolved = 0
+        if resolved > 0:
+            return resolved
+    return int(point.n)
 
 
 def _surface_statistical_status(
@@ -648,9 +777,17 @@ def _surface_confidence_summary(points: list[ValidationSurfacePoint]) -> dict[st
             "confidence_reason": "No validation points available to score sample confidence.",
         }
 
+    required_observations = [
+        _surface_min_required_observations(
+            float(point.expected_rate),
+            horizon_days=int(point.horizon_days),
+        )
+        for point in points
+    ]
+    observed_observations = [_surface_point_observation_count(point) for point in points]
     point_scores = [
         _surface_sample_confidence(
-            n=int(point.n),
+            n=_surface_point_observation_count(point),
             expected_rate=float(point.expected_rate),
             horizon_days=int(point.horizon_days),
         )
@@ -662,7 +799,7 @@ def _surface_confidence_summary(points: list[ValidationSurfacePoint]) -> dict[st
             1
             for point in points
             if not _surface_has_sufficient_observations(
-                n=int(point.n),
+                n=_surface_point_observation_count(point),
                 expected_rate=float(point.expected_rate),
                 horizon_days=int(point.horizon_days),
             )
@@ -677,7 +814,8 @@ def _surface_confidence_summary(points: list[ValidationSurfacePoint]) -> dict[st
     if insufficient_sample_count > 0:
         confidence_reason = (
             f"Insufficient observations on {insufficient_sample_count}/{total_points} "
-            "validation points."
+            f"validation points (current n {min(observed_observations)}-{max(observed_observations)}, "
+            f"required {min(required_observations)}-{max(required_observations)} depending on alpha and horizon)."
         )
     elif confidence_level == "high":
         confidence_reason = "All validation points satisfy the configured sample-size floors."
@@ -690,6 +828,10 @@ def _surface_confidence_summary(points: list[ValidationSurfacePoint]) -> dict[st
         "confidence_score": round(float(confidence_ratio * 100.0), 1),
         "confidence_level": confidence_level,
         "confidence_reason": confidence_reason,
+        "min_observed_observations": int(min(observed_observations)),
+        "max_observed_observations": int(max(observed_observations)),
+        "min_required_observations": int(min(required_observations)),
+        "max_required_observations": int(max(required_observations)),
     }
 
 
@@ -718,7 +860,7 @@ def _surface_slice_validation_summary(points: list[ValidationSurfacePoint]) -> d
             1
             for point in points
             if not _surface_has_sufficient_observations(
-                n=int(point.n),
+                n=_surface_point_observation_count(point),
                 expected_rate=float(point.expected_rate),
                 horizon_days=int(point.horizon_days),
             )
@@ -731,7 +873,7 @@ def _surface_slice_validation_summary(points: list[ValidationSurfacePoint]) -> d
             for point in points
             if point.coverage_pass is False
             and _surface_has_sufficient_observations(
-                n=int(point.n),
+                n=_surface_point_observation_count(point),
                 expected_rate=float(point.expected_rate),
                 horizon_days=int(point.horizon_days),
             )
@@ -743,7 +885,7 @@ def _surface_slice_validation_summary(points: list[ValidationSurfacePoint]) -> d
             for point in points
             if point.independence_pass is False
             and _surface_has_sufficient_observations(
-                n=int(point.n),
+                n=_surface_point_observation_count(point),
                 expected_rate=float(point.expected_rate),
                 horizon_days=int(point.horizon_days),
             )
@@ -755,7 +897,7 @@ def _surface_slice_validation_summary(points: list[ValidationSurfacePoint]) -> d
             for point in points
             if point.conditional_pass is False
             and _surface_has_sufficient_observations(
-                n=int(point.n),
+                n=_surface_point_observation_count(point),
                 expected_rate=float(point.expected_rate),
                 horizon_days=int(point.horizon_days),
             )
@@ -827,7 +969,7 @@ def _surface_governance_summary(points: list[ValidationSurfacePoint]) -> dict[st
             1
             for point in points
             if not _surface_has_sufficient_observations(
-                n=int(point.n),
+                n=_surface_point_observation_count(point),
                 expected_rate=float(point.expected_rate),
                 horizon_days=int(point.horizon_days),
             )
@@ -840,7 +982,7 @@ def _surface_governance_summary(points: list[ValidationSurfacePoint]) -> dict[st
             for point in points
             if point.coverage_pass is False
             and _surface_has_sufficient_observations(
-                n=int(point.n),
+                n=_surface_point_observation_count(point),
                 expected_rate=float(point.expected_rate),
                 horizon_days=int(point.horizon_days),
             )
@@ -852,7 +994,7 @@ def _surface_governance_summary(points: list[ValidationSurfacePoint]) -> dict[st
             for point in points
             if point.independence_pass is False
             and _surface_has_sufficient_observations(
-                n=int(point.n),
+                n=_surface_point_observation_count(point),
                 expected_rate=float(point.expected_rate),
                 horizon_days=int(point.horizon_days),
             )
@@ -864,7 +1006,7 @@ def _surface_governance_summary(points: list[ValidationSurfacePoint]) -> dict[st
             for point in points
             if point.conditional_pass is False
             and _surface_has_sufficient_observations(
-                n=int(point.n),
+                n=_surface_point_observation_count(point),
                 expected_rate=float(point.expected_rate),
                 horizon_days=int(point.horizon_days),
             )
@@ -942,7 +1084,7 @@ def _surface_horizon_governance_summary(
                 1
                 for point in horizon_points
                 if not _surface_has_sufficient_observations(
-                    n=int(point.n),
+                    n=_surface_point_observation_count(point),
                     expected_rate=float(point.expected_rate),
                     horizon_days=int(point.horizon_days),
                 )
@@ -990,7 +1132,7 @@ def _surface_horizon_governance_summary(
                     for point in horizon_points
                     if point.coverage_pass is False
                     and _surface_has_sufficient_observations(
-                        n=int(point.n),
+                        n=_surface_point_observation_count(point),
                         expected_rate=float(point.expected_rate),
                         horizon_days=int(point.horizon_days),
                     )
@@ -1002,7 +1144,7 @@ def _surface_horizon_governance_summary(
                     for point in horizon_points
                     if point.independence_pass is False
                     and _surface_has_sufficient_observations(
-                        n=int(point.n),
+                        n=_surface_point_observation_count(point),
                         expected_rate=float(point.expected_rate),
                         horizon_days=int(point.horizon_days),
                     )
@@ -1014,7 +1156,7 @@ def _surface_horizon_governance_summary(
                     for point in horizon_points
                     if point.conditional_pass is False
                     and _surface_has_sufficient_observations(
-                        n=int(point.n),
+                        n=_surface_point_observation_count(point),
                         expected_rate=float(point.expected_rate),
                         horizon_days=int(point.horizon_days),
                     )
@@ -1090,6 +1232,12 @@ def validate_compare_surface(
                 exc_series = _surface_exc_series(df, model=model, alpha=alpha, horizon_days=horizon_days)
                 if exc_series is None:
                     continue
+                raw_observations = _surface_exc_observation_count(
+                    df,
+                    model=model,
+                    alpha=alpha,
+                    horizon_days=horizon_days,
+                )
                 exc = exc_series.dropna().astype(int)
                 uc = kupiec_uc(exc, alpha)
                 ind = christoffersen_ind(exc)
@@ -1107,7 +1255,7 @@ def validate_compare_surface(
                 independence_pass = _pvalue_pass(ind["p_ind"])
                 conditional_pass = _pvalue_pass(cc["p_cc"])
                 statistical_status = _surface_statistical_status(
-                    n=int(uc["n"]),
+                    n=int(raw_observations or uc["n"]),
                     expected_rate=expected_rate,
                     horizon_days=int(horizon_days),
                     coverage_pass=coverage_pass,
@@ -1132,6 +1280,7 @@ def validate_compare_surface(
                         independence_pass=independence_pass,
                         conditional_pass=conditional_pass,
                         statistical_status=statistical_status,
+                        raw_observations=raw_observations,
                     )
                 )
             slice_points = [
@@ -1252,27 +1401,39 @@ def rank_validation_models(
     vars_map = dict(current_var or {})
     es_map = dict(current_es or {})
     ranked = sorted(summary.model_results.values(), key=_rank_key)
+    rows: list[RankedModelComparison] = []
+    previous_key: tuple[int, float, float, int, float] | None = None
+    previous_rank = 0
 
-    return [
-        RankedModelComparison(
-            rank=idx + 1,
-            model=item.model,
-            score=float(item.score),
-            actual_rate=float(item.actual_rate),
-            expected_rate=float(item.expected_rate),
-            exceptions=int(item.exceptions),
-            p_uc=float(item.p_uc),
-            p_ind=float(item.p_ind),
-            p_cc=float(item.p_cc),
-            traffic_light=item.traffic_light,
-            current_var=None if vars_map.get(item.model) is None else float(vars_map[item.model]),
-            current_es=None if es_map.get(item.model) is None else float(es_map[item.model]),
-            es_acerbi_status=_es_acerbi_status(item),
-            es_acerbi_p_value=_finite_float(item.es_acerbi_p_value),
-            es_acerbi_observations=int(item.es_acerbi_observations or 0),
+    for idx, item in enumerate(ranked, start=1):
+        current_key = _rank_key(item)
+        assigned_rank = previous_rank if previous_key == current_key else idx
+        signal, signal_reason = _primary_model_signal(item)
+        rows.append(
+            RankedModelComparison(
+                rank=assigned_rank,
+                model=item.model,
+                score=float(item.score),
+                actual_rate=float(item.actual_rate),
+                expected_rate=float(item.expected_rate),
+                exceptions=int(item.exceptions),
+                p_uc=float(item.p_uc),
+                p_ind=float(item.p_ind),
+                p_cc=float(item.p_cc),
+                traffic_light=item.traffic_light,
+                current_var=None if vars_map.get(item.model) is None else float(vars_map[item.model]),
+                current_es=None if es_map.get(item.model) is None else float(es_map[item.model]),
+                es_acerbi_status=_es_acerbi_status(item),
+                es_acerbi_p_value=_finite_float(item.es_acerbi_p_value),
+                es_acerbi_observations=int(item.es_acerbi_observations or 0),
+                signal=signal,
+                signal_reason=signal_reason,
+            )
         )
-        for idx, item in enumerate(ranked)
-    ]
+        previous_key = current_key
+        previous_rank = assigned_rank
+
+    return rows
 
 
 def build_champion_challenger_summary(
@@ -1283,7 +1444,10 @@ def build_champion_challenger_summary(
 ) -> ChampionChallengerSummary:
     ranking = rank_validation_models(summary, current_var=current_var, current_es=current_es)
     champion = ranking[0] if ranking else None
-    challenger = ranking[1] if len(ranking) > 1 else None
+    challenger = None if champion is None else next(
+        (row for row in ranking[1:] if int(row.rank) > int(champion.rank)),
+        None,
+    )
     champion_model = None if champion is None else champion.model
 
     return ChampionChallengerSummary(

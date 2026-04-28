@@ -3,20 +3,28 @@ disable_existing_loggers: false
 
 formatters:
   standard:
-    format: "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+    format: "%(asctime)s | %(levelname)s | %(name)s | req=%(request_id)s run=%(run_id)s account=%(account_id)s action=%(action)s | %(message)s"
     datefmt: "%Y-%m-%d %H:%M:%S"
+  json:
+    class: var_project.observability.logging.JsonLogFormatter
+
+filters:
+  correlation:
+    "()": var_project.observability.logging.CorrelationContextFilter
 
 handlers:
   console:
     class: logging.StreamHandler
     level: INFO
     formatter: standard
+    filters: [correlation]
     stream: ext://sys.stdout
 
   file:
     class: logging.handlers.RotatingFileHandler
-    level: DEBUG
+    level: INFO
     formatter: standard
+    filters: [correlation]
     filename: reports/logs/var_project.log
     maxBytes: 1048576     # 1MB
     backupCount: 5
@@ -28,6 +36,6 @@ root:
 
 loggers:
   var_project:
-    level: DEBUG
+    level: INFO
     handlers: [console, file]
     propagate: false

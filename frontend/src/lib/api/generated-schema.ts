@@ -872,6 +872,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/decisions/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Replay Decision Alpha */
+        get: operations["trading_replay_decision_alpha"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/decisions/forecast": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Forecast Decision Alpha */
+        get: operations["trading_forecast_decision_alpha"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/decisions/trajectory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Decision Alpha Backtest Trajectory */
+        get: operations["trading_decision_alpha_backtest_trajectory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/decisions/portfolio-forecast": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Decision Alpha Portfolio Forecast */
+        get: operations["trading_decision_alpha_portfolio_forecast"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/execution/preview": {
         parameters: {
             query?: never;
@@ -1504,6 +1572,284 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** DecisionBacktestTrajectoryPointResponse */
+        DecisionBacktestTrajectoryPointResponse: {
+            /** Timestamp */
+            timestamp: string;
+            /** Predicted Price */
+            predicted_price: number;
+            /** Actual Price */
+            actual_price: number;
+            /** Predicted Return */
+            predicted_return: number;
+            /** Realized Return */
+            realized_return: number;
+            /** Predicted Score */
+            predicted_score: number;
+            /** Hit */
+            hit?: boolean | null;
+        };
+        /** DecisionBacktestTrajectoryResponse */
+        DecisionBacktestTrajectoryResponse: {
+            /**
+             * Model Version
+             * @default decision_alpha_v1
+             */
+            model_version: string;
+            /** Generated At */
+            generated_at: string;
+            /** Portfolio Slug */
+            portfolio_slug?: string | null;
+            /** Symbol */
+            symbol: string;
+            /** Lookback Days */
+            lookback_days: number;
+            /** Sample Size */
+            sample_size: number;
+            /** Hit Rate */
+            hit_rate: number;
+            /** Mean Abs Error */
+            mean_abs_error: number;
+            /** Model Runtime */
+            model_runtime?: {
+                [key: string]: unknown;
+            } | null;
+            /** Predicted Vs Actual */
+            predicted_vs_actual?: components["schemas"]["DecisionBacktestTrajectoryPointResponse"][];
+        };
+        /** DecisionForecastPathPointResponse */
+        DecisionForecastPathPointResponse: {
+            /** Day */
+            day: number;
+            /** Date */
+            date: string;
+            /** Price */
+            price: number;
+        };
+        /** DecisionForecastResponse */
+        DecisionForecastResponse: {
+            /**
+             * Model Version
+             * @default decision_alpha_v1
+             */
+            model_version: string;
+            /** Generated At */
+            generated_at: string;
+            /** Symbol */
+            symbol: string;
+            /** Horizon Days */
+            horizon_days: number;
+            /** Current Price */
+            current_price: number;
+            /** Score */
+            score: number;
+            /** Probability Up */
+            probability_up: number;
+            /** Model Runtime */
+            model_runtime?: {
+                [key: string]: unknown;
+            } | null;
+            /** Features */
+            features?: {
+                [key: string]: number;
+            };
+            /** Scenarios */
+            scenarios?: components["schemas"]["DecisionForecastScenarioResponse"][];
+        };
+        /** DecisionForecastScenarioResponse */
+        DecisionForecastScenarioResponse: {
+            /** Name */
+            name: string;
+            /** Probability */
+            probability: number;
+            /** Projected Return */
+            projected_return: number;
+            /** Path */
+            path?: components["schemas"]["DecisionForecastPathPointResponse"][];
+        };
+        /** DecisionIntelligenceResponse */
+        DecisionIntelligenceResponse: {
+            /** Signal */
+            signal: string;
+            /** Score */
+            score: number;
+            /** Confidence */
+            confidence: number;
+            /** Size Multiplier */
+            size_multiplier: number;
+            /** Top Drivers */
+            top_drivers?: string[];
+            /**
+             * Model Version
+             * @default decision_alpha_v1
+             */
+            model_version: string;
+            /**
+             * Guardrail Applied
+             * @default false
+             */
+            guardrail_applied: boolean;
+            /** Model Runtime */
+            model_runtime?: {
+                [key: string]: unknown;
+            } | null;
+            /** Features */
+            features?: {
+                [key: string]: number;
+            };
+            /** Feature Contributions */
+            feature_contributions?: {
+                [key: string]: number;
+            };
+            /** Calculations */
+            calculations?: {
+                [key: string]: number;
+            };
+        };
+        /** CloseRecommendationResponse */
+        CloseRecommendationResponse: {
+            /**
+             * Recommended
+             * @default false
+             */
+            recommended: boolean;
+            /**
+             * Urgency
+             * @default low
+             */
+            urgency: "low" | "medium" | "high";
+            /**
+             * Confidence
+             * @default 0
+             */
+            confidence: number;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /**
+             * Current Exposure
+             * @default 0
+             */
+            current_exposure: number;
+            /**
+             * Target Exposure Change
+             * @default 0
+             */
+            target_exposure_change: number;
+            /**
+             * Target Resulting Exposure
+             * @default 0
+             */
+            target_resulting_exposure: number;
+        };
+        /** DecisionPortfolioForecastResponse */
+        DecisionPortfolioForecastResponse: {
+            /**
+             * Model Version
+             * @default decision_alpha_v1
+             */
+            model_version: string;
+            /** Generated At */
+            generated_at: string;
+            /** Portfolio Slug */
+            portfolio_slug?: string | null;
+            /** Horizon Days */
+            horizon_days: number;
+            /** Symbol Count */
+            symbol_count: number;
+            /** Current Notional Eur */
+            current_notional_eur: number;
+            /** Symbols */
+            symbols?: components["schemas"]["DecisionPortfolioSymbolForecastResponse"][];
+            /** Pnl Scenarios */
+            pnl_scenarios?: components["schemas"]["DecisionPortfolioPnlScenarioResponse"][];
+            /** Model Runtime */
+            model_runtime?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** DecisionPortfolioPnlPointResponse */
+        DecisionPortfolioPnlPointResponse: {
+            /** Day */
+            day: number;
+            /** Date */
+            date: string;
+            /** Pnl */
+            pnl: number;
+        };
+        /** DecisionPortfolioPnlScenarioResponse */
+        DecisionPortfolioPnlScenarioResponse: {
+            /** Name */
+            name: string;
+            /** Probability */
+            probability: number;
+            /** Projected Return */
+            projected_return: number;
+            /** Path */
+            path?: components["schemas"]["DecisionPortfolioPnlPointResponse"][];
+        };
+        /** DecisionPortfolioSymbolForecastResponse */
+        DecisionPortfolioSymbolForecastResponse: {
+            /** Symbol */
+            symbol: string;
+            /** Exposure Eur */
+            exposure_eur: number;
+            /** Weight */
+            weight: number;
+            forecast: components["schemas"]["DecisionForecastResponse"];
+        };
+        /** DecisionReplayPointResponse */
+        DecisionReplayPointResponse: {
+            /** Timestamp */
+            timestamp: string;
+            /** Decision Id */
+            decision_id?: number | null;
+            /** Symbol */
+            symbol: string;
+            /** Predicted Score */
+            predicted_score: number;
+            /** Predicted Signal */
+            predicted_signal: string;
+            /** Realized Pnl */
+            realized_pnl: number;
+            /** Hit */
+            hit?: boolean | null;
+            /** Cum Pnl */
+            cum_pnl: number;
+        };
+        /** DecisionReplayResponse */
+        DecisionReplayResponse: {
+            /**
+             * Model Version
+             * @default decision_alpha_v1
+             */
+            model_version: string;
+            /** Generated At */
+            generated_at: string;
+            /** Portfolio Slug */
+            portfolio_slug?: string | null;
+            /** Lookback Days */
+            lookback_days?: number | null;
+            /** Model Runtime */
+            model_runtime?: {
+                [key: string]: unknown;
+            } | null;
+            /** Sample Size */
+            sample_size: number;
+            /** Hit Rate */
+            hit_rate: number;
+            /** Cum Pnl */
+            cum_pnl: number;
+            /**
+             * Comparables
+             * @default 0
+             */
+            comparables: number;
+            /** Predicted Vs Realized */
+            predicted_vs_realized?: components["schemas"]["DecisionReplayPointResponse"][];
+        };
         /** DeskDefinitionResponse */
         DeskDefinitionResponse: {
             /** Slug */
@@ -1648,6 +1994,7 @@ export interface components {
             /** Pending Orders */
             pending_orders?: components["schemas"]["MT5PendingOrderResponse"][];
             risk_decision: components["schemas"]["RiskDecisionResponse"];
+            decision_intelligence?: components["schemas"]["DecisionIntelligenceResponse"] | null;
             guard: components["schemas"]["ExecutionGuardDecisionResponse"];
             /** Order Request */
             order_request?: {
@@ -1691,7 +2038,12 @@ export interface components {
             /** Symbol */
             symbol: string;
             /** Exposure Change */
-            exposure_change: number;
+            exposure_change?: number | null;
+            /**
+             * Trade Action
+             * @default open
+             */
+            trade_action?: "open" | "close" | null;
             /** Note */
             note?: string | null;
         };
@@ -2743,6 +3095,10 @@ export interface components {
             es_acerbi_p_value?: number | null;
             /** Es Acerbi Observations */
             es_acerbi_observations?: number | null;
+            /** Signal */
+            signal?: string | null;
+            /** Signal Reason */
+            signal_reason?: string | null;
         };
         /** OperatorAlertResponse */
         OperatorAlertResponse: {
@@ -3696,6 +4052,11 @@ export interface components {
             window?: number | null;
             /** Symbol */
             symbol: string;
+            /**
+             * Trade Action
+             * @default open
+             */
+            trade_action?: "open" | "close" | null;
             /** Decision */
             decision: string;
             /** Requested Exposure Change */
@@ -3714,6 +4075,8 @@ export interface components {
             note?: string | null;
             pre_trade: components["schemas"]["RiskDecisionStateResponse"];
             post_trade: components["schemas"]["RiskDecisionStateResponse"];
+            decision_intelligence?: components["schemas"]["DecisionIntelligenceResponse"] | null;
+            close_recommendation?: components["schemas"]["CloseRecommendationResponse"] | null;
         };
         /** RiskDecisionStateResponse */
         RiskDecisionStateResponse: {
@@ -3971,7 +4334,12 @@ export interface components {
             /** Symbol */
             symbol: string;
             /** Exposure Change */
-            exposure_change: number;
+            exposure_change?: number | null;
+            /**
+             * Trade Action
+             * @default open
+             */
+            trade_action?: "open" | "close" | null;
             /** Note */
             note?: string | null;
         };
@@ -4374,6 +4742,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 portfolio_slug?: string | null;
+                report_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -4405,6 +4774,7 @@ export interface operations {
         parameters: {
             query?: {
                 portfolio_slug?: string | null;
+                report_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -4436,6 +4806,7 @@ export interface operations {
         parameters: {
             query?: {
                 portfolio_slug?: string | null;
+                report_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -5671,6 +6042,138 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RiskDecisionResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trading_replay_decision_alpha: {
+        parameters: {
+            query?: {
+                portfolio_slug?: string | null;
+                limit?: number;
+                lookback_days?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionReplayResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trading_forecast_decision_alpha: {
+        parameters: {
+            query: {
+                symbol: string;
+                portfolio_slug?: string | null;
+                horizon_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionForecastResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trading_decision_alpha_backtest_trajectory: {
+        parameters: {
+            query: {
+                symbol: string;
+                portfolio_slug?: string | null;
+                lookback_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionBacktestTrajectoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trading_decision_alpha_portfolio_forecast: {
+        parameters: {
+            query?: {
+                portfolio_slug?: string | null;
+                horizon_days?: number;
+                symbols?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionPortfolioForecastResponse"];
                 };
             };
             /** @description Validation Error */

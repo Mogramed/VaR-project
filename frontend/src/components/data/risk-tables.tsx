@@ -12,10 +12,13 @@ import { DataGrid } from "@/components/data/data-grid";
 import { StatusBadge } from "@/components/ui/primitives";
 import { formatCurrency, formatPercent, formatTimestamp } from "@/lib/utils";
 
+const ES_ACERBI_MIN_OBSERVATIONS = 60;
+
 function tone(v: string) {
   const s = v.toLowerCase();
-  if (s.includes("reject") || s.includes("breach") || s.includes("critical") || s.includes("failed")) return "danger" as const;
-  if (s.includes("reduce") || s.includes("warn") || s.includes("partial") || s.includes("manual") || s.includes("drift") || s.includes("hold")) return "warning" as const;
+  if (s.includes("reject") || s.includes("breach") || s.includes("critical") || s.includes("failed") || s.includes("fail") || s.includes(" red")) return "danger" as const;
+  if (s.includes("reduce") || s.includes("warn") || s.includes("partial") || s.includes("manual") || s.includes("drift") || s.includes("hold") || s.includes("yellow") || s.includes("amber")) return "warning" as const;
+  if (s.includes("green")) return "success" as const;
   if (s.includes("accept") || s.includes("ok") || s.includes("stable") || s.includes("executed") || s.includes("connected") || s.includes("pass")) return "success" as const;
   if (s.includes("champion")) return "accent" as const;
   return "neutral" as const;
@@ -51,15 +54,30 @@ export function ModelRankingTable({ rows }: { rows: ModelComparisonRow[] }) {
       accessorKey: "es_acerbi_p_value",
       header: "ES p",
       cell: ({ row }) => {
+        const status = String(row.original.es_acerbi_status ?? "").toUpperCase();
+        const observations = Number(row.original.es_acerbi_observations ?? 0);
+        if (!status || status === "N/A" || observations < ES_ACERBI_MIN_OBSERVATIONS) {
+          return "-";
+        }
         const pValue = row.original.es_acerbi_p_value;
         return pValue == null ? "-" : <span className="mono">{pValue.toFixed(4)}</span>;
       },
     },
     {
-      accessorKey: "traffic_light",
+      accessorKey: "signal",
       header: "Signal",
-      cell: ({ row }) =>
-        row.original.traffic_light ? <StatusBadge label={row.original.traffic_light} tone={tone(row.original.traffic_light)} /> : "-",
+      cell: ({ row }) => {
+        const signal = row.original.signal;
+        if (!signal) {
+          return "-";
+        }
+        const reason = row.original.signal_reason;
+        return (
+          <span title={reason ?? undefined}>
+            <StatusBadge label={signal} tone={tone(signal)} />
+          </span>
+        );
+      },
     },
   ];
   return <DataGrid data={rows} columns={cols} maxHeight="28rem" />;

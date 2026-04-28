@@ -16,13 +16,14 @@ import { useRecentExecutionActivity } from "@/lib/use-recent-execution-activity"
 
 
 export function ExecutionLiveSurface({
-  portfolioSlug, initialTerminalStatus, initialExecutions, initialFills, initialSymbol, initialExposureChange, initialSide,
+  portfolioSlug, initialTerminalStatus, initialExecutions, initialFills, initialSymbol, initialTradeAction, initialExposureChange, initialSide,
 }: {
   portfolioSlug: string;
   initialTerminalStatus: MT5TerminalStatusResponse;
   initialExecutions: ExecutionResultResponse[];
   initialFills: ExecutionFillResponse[];
   initialSymbol?: string;
+  initialTradeAction?: "open" | "close";
   initialExposureChange?: number | null;
   initialSide?: "buy" | "sell";
 }) {
@@ -69,6 +70,7 @@ export function ExecutionLiveSurface({
         terminalStatus={status}
         onSubmitted={pushExecutionResult}
         initialSymbol={initialSymbol}
+        initialTradeAction={initialTradeAction}
         initialExposureChange={initialExposureChange}
         initialSide={initialSide}
       />

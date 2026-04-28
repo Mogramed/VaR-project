@@ -12,7 +12,7 @@ import yaml
 from var_project.alerts.engine import alerts_from_live_snapshot, alerts_from_validation_summary
 from var_project.reporting.charts import _plot_exceptions, _plot_pnl_vs_var
 from var_project.reporting.metrics import _count_exceptions, _infer_models, _parse_alpha_from_name
-from var_project.validation.model_validation import validate_compare_frame
+from var_project.validation.model_validation import rank_validation_models, validate_compare_frame
 
 
 def _latest_file(dir_path: Path, pattern: str) -> Optional[Path]:
@@ -151,6 +151,11 @@ def render_daily_markdown(
 
     exceptions = {model: _count_exceptions(df, model) for model in models}
     validation = validate_compare_frame(df, alpha if alpha is not None else 0.95)
+    validation_surface = dict(validation.surface or {})
+    governance = dict(validation_surface.get("governance_summary") or {})
+    pvalue_threshold = _as_float(governance.get("pvalue_threshold"))
+    if pvalue_threshold is None:
+        pvalue_threshold = 0.05
 
     limits = _load_limits(risk_limits_yaml) if risk_limits_yaml else {}
     traffic_light_limits = limits.get("backtest_traffic_light_99_250") or {}
@@ -301,6 +306,7 @@ def render_daily_markdown(
                 lines.append("### Risk Contributions")
                 if preferred_model:
                     lines.append(f"- Attribution model: **{str(preferred_model).upper()}**")
+                lines.append("")
                 if position_rows:
                     lines.append("| Symbol | Asset class | Exposure | cVaR | cES | iVaR | iES | Contrib ES |")
                     lines.append("|---|---|---:|---:|---:|---:|---:|---:|")
@@ -412,38 +418,33 @@ def render_daily_markdown(
             lines.append(f"- zone_ewma: **{snapshot_limits.get('zone_ewma')}**")
             lines.append("")
 
+    ranking_rows = rank_validation_models(validation)
+    ranked_validation = [(row.model, validation.model_results[row.model]) for row in ranking_rows]
+
     lines.append("## Backtest Summary (from compare CSV)")
-    lines.append("| Model | Exceptions | Traffic light (99%/250 only) |")
-    lines.append("|---|---:|---|")
-    for model_name, exception_count in exceptions.items():
-        traffic_light = "n/a"
-        if alpha is not None and abs(alpha - 0.99) < 1e-6:
-            if exception_count <= green_max:
-                traffic_light = "GREEN"
-            elif exception_count <= yellow_max:
-                traffic_light = "YELLOW"
-            else:
-                traffic_light = "RED"
-        lines.append(f"| {model_name} | {exception_count} | {traffic_light} |")
+    lines.append("| Model | Rank | Exceptions | Rate | p(UC) | p(CC) | Signal | Verdict |")
+    lines.append("|---|---:|---:|---|---:|---:|---|---|")
+    for row in ranking_rows:
+        result = validation.model_results[row.model]
+        verdict = _validation_verdict(
+            p_uc=result.p_uc,
+            p_ind=result.p_ind,
+            p_cc=result.p_cc,
+            threshold=float(pvalue_threshold),
+        )
+        lines.append(
+            f"| {str(row.model).upper()} | {int(row.rank)} | {int(result.exceptions)} | "
+            f"{_fmt_percent(_as_float(result.actual_rate), 2)} / {_fmt_percent(_as_float(result.expected_rate), 2)} | "
+            f"{_fmt_number(_as_float(result.p_uc), 4)} | {_fmt_number(_as_float(result.p_cc), 4)} | "
+            f"{str(getattr(row, 'signal', None) or 'PASS').upper()} | {verdict} |"
+        )
+    if not ranking_rows:
+        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
     lines.append("")
 
     lines.append("## Model Validation")
-    validation_surface = dict(validation.surface or {})
-    governance = dict(validation_surface.get("governance_summary") or {})
     horizon_governance = dict(validation_surface.get("horizon_governance") or {})
-    pvalue_threshold = _as_float(governance.get("pvalue_threshold"))
-    if pvalue_threshold is None:
-        pvalue_threshold = 0.05
 
-    ranked_validation = sorted(
-        list(validation.model_results.items()),
-        key=lambda item: (
-            -float(item[1].score),
-            abs(float(item[1].actual_rate) - float(item[1].expected_rate)),
-            int(item[1].exceptions),
-            str(item[0]).lower(),
-        ),
-    )
     champion_name = (
         str(validation.best_model).lower()
         if validation.best_model
@@ -459,7 +460,11 @@ def render_daily_markdown(
     if champion_entry is not None:
         _, champion_result = champion_entry
         champion_model = str(champion_result.model).upper()
-        champion_traffic = str(champion_result.traffic_light or "n/a").upper()
+        champion_traffic = (
+            str(champion_result.traffic_light or "UNAVAILABLE").upper()
+            if alpha is not None and abs(alpha - 0.99) < 1e-6
+            else "99%/250 only"
+        )
         champion_verdict = _validation_verdict(
             p_uc=champion_result.p_uc,
             p_ind=champion_result.p_ind,
@@ -471,31 +476,37 @@ def render_daily_markdown(
             f"- Champion verdict: **{champion_verdict}** | "
             f"Traffic light: **{champion_traffic}**"
         )
+    top_rank = min((int(row.rank) for row in ranking_rows), default=0)
+    tied_top_models = [str(row.model).upper() for row in ranking_rows if int(row.rank) == top_rank]
+    if len(tied_top_models) > 1:
+        lines.append(
+            f"- Rank {top_rank} statistical tie: **{' / '.join(tied_top_models)}** "
+            "share the same ranking key (score, breach profile and coverage distance)."
+        )
     lines.append(f"- Statistical threshold (p-value): **{_fmt_percent(pvalue_threshold, 1)}**")
     lines.append("")
     lines.append(
         "| Model | Rank | Score | Exceptions | Rate (actual / expected) | "
         "p(UC) | p(IND) | p(CC) | ES tail n | ES shortfall ratio | ES breach rate | "
-        "ES Acerbi n | ES Acerbi z | ES Acerbi p | Traffic light | Verdict |"
+        "ES Acerbi n | ES Acerbi z | ES Acerbi p | Signal | Basel light | Verdict |"
     )
-    lines.append("|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|")
-    lines.append(
-        "_ES tail diagnostics are measured on VaR exceedance observations "
-        "(tail observations where portfolio loss is greater than VaR)._"
-    )
-    lines.append("")
-    for rank, (_, result) in enumerate(ranked_validation, start=1):
+    lines.append("|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|")
+    for rank_row, (_, result) in zip(ranking_rows, ranked_validation, strict=False):
         verdict = _validation_verdict(
             p_uc=result.p_uc,
             p_ind=result.p_ind,
             p_cc=result.p_cc,
             threshold=float(pvalue_threshold),
         )
-        traffic_light = str(result.traffic_light or "n/a").upper()
+        traffic_light = (
+            str(result.traffic_light or "UNAVAILABLE").upper()
+            if alpha is not None and abs(alpha - 0.99) < 1e-6
+            else "99%/250 only"
+        )
         actual_rate = _fmt_percent(_as_float(result.actual_rate), 2)
         expected_rate = _fmt_percent(_as_float(result.expected_rate), 2)
         lines.append(
-            f"| {str(result.model).upper()} | {rank} | {_fmt_number(result.score, 2)} | "
+            f"| {str(result.model).upper()} | {int(rank_row.rank)} | {_fmt_number(result.score, 2)} | "
             f"{result.exceptions}/{result.n} | {actual_rate} / {expected_rate} | "
             f"{_fmt_number(_as_float(result.p_uc), 4)} | {_fmt_number(_as_float(result.p_ind), 4)} | "
             f"{_fmt_number(_as_float(result.p_cc), 4)} | {int(result.es_tail_observations)} | "
@@ -504,10 +515,15 @@ def render_daily_markdown(
             f"{_as_int(getattr(result, 'es_acerbi_observations', 0))} | "
             f"{_fmt_number(_as_float(getattr(result, 'es_acerbi_stat', None)), 3)} | "
             f"{_fmt_number(_as_float(getattr(result, 'es_acerbi_p_value', None)), 4)} | "
-            f"{traffic_light} | {verdict} |"
+            f"{str(getattr(rank_row, 'signal', None) or 'PASS').upper()} | {traffic_light} | {verdict} |"
         )
     if not ranked_validation:
-        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
+        lines.append("| n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
+    lines.append("")
+    lines.append(
+        "_ES tail diagnostics are measured on VaR exceedance observations "
+        "(tail observations where portfolio loss is greater than VaR)._"
+    )
 
     if governance:
         status_counts = {
@@ -525,6 +541,8 @@ def render_daily_markdown(
         coverage_fail_count = _as_int(governance.get("coverage_fail_count"))
         independence_fail_count = _as_int(governance.get("independence_fail_count"))
         conditional_fail_count = _as_int(governance.get("conditional_fail_count"))
+        effective_points = _as_int(governance.get("effective_points"))
+        insufficient_sample_count = _as_int(governance.get("insufficient_sample_count"))
         confidence_score = _as_float(governance.get("confidence_score"))
         confidence_level = str(governance.get("confidence_level") or "").strip().lower() or None
         confidence_reason = str(governance.get("confidence_reason") or "").strip() or None
@@ -547,15 +565,19 @@ def render_daily_markdown(
             f"- PASS/WARN/FAIL points: **{pass_count} / {warn_count} / {fail_count}** "
             f"(total **{total_points}**)"
         )
+        lines.append(
+            f"- Sampled points: **{effective_points} / {total_points}** | "
+            f"Under sample floor: **{insufficient_sample_count}**"
+        )
         lines.append(f"- Statistical pass rate: **{_fmt_percent(pass_rate, 1)}**")
         lines.append(
             f"- Traffic lights G/Y/R: **{traffic_counts.get('GREEN', 0)} / "
             f"{traffic_counts.get('YELLOW', 0)} / {traffic_counts.get('RED', 0)}**"
         )
         lines.append(
-            f"- Coverage fails: **{coverage_fail_count}** | "
-            f"Independence fails: **{independence_fail_count}** | "
-            f"Conditional fails: **{conditional_fail_count}**"
+            f"- Coverage rejections (sampled points only): **{coverage_fail_count}** | "
+            f"Independence rejections: **{independence_fail_count}** | "
+            f"Conditional rejections: **{conditional_fail_count}**"
         )
         if confidence_level or confidence_score is not None:
             level_label = str(confidence_level or "unknown").upper()

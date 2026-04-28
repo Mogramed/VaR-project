@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -13,12 +14,88 @@ from var_project.api.services.runtime import DeskServiceRuntime
 from var_project.core.config_validation import validate_backtest_history_compatibility
 from var_project.engine.risk_engine import RiskEngine
 from var_project.reporting.render import render_daily_markdown
+from var_project.validation.model_validation import recommended_backtest_history_days
 from var_project.validation.workflows import persist_validation_summary
 
 
 class DeskAnalyticsService:
     def __init__(self, runtime: DeskServiceRuntime):
         self.runtime = runtime
+
+    def _default_backtest_window(self) -> int:
+        raw_risk_cfg = dict(self.runtime.raw_config.get("risk") or {})
+        configured_validation_window = raw_risk_cfg.get("validation_window_days")
+        configured_live_window = self.runtime.risk_defaults.get("window")
+        try:
+            validation_window = (
+                0
+                if configured_validation_window in {None, "", "null"}
+                else int(configured_validation_window)
+            )
+        except (TypeError, ValueError):
+            validation_window = 0
+        try:
+            live_window = int(configured_live_window or 0)
+        except (TypeError, ValueError):
+            live_window = 0
+        if validation_window > 0:
+            return max(validation_window, live_window, 250)
+        return max(live_window, 1)
+
+    def _fallback_backtest_window_for_limited_history(
+        self,
+        *,
+        selected_window: int,
+        selected_days: int,
+        explicit_window: int | None,
+    ) -> int | None:
+        if explicit_window is not None:
+            return None
+        raw_risk_cfg = dict(self.runtime.raw_config.get("risk") or {})
+        configured_validation_window = raw_risk_cfg.get("validation_window_days")
+        try:
+            validation_window = (
+                0
+                if configured_validation_window in {None, "", "null"}
+                else int(configured_validation_window)
+            )
+        except (TypeError, ValueError):
+            validation_window = 0
+        if validation_window <= 0 or validation_window >= 250:
+            return None
+        if int(selected_window) < 250:
+            return None
+
+        try:
+            live_window = int(self.runtime.risk_defaults.get("window") or 0)
+        except (TypeError, ValueError):
+            live_window = 0
+        horizons = [int(item) for item in list(self.runtime.risk_defaults.get("horizons") or []) if int(item) > 0]
+        max_horizon = max(horizons, default=1)
+        max_compatible_window = max(int(selected_days) - int(max_horizon), 1)
+        fallback_window = min(max(live_window, validation_window, 1), int(max_compatible_window))
+        if fallback_window >= int(selected_window):
+            return None
+        return int(fallback_window)
+
+    @staticmethod
+    def _extract_selected_model_from_report_markdown(report_path: Path) -> str | None:
+        try:
+            content = report_path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        patterns = (
+            r"^- Champion model:\s+\*\*(?P<model>[a-z0-9_]+)\*\*",
+            r"^- Best model by score:\s+\*\*(?P<model>[a-z0-9_]+)\*\*",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, content, flags=re.IGNORECASE | re.MULTILINE)
+            if match is None:
+                continue
+            model = str(match.group("model")).strip().lower()
+            if model:
+                return model
+        return None
 
     def _default_no_exposure_epsilon(self) -> float:
         raw_default = self.runtime.risk_defaults.get("no_exposure_epsilon_eur")
@@ -94,6 +171,129 @@ class DeskAnalyticsService:
             parsed = self._parse_timeline_column(normalized[column], column=column)
             normalized[column] = parsed.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         return normalized
+
+    @staticmethod
+    def _attach_alpha_backtest_var(frame: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add an adaptive `var_alpha` overlay from existing VaR models.
+
+        The blend uses inverse trailing absolute error (vs realized loss) so
+        better-performing models get higher weights while remaining robust when
+        history is short or partially missing.
+        """
+        if frame.empty or "pnl" not in frame.columns:
+            return frame
+
+        candidate_models: list[str] = []
+        for column in frame.columns:
+            normalized = str(column).strip().lower()
+            if not normalized.startswith("var_"):
+                continue
+            if "_a" in normalized and "_h" in normalized:
+                continue
+            model = normalized[len("var_") :]
+            if not model or model == "alpha":
+                continue
+            candidate_models.append(model)
+
+        deduped_models: list[str] = []
+        seen_models: set[str] = set()
+        for model in candidate_models:
+            if model in seen_models:
+                continue
+            seen_models.add(model)
+            deduped_models.append(model)
+        if not deduped_models:
+            return frame
+
+        var_frame = pd.DataFrame(
+            {
+                model: pd.to_numeric(frame[f"var_{model}"], errors="coerce")
+                for model in deduped_models
+                if f"var_{model}" in frame.columns
+            },
+            index=frame.index,
+        )
+        if var_frame.empty or var_frame.notna().sum().sum() <= 0:
+            return frame
+
+        losses = -pd.to_numeric(frame["pnl"], errors="coerce")
+        errors = var_frame.sub(losses, axis=0).abs()
+
+        rolling_error = errors.rolling(window=60, min_periods=12).mean().shift(1)
+        expanding_error = errors.expanding(min_periods=2).mean().shift(1)
+        historical_error = rolling_error.fillna(expanding_error)
+
+        quality = (1.0 / historical_error.clip(lower=1e-6)).fillna(0.0)
+        available = var_frame.notna()
+        weights = quality.where(available, 0.0)
+
+        fallback_weights = available.astype(float)
+        fallback_weights = fallback_weights.div(fallback_weights.sum(axis=1), axis=0).fillna(0.0)
+        empty_rows = weights.sum(axis=1) <= 0.0
+        if bool(empty_rows.any()):
+            weights.loc[empty_rows, :] = fallback_weights.loc[empty_rows, :]
+
+        weights = weights.div(weights.sum(axis=1).where(lambda series: series > 0.0), axis=0).fillna(0.0)
+        alpha_var = (weights * var_frame).sum(axis=1)
+        alpha_var = alpha_var.where(available.any(axis=1), float("nan"))
+        alpha_var = alpha_var.abs()
+
+        if "var_hist" in frame.columns:
+            fallback_var = pd.to_numeric(frame["var_hist"], errors="coerce").abs()
+        else:
+            fallback_var = var_frame.mean(axis=1).abs()
+        alpha_var = alpha_var.fillna(fallback_var)
+
+        enriched = frame.copy()
+        enriched["var_alpha"] = pd.to_numeric(alpha_var, errors="coerce")
+        return enriched
+
+    def _tracked_history_days(self) -> int:
+        days_list = [
+            int(value)
+            for value in list(self.runtime.data_defaults.get("history_days_list") or [])
+            if str(value).strip()
+        ]
+        configured_history_days = max(days_list, default=0)
+        try:
+            market_history_days = int(self.runtime.data_defaults.get("market_history_days") or 0)
+        except (TypeError, ValueError):
+            market_history_days = 0
+        return int(max(configured_history_days, market_history_days, 0))
+
+    def _resolve_backtest_days(
+        self,
+        *,
+        requested_days: int | None,
+        window: int,
+        alphas: list[float],
+        horizons: list[int],
+        enforce_minimum_depth: bool = False,
+    ) -> tuple[int, int, int]:
+        normalized_requested_days = int(requested_days or self.runtime._default_days())
+        tracked_history_days = self._tracked_history_days()
+        recommended_days = recommended_backtest_history_days(
+            alphas=alphas,
+            horizons=horizons,
+            window=window,
+        )
+
+        effective_days = normalized_requested_days
+        if tracked_history_days > 0:
+            effective_days = min(effective_days, tracked_history_days) if requested_days is not None else effective_days
+            if requested_days is None:
+                effective_days = max(effective_days, min(recommended_days, tracked_history_days))
+        if enforce_minimum_depth and requested_days is not None:
+            if tracked_history_days > 0:
+                minimum_depth_days = min(int(recommended_days), int(tracked_history_days))
+            else:
+                minimum_depth_days = int(recommended_days)
+            effective_days = max(int(effective_days), int(minimum_depth_days))
+            if tracked_history_days > 0:
+                effective_days = min(int(effective_days), int(tracked_history_days))
+        effective_days = max(int(effective_days), 1)
+        return normalized_requested_days, effective_days, int(recommended_days)
 
     def _resolve_report_snapshot(
         self,
@@ -271,18 +471,61 @@ class DeskAnalyticsService:
         self.runtime.require_storage_ready()
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
         selected_timeframe = timeframe or self.runtime._default_timeframe()
-        selected_days = int(days or self.runtime._default_days())
         selected_min_coverage = float(min_coverage or self.runtime.data_defaults["min_coverage"])
-        selected_window = int(window or self.runtime.risk_defaults["window"])
-        validate_backtest_history_compatibility(
-            self.runtime.data_defaults,
-            self.runtime.risk_defaults,
-            days=selected_days,
+        selected_window = int(window or self._default_backtest_window())
+        selected_alphas = [float(item) for item in self.runtime.risk_defaults["alphas"]]
+        selected_horizons = [int(item) for item in self.runtime.risk_defaults["horizons"]]
+        requested_days, selected_days, recommended_days = self._resolve_backtest_days(
+            requested_days=days,
             window=selected_window,
-            context="backtest",
+            alphas=selected_alphas,
+            horizons=selected_horizons,
+            enforce_minimum_depth=self.runtime.is_live_portfolio(portfolio),
         )
+        try:
+            validate_backtest_history_compatibility(
+                self.runtime.data_defaults,
+                self.runtime.risk_defaults,
+                days=selected_days,
+                window=selected_window,
+                horizons=selected_horizons,
+                context="backtest",
+            )
+        except ValueError:
+            fallback_window = self._fallback_backtest_window_for_limited_history(
+                selected_window=selected_window,
+                selected_days=selected_days,
+                explicit_window=window,
+            )
+            if fallback_window is None:
+                raise
+            selected_window = int(fallback_window)
+            requested_days, selected_days, recommended_days = self._resolve_backtest_days(
+                requested_days=days,
+                window=selected_window,
+                alphas=selected_alphas,
+                horizons=selected_horizons,
+                enforce_minimum_depth=self.runtime.is_live_portfolio(portfolio),
+            )
+            validate_backtest_history_compatibility(
+                self.runtime.data_defaults,
+                self.runtime.risk_defaults,
+                days=selected_days,
+                window=selected_window,
+                horizons=selected_horizons,
+                context="backtest",
+            )
         config = self.runtime._build_risk_model_config(alpha, n_sims, dist, df_t, seed)
         portfolio_id = self.runtime._resolve_portfolio_id(portfolio["slug"])
+
+        if self.runtime.market_data.should_use_mt5_market_data(portfolio):
+            self.runtime.market_data.sync_market_data_if_stale(
+                portfolio_slug=portfolio["slug"],
+                account_id=account_id,
+                max_age_seconds=300.0,
+                days=selected_days,
+                timeframes=[selected_timeframe],
+            )
 
         bundle = self.runtime._compute_portfolio_state(
             portfolio_slug=portfolio["slug"],
@@ -314,8 +557,8 @@ class DeskAnalyticsService:
             returns_wide=daily_rets,
             window=selected_window,
             config=config,
-            alphas=[float(item) for item in self.runtime.risk_defaults["alphas"]],
-            horizons=[int(item) for item in self.runtime.risk_defaults["horizons"]],
+            alphas=selected_alphas,
+            horizons=selected_horizons,
             metadata={
                 "portfolio": portfolio["name"],
                 "base_currency": portfolio["base_currency"],
@@ -325,13 +568,17 @@ class DeskAnalyticsService:
                 "gross_exposure": gross_exposure,
                 "timeframe": selected_timeframe,
                 "days": selected_days,
+                "requested_days": requested_days,
+                "recommended_validation_days": recommended_days,
             },
         )
+        backtest = self._attach_alpha_backtest_var(backtest)
         backtest = self._normalize_backtest_timeline(backtest)
 
+        run_stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
         out_path = self.runtime.storage.settings.analytics_dir / (
             f"compare_{selected_timeframe}_{selected_days}d_alpha{int(config.alpha * 100)}"
-            f"_pf{portfolio['slug']}_mc{config.mc.dist}_garch_{config.garch.dist}_ewma_fhs.csv"
+            f"_pf{portfolio['slug']}_mc{config.mc.dist}_garch_{config.garch.dist}_ewma_fhs_{run_stamp}.csv"
         )
         compare_artifact_id = self.runtime.storage.write_dataframe_artifact(
             backtest,
@@ -345,6 +592,8 @@ class DeskAnalyticsService:
                 "symbols": symbols,
                 "timeframe": selected_timeframe,
                 "days": selected_days,
+                "requested_days": requested_days,
+                "recommended_validation_days": recommended_days,
                 "alpha": config.alpha,
                 "window": selected_window,
                 "source": backtest_source,
@@ -373,6 +622,9 @@ class DeskAnalyticsService:
                 "exception_counts": exception_counts,
                 "source": backtest_source,
                 "flat_book": bool(flat_book),
+                "requested_days": requested_days,
+                "effective_days": selected_days,
+                "recommended_validation_days": recommended_days,
             },
         )
 
@@ -380,8 +632,8 @@ class DeskAnalyticsService:
             storage=self.runtime.storage,
             compare_csv=out_path,
             alpha=config.alpha,
-            alphas=[float(item) for item in self.runtime.risk_defaults["alphas"]],
-            horizons=[int(item) for item in self.runtime.risk_defaults["horizons"]],
+            alphas=selected_alphas,
+            horizons=selected_horizons,
             source_artifact_id=compare_artifact_id,
             portfolio_id=portfolio_id,
             portfolio_name=portfolio["name"],
@@ -488,6 +740,7 @@ class DeskAnalyticsService:
             portfolio_slug=portfolio["slug"],
             capital_source=report_snapshot_source,
         )
+        selected_model = self._extract_selected_model_from_report_markdown(md_path)
         compare_artifact = self.runtime.storage.register_artifact(compare_csv, artifact_type="backtest_compare")
         self.runtime.storage.register_artifact(
             md_path,
@@ -499,6 +752,7 @@ class DeskAnalyticsService:
                 "source_artifact_id": compare_artifact,
                 "snapshot_source": report_snapshot_source,
                 "snapshot_id": snapshot_id,
+                "selected_model": selected_model,
                 "report_contract_version": "report.v1",
             },
         )
@@ -532,6 +786,7 @@ class DeskAnalyticsService:
                 "compare_csv": str(compare_csv.resolve()),
                 "snapshot_source": report_snapshot_source,
                 "snapshot_id": snapshot_id,
+                "selected_model": selected_model,
                 "report_contract_version": "report.v1",
             },
             portfolio_id=portfolio_id,

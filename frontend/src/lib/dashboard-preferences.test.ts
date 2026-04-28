@@ -29,6 +29,28 @@ describe("dashboard preferences", () => {
     expect(normalized.visiblePages).toEqual(["overview", "models"]);
   });
 
+  it("auto-includes alpha pages for legacy full sidebar preferences", () => {
+    const normalized = normalizeDashboardPreferences({
+      visiblePages: [
+        "overview",
+        "live",
+        "incidents",
+        "universe",
+        "models",
+        "attribution",
+        "capital",
+        "decisions",
+        "execution",
+        "stress",
+        "blotter",
+        "reports",
+      ],
+    });
+
+    expect(normalized.visiblePages).toContain("alpha-features");
+    expect(normalized.visiblePages).toContain("alpha-performance");
+  });
+
   it("tokenizes and matches symbol filters in a case-insensitive way", () => {
     expect(symbolFilterTokens(" eurusd, usdjpy  ")).toEqual(["EURUSD", "USDJPY"]);
     expect(symbolMatchesFilter("eurusd.a", "EURUSD,GBPUSD")).toBe(true);

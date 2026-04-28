@@ -311,6 +311,7 @@ def build_risk_budget_snapshot(
     model_limits = dict(limits_cfg.get("model_limits_eur") or {})
     models_payload = dict(attribution_payload.get("models") or {})
     model_names = ordered_model_names(models_payload.keys())
+    enforce_limits = bool(budget_cfg.get("enforce_limits", True))
 
     warn = float(budget_cfg.get("utilisation_warn", 0.85))
     breach = float(budget_cfg.get("utilisation_breach", 1.0))
@@ -346,20 +347,35 @@ def build_risk_budget_snapshot(
         model_payload = dict(models_payload.get(model_name) or {})
         positions_payload = dict(model_payload.get("positions") or {})
         limit_payload = dict(model_limits.get(model_name) or {})
+        model_limits_enforced = enforce_limits and any(
+            limit_payload.get(key) is not None for key in ("var", "es")
+        )
 
         total_var = float(model_payload.get("total_var", 0.0))
         total_es = float(model_payload.get("total_es", 0.0))
         total_var_budget = float(limit_payload.get("var", total_var))
         total_es_budget = float(limit_payload.get("es", total_es))
-        utilization_var = None if total_var_budget <= 0.0 else float(total_var / total_var_budget)
-        utilization_es = None if total_es_budget <= 0.0 else float(total_es / total_es_budget)
-        headroom_var = float(total_var_budget - total_var)
-        headroom_es = float(total_es_budget - total_es)
-        scale_to_var_budget = None if total_var <= 0.0 or total_var_budget <= 0.0 else float(total_var_budget / total_var)
-        scale_to_es_budget = None if total_es <= 0.0 or total_es_budget <= 0.0 else float(total_es_budget / total_es)
-        scale_candidates = [value for value in (scale_to_var_budget, scale_to_es_budget) if value is not None]
-        recommended_scale = None if not scale_candidates else float(min(scale_candidates) * target_buffer)
-        recommended_gross_exposure = None if recommended_scale is None else float(current_gross_exposure * recommended_scale)
+        if model_limits_enforced:
+            utilization_var = None if total_var_budget <= 0.0 else float(total_var / total_var_budget)
+            utilization_es = None if total_es_budget <= 0.0 else float(total_es / total_es_budget)
+            headroom_var = float(total_var_budget - total_var)
+            headroom_es = float(total_es_budget - total_es)
+            scale_to_var_budget = None if total_var <= 0.0 or total_var_budget <= 0.0 else float(total_var_budget / total_var)
+            scale_to_es_budget = None if total_es <= 0.0 or total_es_budget <= 0.0 else float(total_es_budget / total_es)
+            scale_candidates = [value for value in (scale_to_var_budget, scale_to_es_budget) if value is not None]
+            recommended_scale = None if not scale_candidates else float(min(scale_candidates) * target_buffer)
+            recommended_gross_exposure = None if recommended_scale is None else float(current_gross_exposure * recommended_scale)
+            model_status = _status_from_utilization(utilization_var, utilization_es, warn=warn, breach=breach)
+        else:
+            utilization_var = None
+            utilization_es = None
+            headroom_var = 0.0
+            headroom_es = 0.0
+            scale_to_var_budget = None
+            scale_to_es_budget = None
+            recommended_scale = None
+            recommended_gross_exposure = None
+            model_status = "OK"
 
         position_budgets: dict[str, PositionRiskBudget] = {}
         for symbol in symbols:
@@ -378,27 +394,41 @@ def build_risk_budget_snapshot(
             utilized_var = abs(component_var)
             utilized_es = abs(component_es)
             weight = float(weights.get(symbol, 0.0))
-            target_var_budget = float(total_var_budget * weight)
-            target_es_budget = float(total_es_budget * weight)
-            pos_utilization_var = None if target_var_budget <= 0.0 else float(utilized_var / target_var_budget)
-            pos_utilization_es = None if target_es_budget <= 0.0 else float(utilized_es / target_es_budget)
-            max_exposure, recommended_exposure = _recommended_exposure(
-                current_exposure,
-                target_var_budget=target_var_budget,
-                target_es_budget=target_es_budget,
-                utilized_var=utilized_var,
-                utilized_es=utilized_es,
-                target_buffer=target_buffer,
-            )
-            status = _status_from_utilization(pos_utilization_var, pos_utilization_es, warn=warn, breach=breach)
-            action = _action_from_budget(
-                current_exposure,
-                component_var=component_var,
-                recommended_exposure=recommended_exposure,
-                tolerance=tolerance,
-                utilization_var=pos_utilization_var,
-                warn=warn,
-            )
+            if model_limits_enforced:
+                target_var_budget = float(total_var_budget * weight)
+                target_es_budget = float(total_es_budget * weight)
+                pos_utilization_var = None if target_var_budget <= 0.0 else float(utilized_var / target_var_budget)
+                pos_utilization_es = None if target_es_budget <= 0.0 else float(utilized_es / target_es_budget)
+                max_exposure, recommended_exposure = _recommended_exposure(
+                    current_exposure,
+                    target_var_budget=target_var_budget,
+                    target_es_budget=target_es_budget,
+                    utilized_var=utilized_var,
+                    utilized_es=utilized_es,
+                    target_buffer=target_buffer,
+                )
+                status = _status_from_utilization(pos_utilization_var, pos_utilization_es, warn=warn, breach=breach)
+                action = _action_from_budget(
+                    current_exposure,
+                    component_var=component_var,
+                    recommended_exposure=recommended_exposure,
+                    tolerance=tolerance,
+                    utilization_var=pos_utilization_var,
+                    warn=warn,
+                )
+                position_headroom_var = float(target_var_budget - utilized_var)
+                position_headroom_es = float(target_es_budget - utilized_es)
+            else:
+                target_var_budget = float(utilized_var)
+                target_es_budget = float(utilized_es)
+                pos_utilization_var = None
+                pos_utilization_es = None
+                max_exposure = None
+                recommended_exposure = None
+                status = "OK"
+                action = "HOLD"
+                position_headroom_var = 0.0
+                position_headroom_es = 0.0
 
             position_budgets[symbol] = PositionRiskBudget(
                 symbol=symbol,
@@ -412,8 +442,8 @@ def build_risk_budget_snapshot(
                 utilized_es=utilized_es,
                 utilization_var=pos_utilization_var,
                 utilization_es=pos_utilization_es,
-                headroom_var=float(target_var_budget - utilized_var),
-                headroom_es=float(target_es_budget - utilized_es),
+                headroom_var=position_headroom_var,
+                headroom_es=position_headroom_es,
                 max_exposure=max_exposure,
                 recommended_exposure=recommended_exposure,
                 action=action,
@@ -435,7 +465,7 @@ def build_risk_budget_snapshot(
             recommended_scale=recommended_scale,
             current_gross_exposure=current_gross_exposure,
             recommended_gross_exposure=recommended_gross_exposure,
-            status=_status_from_utilization(utilization_var, utilization_es, warn=warn, breach=breach),
+            status=model_status,
             positions=position_budgets,
         )
 

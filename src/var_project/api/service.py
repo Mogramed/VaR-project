@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from io import StringIO
+import logging
 import math
 import os
 from pathlib import Path
@@ -23,14 +24,11 @@ from var_project.api.services import (
     DeskTradingService,
 )
 from var_project.connectors.mt5_connector import MT5Connector
+from var_project.observability.context import bind_correlation_context
 from var_project.storage.serialization import coerce_datetime, jsonable, utcnow
 
-TRADE_EXPOSURE_STEP_EUR = 1000.0
-TRADE_EXPOSURE_MIN_EUR = 1000.0
-TRADE_EXPOSURE_EPSILON = 1e-6
-TRADE_EXPOSURE_RULE_MESSAGE = (
-    "Exposure must be at least 1,000 EUR in absolute value and use 1,000 EUR increments."
-)
+TRADE_EXPOSURE_RULE_MESSAGE = "Exposure change must be a finite non-zero numeric value."
+TRADE_ACTION_RULE_MESSAGE = "trade_action must be one of: open, close."
 
 
 class DeskApiService:
@@ -57,6 +55,7 @@ class DeskApiService:
         self.trading = DeskTradingService(self.runtime)
         self.mt5 = DeskMt5Service(self.runtime)
         self.market = self.runtime.market_data
+        self.log = logging.getLogger("var_project.api.service")
 
         self.root = self.runtime.root
         self.raw_config = self.runtime.raw_config
@@ -481,8 +480,13 @@ class DeskApiService:
     def latest_backtest(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
         return self.reads.latest_backtest(portfolio_slug=portfolio_slug)
 
-    def latest_validation(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
-        return self.reads.latest_validation(portfolio_slug=portfolio_slug)
+    def latest_validation(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        report_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        return self.reads.latest_validation(portfolio_slug=portfolio_slug, report_id=report_id)
 
     def recent_alerts(self, *, limit: int = 25) -> list[dict[str, Any]]:
         return self.reads.recent_alerts(limit=limit)
@@ -585,6 +589,58 @@ class DeskApiService:
         account_id: str | None = None,
     ) -> list[dict[str, Any]]:
         return self.reads.recent_decisions(limit=limit, portfolio_slug=portfolio_slug, account_id=account_id)
+
+    def decision_alpha_replay(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        limit: int = 200,
+        lookback_days: int | None = None,
+    ) -> dict[str, Any]:
+        return self.trading.decision_alpha_replay(
+            portfolio_slug=portfolio_slug,
+            limit=limit,
+            lookback_days=lookback_days,
+        )
+
+    def decision_alpha_forecast(
+        self,
+        *,
+        symbol: str,
+        portfolio_slug: str | None = None,
+        horizon_days: int = 5,
+    ) -> dict[str, Any]:
+        return self.trading.decision_alpha_forecast(
+            symbol=symbol,
+            portfolio_slug=portfolio_slug,
+            horizon_days=horizon_days,
+        )
+
+    def decision_alpha_backtest_trajectory(
+        self,
+        *,
+        symbol: str,
+        portfolio_slug: str | None = None,
+        lookback_days: int = 90,
+    ) -> dict[str, Any]:
+        return self.trading.decision_alpha_backtest_trajectory(
+            symbol=symbol,
+            portfolio_slug=portfolio_slug,
+            lookback_days=lookback_days,
+        )
+
+    def decision_alpha_portfolio_forecast(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        horizon_days: int = 150,
+        symbols: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return self.trading.decision_alpha_portfolio_forecast(
+            portfolio_slug=portfolio_slug,
+            horizon_days=horizon_days,
+            symbols=symbols,
+        )
 
     def latest_capital(
         self,
@@ -698,8 +754,13 @@ class DeskApiService:
     def latest_artifact(self, artifact_type: str) -> dict[str, Any] | None:
         return self.reads.latest_artifact(artifact_type)
 
-    def latest_model_comparison(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
-        return self.reads.latest_model_comparison(portfolio_slug=portfolio_slug)
+    def latest_model_comparison(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        report_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        return self.reads.latest_model_comparison(portfolio_slug=portfolio_slug, report_id=report_id)
 
     def latest_risk_attribution(
         self,
@@ -800,7 +861,15 @@ class DeskApiService:
         date_to: Any | None,
     ) -> tuple[datetime, datetime]:
         end_at = self._parse_utc_datetime(date_to, field_name="date_to") or datetime.now(timezone.utc)
-        start_at = self._parse_utc_datetime(date_from, field_name="date_from") or (end_at - timedelta(days=30))
+        configured_history_days = self.runtime.data_defaults.get("market_history_days")
+        try:
+            default_history_days = int(configured_history_days or 60)
+        except (TypeError, ValueError):
+            default_history_days = 60
+        default_history_days = max(default_history_days, 30)
+        start_at = self._parse_utc_datetime(date_from, field_name="date_from") or (
+            end_at - timedelta(days=default_history_days)
+        )
         if start_at > end_at:
             raise ValueError("date_from must be less than or equal to date_to.")
         return start_at, end_at
@@ -833,6 +902,7 @@ class DeskApiService:
         symbol: str | None = None,
     ) -> list[dict[str, Any]]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        date_to_explicit = self._parse_utc_datetime(date_to, field_name="date_to") is not None
         start_at, end_at = self._mt5_history_bounds(date_from=date_from, date_to=date_to)
         symbol_filter = str(symbol or "").strip().upper()
         with self.runtime._mt5_gateway(account_id=account_id) as live:
@@ -850,7 +920,9 @@ class DeskApiService:
             if symbol_filter and str(item.get("symbol") or "").strip().upper() != symbol_filter:
                 continue
             event_time = self._coerce_utc_datetime(item.get("time_done_utc") or item.get("time_setup_utc"))
-            if event_time is not None and (event_time < start_at or event_time > end_at):
+            if event_time is not None and event_time < start_at:
+                continue
+            if date_to_explicit and event_time is not None and event_time > end_at:
                 continue
             item["portfolio_slug"] = portfolio["slug"]
             filtered.append(item)
@@ -873,6 +945,7 @@ class DeskApiService:
         symbol: str | None = None,
     ) -> list[dict[str, Any]]:
         portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        date_to_explicit = self._parse_utc_datetime(date_to, field_name="date_to") is not None
         start_at, end_at = self._mt5_history_bounds(date_from=date_from, date_to=date_to)
         symbol_filter = str(symbol or "").strip().upper()
         with self.runtime._mt5_gateway(account_id=account_id) as live:
@@ -890,7 +963,9 @@ class DeskApiService:
             if symbol_filter and str(item.get("symbol") or "").strip().upper() != symbol_filter:
                 continue
             event_time = self._coerce_utc_datetime(item.get("time_utc"))
-            if event_time is not None and (event_time < start_at or event_time > end_at):
+            if event_time is not None and event_time < start_at:
+                continue
+            if date_to_explicit and event_time is not None and event_time > end_at:
                 continue
             item["portfolio_slug"] = portfolio["slug"]
             filtered.append(item)
@@ -1872,12 +1947,29 @@ class DeskApiService:
         days: int | None = None,
         timeframes: list[str] | None = None,
     ) -> dict[str, Any]:
-        return self.market.sync_market_data(
-            portfolio_slug=portfolio_slug,
+        with bind_correlation_context(
             account_id=account_id,
-            days=days,
-            timeframes=timeframes,
-        )
+            action="sync",
+        ):
+            self.log.info(
+                "market_data_sync_requested portfolio_slug=%s days=%s timeframe_count=%s",
+                portfolio_slug,
+                days,
+                0 if timeframes is None else len(timeframes),
+            )
+            result = self.market.sync_market_data(
+                portfolio_slug=portfolio_slug,
+                account_id=account_id,
+                days=days,
+                timeframes=timeframes,
+            )
+            self.log.info(
+                "market_data_sync_completed portfolio_slug=%s status=%s synced_at=%s",
+                result.get("portfolio_slug"),
+                result.get("status"),
+                result.get("synced_at"),
+            )
+            return result
 
     def market_data_sync_runs(
         self,
@@ -1919,8 +2011,14 @@ class DeskApiService:
             "portfolio_slug": portfolio["slug"],
         }
         normalized["account_id"] = self.runtime.resolve_mt5_account_id(payload.get("account_id"))
-        if action in {"sync", "snapshot", "backtest"}:
+        if action in {"sync", "snapshot"}:
             normalized["days"] = int(normalized.get("days") or self.runtime._default_days())
+        elif action == "backtest":
+            raw_days = normalized.get("days")
+            if raw_days in {None, "", "null"}:
+                normalized.pop("days", None)
+            else:
+                normalized["days"] = int(raw_days)
         if action in {"snapshot", "backtest"}:
             normalized["timeframe"] = str(normalized.get("timeframe") or self.runtime._default_timeframe())
         if action == "sync":
@@ -1930,6 +2028,29 @@ class DeskApiService:
             else:
                 normalized["timeframes"] = list(self.runtime.market_data.startup_sync_timeframes())
         return normalized
+
+    def _operator_backtest_sync_days(self, payload: Mapping[str, Any]) -> int:
+        raw_days = payload.get("days")
+        if raw_days not in {None, "", "null"}:
+            return max(int(raw_days), 1)
+        _, effective_days, _ = self.analytics._resolve_backtest_days(
+            requested_days=None,
+            window=int(self.analytics._default_backtest_window()),
+            alphas=[float(item) for item in self.runtime.risk_defaults["alphas"]],
+            horizons=[int(item) for item in self.runtime.risk_defaults["horizons"]],
+        )
+        return int(max(effective_days, 1))
+
+    @staticmethod
+    def _operator_backtest_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {}
+        for key in ("portfolio_slug", "account_id", "timeframe", "min_coverage", "alpha", "window", "n_sims", "dist", "df_t", "seed"):
+            value = payload.get(key)
+            if value not in {None, "", "null"}:
+                kwargs[key] = value
+        if payload.get("days") not in {None, "", "null"}:
+            kwargs["days"] = int(payload["days"])
+        return kwargs
 
     @staticmethod
     def _operator_artifact_refs(payload: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -2290,31 +2411,45 @@ class DeskApiService:
         run = self.storage.operator_run_by_id(run_id)
         if run is None:
             return None
-        status = str(run.get("status") or "").lower()
-        if status in {"succeeded", "failed"}:
-            return self._decorate_operator_run(run)
+        payload = dict(run.get("request_payload") or {})
+        with bind_correlation_context(
+            request_id=run.get("request_id"),
+            run_id=run_id,
+            account_id=payload.get("account_id"),
+            action=run.get("action"),
+        ):
+            status = str(run.get("status") or "").lower()
+            if status in {"succeeded", "failed"}:
+                self.log.info("operator_run_interrupt_ignored status=%s terminal=true", status)
+                return self._decorate_operator_run(run)
 
-        normalized_reason = str(reason or "").strip()
-        if not normalized_reason:
-            normalized_reason = "Interrupted by operator."
-        message = (
-            f"Operator run {int(run_id)} was interrupted while in status '{status}'. "
-            f"{normalized_reason}"
-        )
-        updated = self.storage.interrupt_operator_run(
-            int(run_id),
-            error_code="operator_interrupted",
-            error_message=message,
-            status_reason="interrupted",
-            hint="The run was interrupted by the operator. Re-enqueue the action if needed.",
-            stage="failed",
-            finished_at=utcnow(),
-        )
-        if updated is not None:
-            return self._decorate_operator_run(updated)
+            normalized_reason = str(reason or "").strip()
+            if not normalized_reason:
+                normalized_reason = "Interrupted by operator."
+            message = (
+                f"Operator run {int(run_id)} was interrupted while in status '{status}'. "
+                f"{normalized_reason}"
+            )
+            updated = self.storage.interrupt_operator_run(
+                int(run_id),
+                error_code="operator_interrupted",
+                error_message=message,
+                status_reason="interrupted",
+                hint="The run was interrupted by the operator. Re-enqueue the action if needed.",
+                stage="failed",
+                finished_at=utcnow(),
+            )
+            if updated is not None:
+                self.log.warning("operator_run_interrupted status_before=%s reason=%s", status, normalized_reason)
+                return self._decorate_operator_run(updated)
 
-        refreshed = self.storage.operator_run_by_id(int(run_id))
-        return None if refreshed is None else self._decorate_operator_run(refreshed)
+            refreshed = self.storage.operator_run_by_id(int(run_id))
+            if refreshed is not None:
+                self.log.info(
+                    "operator_run_interrupt_noop latest_status=%s",
+                    str(refreshed.get("status") or "").lower(),
+                )
+            return None if refreshed is None else self._decorate_operator_run(refreshed)
 
     def _operator_interrupted_run_state(self, run_id: int) -> dict[str, Any] | None:
         latest_state = self.storage.operator_run_by_id(int(run_id))
@@ -2368,80 +2503,114 @@ class DeskApiService:
         self.runtime.require_storage_ready()
         normalized_payload = self._normalize_operator_payload(action=action, request_payload=request_payload)
         portfolio = self.runtime._resolve_portfolio_context(normalized_payload.get("portfolio_slug"))
-        self.reap_stale_operator_runs(portfolio_slug=portfolio["slug"], action=action, limit=50)
-
-        existing = self.storage.latest_active_operator_run(
-            portfolio_slug=portfolio["slug"],
+        with bind_correlation_context(
+            account_id=normalized_payload.get("account_id"),
             action=action,
-            request_payload=normalized_payload,
-        )
-        if existing is not None:
-            return self._decorate_operator_run(
-                {
-                    **existing,
-                    "reused": True,
-                    "reused_run_id": existing.get("id"),
-                }
-            )
+        ):
+            self.reap_stale_operator_runs(portfolio_slug=portfolio["slug"], action=action, limit=50)
 
-        cache_ttl = self._operator_cache_ttl_seconds(action)
-        if cache_ttl > 0:
-            cached = self._latest_matching_operator_run(
+            existing = self.storage.latest_active_operator_run(
                 portfolio_slug=portfolio["slug"],
                 action=action,
                 request_payload=normalized_payload,
-                statuses=["succeeded"],
-                limit=25,
             )
-            if cached is not None:
-                finished_at = coerce_datetime(cached.get("finished_at")) or coerce_datetime(cached.get("updated_at"))
-                if finished_at is not None:
-                    cache_age_seconds = (utcnow() - finished_at).total_seconds()
-                    if cache_age_seconds <= float(cache_ttl):
-                        return self._decorate_operator_run(
-                            {
-                                **cached,
-                                "reused": True,
-                                "reused_run_id": cached.get("id"),
-                            }
-                        )
+            if existing is not None:
+                with bind_correlation_context(
+                    request_id=existing.get("request_id"),
+                    run_id=existing.get("id"),
+                ):
+                    self.log.info("operator_run_enqueue_reused reason=active_run")
+                return self._decorate_operator_run(
+                    {
+                        **existing,
+                        "reused": True,
+                        "reused_run_id": existing.get("id"),
+                    }
+                )
 
-        request_id = uuid4().hex
-        run_id = self.storage.create_operator_run(
-            portfolio_id=self.runtime._resolve_portfolio_id(portfolio["slug"]),
-            portfolio_slug=portfolio["slug"],
-            action=action,
-            request_id=request_id,
-            status="queued",
-            stage="accepted",
-            request_payload=normalized_payload,
-        )
-        created = self.storage.operator_run_by_id(run_id)
-        if created is None:
-            raise RuntimeError("Operator run could not be persisted.")
-        return self._decorate_operator_run(
-            {
-                **created,
-                "reused": False,
-            }
-        )
+            cache_ttl = self._operator_cache_ttl_seconds(action)
+            if cache_ttl > 0:
+                cached = self._latest_matching_operator_run(
+                    portfolio_slug=portfolio["slug"],
+                    action=action,
+                    request_payload=normalized_payload,
+                    statuses=["succeeded"],
+                    limit=25,
+                )
+                if cached is not None:
+                    finished_at = coerce_datetime(cached.get("finished_at")) or coerce_datetime(cached.get("updated_at"))
+                    if finished_at is not None:
+                        cache_age_seconds = (utcnow() - finished_at).total_seconds()
+                        if cache_age_seconds <= float(cache_ttl):
+                            with bind_correlation_context(
+                                request_id=cached.get("request_id"),
+                                run_id=cached.get("id"),
+                            ):
+                                self.log.info(
+                                    "operator_run_enqueue_reused reason=cache cache_age_seconds=%.3f cache_ttl_seconds=%.3f",
+                                    float(cache_age_seconds),
+                                    float(cache_ttl),
+                                )
+                            return self._decorate_operator_run(
+                                {
+                                    **cached,
+                                    "reused": True,
+                                    "reused_run_id": cached.get("id"),
+                                }
+                            )
+
+            request_id = uuid4().hex
+            run_id = self.storage.create_operator_run(
+                portfolio_id=self.runtime._resolve_portfolio_id(portfolio["slug"]),
+                portfolio_slug=portfolio["slug"],
+                action=action,
+                request_id=request_id,
+                status="queued",
+                stage="accepted",
+                request_payload=normalized_payload,
+            )
+            created = self.storage.operator_run_by_id(run_id)
+            if created is None:
+                raise RuntimeError("Operator run could not be persisted.")
+            with bind_correlation_context(request_id=request_id, run_id=run_id):
+                self.log.info(
+                    "operator_run_enqueued portfolio_slug=%s",
+                    str(portfolio.get("slug") or ""),
+                )
+            return self._decorate_operator_run(
+                {
+                    **created,
+                    "reused": False,
+                }
+            )
 
     def process_operator_run(self, run_id: int) -> dict[str, Any]:
         self.runtime.require_storage_ready()
         run = self.storage.operator_run_by_id(run_id)
         if run is None:
             raise ValueError(f"Unknown operator run '{run_id}'.")
+        payload_context = dict(run.get("request_payload") or {})
+        log_extra = {
+            "request_id": run.get("request_id"),
+            "run_id": run_id,
+            "account_id": payload_context.get("account_id"),
+            "action": run.get("action"),
+        }
         if str(run.get("status")) in {"succeeded", "failed"}:
+            self.log.info("operator_run_process_skipped reason=terminal", extra=log_extra)
             return self._decorate_operator_run(run)
         if self._operator_is_stale(run):
             failed = self._fail_stale_operator_run(run)
             if failed is not None:
+                self.log.warning("operator_run_process_auto_closed reason=stale", extra=log_extra)
                 return self._decorate_operator_run(failed)
             refreshed = self.storage.operator_run_by_id(run_id)
             if refreshed is not None:
+                self.log.info("operator_run_process_refreshed_after_stale_check", extra=log_extra)
                 return self._decorate_operator_run(refreshed)
         run_status = str(run.get("status") or "").lower()
         if run_status == "running":
+            self.log.info("operator_run_process_skipped reason=already_running", extra=log_extra)
             return self._decorate_operator_run(run)
 
         claimed = self.storage.claim_operator_run(
@@ -2454,15 +2623,27 @@ class DeskApiService:
             if refreshed is not None:
                 refreshed_status = str(refreshed.get("status") or "").lower()
                 if refreshed_status in {"running", "succeeded", "failed"}:
+                    self.log.info(
+                        "operator_run_process_claim_missed latest_status=%s",
+                        refreshed_status,
+                        extra=log_extra,
+                    )
                     return self._decorate_operator_run(refreshed)
                 if self._operator_is_stale(refreshed):
                     failed = self._fail_stale_operator_run(refreshed)
                     if failed is not None:
+                        self.log.warning("operator_run_process_auto_closed reason=stale_after_claim_miss", extra=log_extra)
                         return self._decorate_operator_run(failed)
             if run_status != "queued":
+                self.log.info(
+                    "operator_run_process_skipped reason=not_queued status=%s",
+                    run_status,
+                    extra=log_extra,
+                )
                 return self._decorate_operator_run(run)
         else:
             run = claimed
+            self.log.info("operator_run_processing_started", extra=log_extra)
 
         payload = dict(run.get("request_payload") or {})
         portfolio_slug = payload.get("portfolio_slug")
@@ -2488,6 +2669,7 @@ class DeskApiService:
             )
             if updated is None:
                 raise RuntimeError(f"Operator run '{run_id}' disappeared during MT5 preflight failure.")
+            self.log.warning("operator_run_failed reason=mt5_preflight_unavailable", extra=log_extra)
             return self._decorate_operator_run(updated)
         try:
             if action == "sync":
@@ -2558,7 +2740,9 @@ class DeskApiService:
                 interrupted = self._operator_interrupted_run_state(run_id)
                 if interrupted is not None:
                     return self._decorate_operator_run(interrupted)
-                sync_result = self._refresh_market_data_for_operator(payload)
+                sync_payload = dict(payload)
+                sync_payload["days"] = self._operator_backtest_sync_days(payload)
+                sync_result = self._refresh_market_data_for_operator(sync_payload)
                 if requires_live_mt5 and self._operator_sync_result_looks_offline(sync_result):
                     error_payload = self._operator_mt5_not_configured_payload(
                         action=action,
@@ -2582,7 +2766,7 @@ class DeskApiService:
                 interrupted = self._operator_interrupted_run_state(run_id)
                 if interrupted is not None:
                     return self._decorate_operator_run(interrupted)
-                backtest_result = self.analytics.run_backtest(**payload)
+                backtest_result = self.analytics.run_backtest(**self._operator_backtest_kwargs(payload))
                 artifact_refs.update(self._operator_artifact_refs(backtest_result))
                 result_payload = {"sync": sync_result, "backtest": backtest_result}
             elif action == "report":
@@ -2592,12 +2776,15 @@ class DeskApiService:
                     interrupted = self._operator_interrupted_run_state(run_id)
                     if interrupted is not None:
                         return self._decorate_operator_run(interrupted)
+                    sync_payload = {
+                        "portfolio_slug": portfolio_slug,
+                        "timeframe": str(payload.get("timeframe") or self.runtime._default_timeframe()),
+                        "days": self._operator_backtest_sync_days(payload),
+                    }
+                    if payload.get("account_id") not in {None, "", "null"}:
+                        sync_payload["account_id"] = payload.get("account_id")
                     sync_result = self._refresh_market_data_for_operator(
-                        {
-                            "portfolio_slug": portfolio_slug,
-                            "days": self.runtime._default_days(),
-                            "timeframe": self.runtime._default_timeframe(),
-                        }
+                        sync_payload
                     )
                     if requires_live_mt5 and self._operator_sync_result_looks_offline(sync_result):
                         error_payload = self._operator_mt5_not_configured_payload(
@@ -2621,11 +2808,15 @@ class DeskApiService:
                     interrupted = self._operator_interrupted_run_state(run_id)
                     if interrupted is not None:
                         return self._decorate_operator_run(interrupted)
-                    backtest_result = self.analytics.run_backtest(
-                        portfolio_slug=portfolio_slug,
-                        days=self.runtime._default_days(),
-                        timeframe=self.runtime._default_timeframe(),
-                    )
+                    backtest_payload = {
+                        "portfolio_slug": portfolio_slug,
+                        "timeframe": str(payload.get("timeframe") or self.runtime._default_timeframe()),
+                    }
+                    if payload.get("account_id") not in {None, "", "null"}:
+                        backtest_payload["account_id"] = payload.get("account_id")
+                    if payload.get("days") not in {None, "", "null"}:
+                        backtest_payload["days"] = int(payload["days"])
+                    backtest_result = self.analytics.run_backtest(**backtest_payload)
                     artifact_refs.update(self._operator_artifact_refs(backtest_result))
                     result_payload["sync"] = sync_result
                     result_payload["backtest"] = backtest_result
@@ -2654,10 +2845,12 @@ class DeskApiService:
             )
             if updated is None:
                 raise RuntimeError(f"Operator run '{run_id}' disappeared during completion.")
+            self.log.info("operator_run_completed status=succeeded", extra=log_extra)
             return self._decorate_operator_run(updated)
         except Exception as exc:
             interrupted = self._operator_interrupted_run_state(run_id)
             if interrupted is not None:
+                self.log.warning("operator_run_failed reason=interrupted", extra=log_extra)
                 return self._decorate_operator_run(interrupted)
             error_payload = self._operator_error_payload(exc)
             updated = self.storage.update_operator_run(
@@ -2674,16 +2867,31 @@ class DeskApiService:
             )
             if updated is None:
                 raise
+            self.log.exception(
+                "operator_run_failed reason=execution_error error_code=%s",
+                error_payload.get("error_code"),
+                extra=log_extra,
+            )
             return self._decorate_operator_run(updated)
 
     def reconciliation_summary(self, *, portfolio_slug: str | None = None) -> dict[str, Any]:
-        live_state = self.mt5.live_state(portfolio_slug=portfolio_slug, force_refresh=True)
-        if live_state.get("reconciliation") is not None:
-            return self.market.reconciliation_summary_from_live_state(
-                live_state,
-                portfolio_slug=portfolio_slug,
+        with bind_correlation_context(action="reconciliation_summary"):
+            live_state = self.mt5.live_state(portfolio_slug=portfolio_slug, force_refresh=True)
+            if live_state.get("reconciliation") is not None:
+                summary = self.market.reconciliation_summary_from_live_state(
+                    live_state,
+                    portfolio_slug=portfolio_slug,
+                )
+            else:
+                summary = self.market.reconciliation_summary(portfolio_slug=portfolio_slug)
+            self.log.info(
+                "reconciliation_summary_generated portfolio_slug=%s severity=%s mismatches=%s unmatched=%s",
+                summary.get("portfolio_slug") or portfolio_slug,
+                summary.get("summary_severity"),
+                len(list(summary.get("mismatches") or [])),
+                int(summary.get("unmatched_execution_count") or 0),
             )
-        return self.market.reconciliation_summary(portfolio_slug=portfolio_slug)
+            return summary
 
     def reconciliation_history(
         self,
@@ -2699,28 +2907,32 @@ class DeskApiService:
         )
 
     @staticmethod
+    def _normalize_trade_action(trade_action: str | None = None) -> str:
+        normalized = str(trade_action or "open").strip().lower()
+        if normalized not in {"open", "close"}:
+            raise ValueError(TRADE_ACTION_RULE_MESSAGE)
+        return normalized
+
+    @staticmethod
     def _normalize_trade_exposure_change(
         *,
         exposure_change: float | None = None,
         delta_position_eur: float | None = None,
         strict: bool = True,
-    ) -> float:
+        required: bool = True,
+    ) -> float | None:
         raw = exposure_change if exposure_change is not None else delta_position_eur
+        if raw in {None, "", "null"}:
+            if required:
+                raise ValueError(TRADE_EXPOSURE_RULE_MESSAGE)
+            return None
         try:
-            parsed = float(raw if raw is not None else 0.0)
+            parsed = float(raw)
         except (TypeError, ValueError) as exc:
             raise ValueError(TRADE_EXPOSURE_RULE_MESSAGE) from exc
         if not math.isfinite(parsed):
             raise ValueError(TRADE_EXPOSURE_RULE_MESSAGE)
-        if not strict:
-            return parsed
-
-        magnitude = abs(parsed)
-        if magnitude < TRADE_EXPOSURE_MIN_EUR:
-            raise ValueError(TRADE_EXPOSURE_RULE_MESSAGE)
-
-        normalized_steps = magnitude / TRADE_EXPOSURE_STEP_EUR
-        if abs(normalized_steps - round(normalized_steps)) > TRADE_EXPOSURE_EPSILON:
+        if strict and abs(parsed) <= 1e-12:
             raise ValueError(TRADE_EXPOSURE_RULE_MESSAGE)
         return parsed
 
@@ -2730,20 +2942,24 @@ class DeskApiService:
         symbol: str,
         exposure_change: float | None = None,
         delta_position_eur: float | None = None,
+        trade_action: str | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
         account_id: str | None = None,
         strict_trade_exposure_validation: bool = True,
     ) -> dict[str, Any]:
+        normalized_trade_action = self._normalize_trade_action(trade_action)
         normalized_exposure_change = self._normalize_trade_exposure_change(
             exposure_change=exposure_change,
             delta_position_eur=delta_position_eur,
-            strict=strict_trade_exposure_validation,
+            strict=strict_trade_exposure_validation and normalized_trade_action == "open",
+            required=normalized_trade_action == "open",
         )
         return self.mt5.preview_execution(
             symbol=symbol,
             exposure_change=normalized_exposure_change,
             delta_position_eur=None,
+            trade_action=normalized_trade_action,
             note=note,
             portfolio_slug=portfolio_slug,
             account_id=account_id,
@@ -2755,20 +2971,24 @@ class DeskApiService:
         symbol: str,
         exposure_change: float | None = None,
         delta_position_eur: float | None = None,
+        trade_action: str | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
         account_id: str | None = None,
         strict_trade_exposure_validation: bool = True,
     ) -> dict[str, Any]:
+        normalized_trade_action = self._normalize_trade_action(trade_action)
         normalized_exposure_change = self._normalize_trade_exposure_change(
             exposure_change=exposure_change,
             delta_position_eur=delta_position_eur,
-            strict=strict_trade_exposure_validation,
+            strict=strict_trade_exposure_validation and normalized_trade_action == "open",
+            required=normalized_trade_action == "open",
         )
         return self.mt5.submit_execution(
             symbol=symbol,
             exposure_change=normalized_exposure_change,
             delta_position_eur=None,
+            trade_action=normalized_trade_action,
             note=note,
             portfolio_slug=portfolio_slug,
             account_id=account_id,
@@ -2780,20 +3000,24 @@ class DeskApiService:
         symbol: str,
         exposure_change: float | None = None,
         delta_position_eur: float | None = None,
+        trade_action: str | None = None,
         note: str | None = None,
         portfolio_slug: str | None = None,
         account_id: str | None = None,
         strict_trade_exposure_validation: bool = True,
     ) -> dict[str, Any]:
+        normalized_trade_action = self._normalize_trade_action(trade_action)
         normalized_exposure_change = self._normalize_trade_exposure_change(
             exposure_change=exposure_change,
             delta_position_eur=delta_position_eur,
-            strict=strict_trade_exposure_validation,
+            strict=strict_trade_exposure_validation and normalized_trade_action == "open",
+            required=normalized_trade_action == "open",
         )
         return self.trading.evaluate_trade_decision(
             symbol=symbol,
             exposure_change=normalized_exposure_change,
             delta_position_eur=None,
+            trade_action=normalized_trade_action,
             note=note,
             portfolio_slug=portfolio_slug,
             account_id=account_id,
@@ -3053,14 +3277,32 @@ class DeskApiService:
         scenarios: list[dict[str, Any]] | None = None,
         alpha: float | None = None,
     ) -> dict[str, Any]:
-        return self.analytics.run_stress_test(
-            portfolio_slug=portfolio_slug,
-            scenarios=scenarios,
-            alpha=alpha,
-        )
+        with bind_correlation_context(action="stress_test"):
+            self.log.info(
+                "stress_test_requested portfolio_slug=%s scenario_count=%s",
+                portfolio_slug,
+                0 if scenarios is None else len(scenarios),
+            )
+            result = self.analytics.run_stress_test(
+                portfolio_slug=portfolio_slug,
+                scenarios=scenarios,
+                alpha=alpha,
+            )
+            self.log.info(
+                "stress_test_completed portfolio_slug=%s scenario_count=%s",
+                result.get("portfolio_slug") or portfolio_slug,
+                len(list(result.get("scenarios") or [])),
+            )
+            return result
 
-    def latest_backtest_frame(self, *, limit: int = 400, portfolio_slug: str | None = None) -> dict[str, Any] | None:
-        return self.reads.latest_backtest_frame(limit=limit, portfolio_slug=portfolio_slug)
+    def latest_backtest_frame(
+        self,
+        *,
+        limit: int = 400,
+        portfolio_slug: str | None = None,
+        report_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        return self.reads.latest_backtest_frame(limit=limit, portfolio_slug=portfolio_slug, report_id=report_id)
 
     def latest_report_content(
         self,

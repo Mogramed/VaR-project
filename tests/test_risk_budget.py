@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from var_project.alerts.engine import alerts_from_risk_budget
 from var_project.risk.budgeting import build_risk_budget_snapshot
 
 
@@ -53,3 +54,54 @@ def test_build_risk_budget_snapshot_uses_limits_and_positions():
     assert budget.models["hist"].positions["EURUSD"].status == "BREACH"
     assert budget.models["hist"].positions["EURUSD"].action == "REDUCE"
     assert budget.models["hist"].positions["USDJPY"].recommended_position_eur is not None
+
+
+def test_build_risk_budget_snapshot_treats_live_mode_without_limits_as_observational():
+    attribution = {
+        "alpha": 0.95,
+        "sample_size": 120,
+        "models": {
+            "hist": {
+                "model": "hist",
+                "total_var": 180.0,
+                "total_es": 230.0,
+                "positions": {
+                    "EURUSD": {
+                        "symbol": "EURUSD",
+                        "position_eur": 10000.0,
+                        "component_var": 120.0,
+                        "component_es": 150.0,
+                    },
+                    "USDJPY": {
+                        "symbol": "USDJPY",
+                        "position_eur": 8000.0,
+                        "component_var": 60.0,
+                        "component_es": 80.0,
+                    },
+                },
+            }
+        },
+    }
+    limits_cfg = {
+        "risk_budget": {
+            "enforce_limits": False,
+            "utilisation_warn": 0.85,
+            "utilisation_breach": 1.0,
+        },
+    }
+
+    budget = build_risk_budget_snapshot(
+        attribution,
+        limits_cfg,
+        positions_eur={"EURUSD": 10000.0, "USDJPY": 8000.0},
+        preferred_model="hist",
+    )
+
+    model = budget.models["hist"]
+    assert model.status == "OK"
+    assert model.utilization_var is None
+    assert model.recommended_scale is None
+    assert model.positions["EURUSD"].status == "OK"
+    assert model.positions["EURUSD"].action == "HOLD"
+    assert model.positions["EURUSD"].recommended_position_eur is None
+    assert alerts_from_risk_budget(budget.to_dict()) == []

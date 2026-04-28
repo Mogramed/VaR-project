@@ -14,6 +14,8 @@ def _infer_asset_class(symbol: str) -> str:
         return "metals"
     if len(normalized) == 6 and normalized[:3].isalpha() and normalized[3:].isalpha():
         return "fx"
+    if 1 <= len(normalized.split(".", maxsplit=1)[0]) <= 5 and normalized.replace(".", "").isalpha():
+        return "equities"
     if normalized.startswith(("US", "DE", "FR", "UK")):
         return "indices_cfd"
     return "cfd"

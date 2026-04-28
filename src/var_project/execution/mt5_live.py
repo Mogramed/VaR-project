@@ -56,13 +56,21 @@ def _asset_class_from_symbol(symbol: str, info: Mapping[str, Any]) -> str:
     normalized = str(symbol).upper()
     base = str(info.get("currency_base") or "").upper()
     profit = str(info.get("currency_profit") or "").upper()
-    path = str(info.get("path") or info.get("description") or "").lower()
+    path = str(info.get("path") or "").lower()
+    description = str(info.get("description") or "").lower()
+    route = f"{path} {description}".strip()
     if normalized.startswith(("XAU", "XAG", "XPT", "XPD")) or "metal" in path:
         return "metals"
+    if any(token in route for token in ("stock", "equity", "share", "shares", "etf")):
+        return "equities"
     if len(normalized) == 6 and base and profit:
         return "fx"
-    if "index" in path or "indices" in path or normalized.startswith(("US", "DE", "FR", "UK")):
+    if "crypto" in route:
+        return "crypto"
+    if "index" in route or "indices" in route or normalized.startswith(("US", "DE", "FR", "UK")):
         return "indices_cfd"
+    if 1 <= len(normalized.split(".", maxsplit=1)[0]) <= 5 and normalized.replace(".", "").isalpha():
+        return "equities"
     return "cfd"
 
 
@@ -473,6 +481,7 @@ class ExecutionPreview:
     live_positions: list[MT5Position]
     pending_orders: list[MT5PendingOrder]
     risk_decision: dict[str, Any]
+    decision_intelligence: dict[str, Any]
     guard: ExecutionGuardDecision
     order_request: dict[str, Any]
     order_check: dict[str, Any]
@@ -494,6 +503,7 @@ class ExecutionPreview:
             "live_positions": [item.to_dict() for item in self.live_positions],
             "pending_orders": [item.to_dict() for item in self.pending_orders],
             "risk_decision": dict(self.risk_decision),
+            "decision_intelligence": dict(self.decision_intelligence),
             "guard": self.guard.to_dict(),
             "order_request": dict(self.order_request),
             "order_check": dict(self.order_check),

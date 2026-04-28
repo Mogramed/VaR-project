@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -214,9 +214,11 @@ class TradeProposalRequest(ApiModel):
     portfolio_slug: str | None = None
     account_id: str | None = None
     symbol: str
-    exposure_change: float = Field(
+    exposure_change: float | None = Field(
+        default=None,
         validation_alias=AliasChoices("exposure_change", "delta_position_eur")
     )
+    trade_action: Literal["open", "close"] | None = "open"
     note: str | None = None
 
 
@@ -232,9 +234,11 @@ class ExecutionRequest(ApiModel):
     portfolio_slug: str | None = None
     account_id: str | None = None
     symbol: str
-    exposure_change: float = Field(
+    exposure_change: float | None = Field(
+        default=None,
         validation_alias=AliasChoices("exposure_change", "delta_position_eur")
     )
+    trade_action: Literal["open", "close"] | None = "open"
     note: str | None = None
 
 
@@ -337,6 +341,8 @@ class ModelComparisonRow(BaseModel):
     es_acerbi_status: str | None = None
     es_acerbi_p_value: float | None = None
     es_acerbi_observations: int | None = None
+    signal: str | None = None
+    signal_reason: str | None = None
 
 
 class ModelComparisonResponse(BaseModel):
@@ -513,6 +519,32 @@ class RiskDecisionStateResponse(ApiModel):
     data_quality: RiskDataQualityResponse | None = None
 
 
+class DecisionIntelligenceResponse(BaseModel):
+    signal: str
+    score: float
+    confidence: float
+    size_multiplier: float
+    top_drivers: list[str] = Field(default_factory=list)
+    model_version: str = "decision_alpha_v1"
+    guardrail_applied: bool = False
+    model_runtime: dict[str, Any] | None = None
+    features: dict[str, float] = Field(default_factory=dict)
+    feature_contributions: dict[str, float] = Field(default_factory=dict)
+    calculations: dict[str, float] = Field(default_factory=dict)
+    feature_availability: dict[str, bool] = Field(default_factory=dict)
+    calculation_availability: dict[str, bool] = Field(default_factory=dict)
+
+
+class CloseRecommendationResponse(BaseModel):
+    recommended: bool = False
+    urgency: Literal["low", "medium", "high"] = "low"
+    confidence: float = 0.0
+    reason: str = ""
+    current_exposure: float = 0.0
+    target_exposure_change: float = 0.0
+    target_resulting_exposure: float = 0.0
+
+
 class RiskDecisionResponse(ApiModel):
     id: int | None = None
     portfolio_id: int | None = None
@@ -524,6 +556,7 @@ class RiskDecisionResponse(ApiModel):
     days: int | None = None
     window: int | None = None
     symbol: str
+    trade_action: Literal["open", "close"] | None = "open"
     decision: str
     requested_exposure_change: float = Field(
         validation_alias=AliasChoices("requested_exposure_change", "requested_delta_position_eur")
@@ -543,6 +576,113 @@ class RiskDecisionResponse(ApiModel):
     note: str | None = None
     pre_trade: RiskDecisionStateResponse
     post_trade: RiskDecisionStateResponse
+    decision_intelligence: DecisionIntelligenceResponse | None = None
+    close_recommendation: CloseRecommendationResponse | None = None
+
+
+class DecisionReplayPointResponse(BaseModel):
+    timestamp: str
+    decision_id: int | None = None
+    symbol: str
+    predicted_score: float
+    predicted_signal: str
+    realized_pnl: float
+    hit: bool | None = None
+    cum_pnl: float
+
+
+class DecisionReplayResponse(BaseModel):
+    model_version: str = "decision_alpha_v1"
+    generated_at: str
+    portfolio_slug: str | None = None
+    lookback_days: int | None = None
+    model_runtime: dict[str, Any] | None = None
+    sample_size: int
+    hit_rate: float
+    cum_pnl: float
+    comparables: int = 0
+    predicted_vs_realized: list[DecisionReplayPointResponse] = Field(default_factory=list)
+
+
+class DecisionForecastPathPointResponse(BaseModel):
+    day: int
+    date: str
+    price: float
+
+
+class DecisionForecastScenarioResponse(BaseModel):
+    name: str
+    probability: float
+    projected_return: float
+    path: list[DecisionForecastPathPointResponse] = Field(default_factory=list)
+
+
+class DecisionForecastResponse(BaseModel):
+    model_version: str = "decision_alpha_v1"
+    generated_at: str
+    symbol: str
+    horizon_days: int
+    current_price: float
+    score: float
+    probability_up: float
+    model_runtime: dict[str, Any] | None = None
+    features: dict[str, float] = Field(default_factory=dict)
+    scenarios: list[DecisionForecastScenarioResponse] = Field(default_factory=list)
+
+
+class DecisionBacktestTrajectoryPointResponse(BaseModel):
+    timestamp: str
+    predicted_price: float
+    actual_price: float
+    predicted_return: float
+    realized_return: float
+    predicted_score: float
+    hit: bool | None = None
+
+
+class DecisionBacktestTrajectoryResponse(BaseModel):
+    model_version: str = "decision_alpha_v1"
+    generated_at: str
+    portfolio_slug: str | None = None
+    symbol: str
+    lookback_days: int
+    sample_size: int
+    hit_rate: float
+    mean_abs_error: float
+    model_runtime: dict[str, Any] | None = None
+    predicted_vs_actual: list[DecisionBacktestTrajectoryPointResponse] = Field(default_factory=list)
+
+
+class DecisionPortfolioSymbolForecastResponse(BaseModel):
+    symbol: str
+    exposure_eur: float
+    weight: float
+    forecast: DecisionForecastResponse
+
+
+class DecisionPortfolioPnlPointResponse(BaseModel):
+    day: int
+    date: str
+    pnl: float
+
+
+class DecisionPortfolioPnlScenarioResponse(BaseModel):
+    name: str
+    probability: float
+    projected_return: float
+    path: list[DecisionPortfolioPnlPointResponse] = Field(default_factory=list)
+
+
+class DecisionPortfolioForecastResponse(BaseModel):
+    model_version: str = "decision_alpha_v1"
+    generated_at: str
+    portfolio_slug: str | None = None
+    horizon_days: int
+    symbol_count: int
+    current_notional_eur: float
+    symbols: list[DecisionPortfolioSymbolForecastResponse] = Field(default_factory=list)
+    pnl_scenarios: list[DecisionPortfolioPnlScenarioResponse] = Field(default_factory=list)
+    model_runtime: dict[str, Any] | None = None
 
 
 class CapitalBudgetSummaryResponse(BaseModel):
@@ -1305,6 +1445,7 @@ class ExecutionPreviewResponse(BaseModel):
     live_positions: list[MT5PositionResponse] = Field(default_factory=list)
     pending_orders: list[MT5PendingOrderResponse] = Field(default_factory=list)
     risk_decision: RiskDecisionResponse
+    decision_intelligence: DecisionIntelligenceResponse | None = None
     guard: ExecutionGuardDecisionResponse
     order_request: dict[str, Any] = Field(default_factory=dict)
     order_check: dict[str, Any] = Field(default_factory=dict)

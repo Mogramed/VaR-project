@@ -4,6 +4,7 @@ import argparse
 import inspect
 import logging
 import logging.config
+import os
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,51 @@ def load_yaml(path: Path) -> dict[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
+def _normalize_log_level(value: str | None) -> str | None:
+    normalized = str(value or "").strip().upper()
+    if not normalized:
+        return None
+    aliases = {
+        "WARN": "WARNING",
+        "FATAL": "CRITICAL",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized in {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}:
+        return normalized
+    return None
+
+
+def _apply_logging_overrides(cfg: dict[str, Any]) -> dict[str, Any]:
+    handlers = cfg.get("handlers", {})
+    loggers = cfg.get("loggers", {})
+    root = cfg.get("root", {})
+
+    base_level = _normalize_log_level(os.getenv("VAR_PROJECT_LOG_LEVEL"))
+    console_level = _normalize_log_level(os.getenv("VAR_PROJECT_LOG_CONSOLE_LEVEL"))
+    file_level = _normalize_log_level(os.getenv("VAR_PROJECT_LOG_FILE_LEVEL"))
+
+    if base_level:
+        if isinstance(root, dict):
+            root["level"] = base_level
+        var_project_logger = loggers.get("var_project")
+        if isinstance(var_project_logger, dict):
+            var_project_logger["level"] = base_level
+        if console_level is None:
+            console_level = base_level
+        if file_level is None:
+            file_level = base_level
+
+    console_handler = handlers.get("console")
+    if console_level and isinstance(console_handler, dict):
+        console_handler["level"] = console_level
+
+    file_handler = handlers.get("file")
+    if file_level and isinstance(file_handler, dict):
+        file_handler["level"] = file_level
+
+    return cfg
+
+
 def setup_logging(root: Path) -> None:
     cfg_path = root / "config" / "logging.yaml"
     if not cfg_path.exists():
@@ -25,6 +71,7 @@ def setup_logging(root: Path) -> None:
         return
 
     cfg = load_yaml(cfg_path)
+    cfg = _apply_logging_overrides(cfg)
     handlers = cfg.get("handlers", {})
     file_h = handlers.get("file")
     if isinstance(file_h, dict) and "filename" in file_h:

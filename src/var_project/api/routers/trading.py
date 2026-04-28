@@ -6,6 +6,10 @@ from var_project.api.dependencies import get_service
 from var_project.api.schemas import (
     AlertSummary,
     AuditEventResponse,
+    DecisionBacktestTrajectoryResponse,
+    DecisionForecastResponse,
+    DecisionPortfolioForecastResponse,
+    DecisionReplayResponse,
     ExecutionFillResponse,
     ExecutionPreviewResponse,
     ExecutionRequest,
@@ -65,6 +69,78 @@ def recent_decisions(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return [RiskDecisionResponse.model_validate(item) for item in payload]
+
+
+@router.get("/decisions/replay", response_model=DecisionReplayResponse)
+def replay_decision_alpha(
+    portfolio_slug: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=2000),
+    lookback_days: int | None = Query(default=None, ge=1, le=365),
+    service: DeskApiService = Depends(get_service),
+) -> DecisionReplayResponse:
+    try:
+        payload = service.decision_alpha_replay(
+            portfolio_slug=portfolio_slug,
+            limit=limit,
+            lookback_days=lookback_days,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return DecisionReplayResponse.model_validate(payload)
+
+
+@router.get("/decisions/forecast", response_model=DecisionForecastResponse)
+def forecast_decision_alpha(
+    symbol: str = Query(..., min_length=3),
+    portfolio_slug: str | None = Query(default=None),
+    horizon_days: int = Query(default=5, ge=1, le=180),
+    service: DeskApiService = Depends(get_service),
+) -> DecisionForecastResponse:
+    try:
+        payload = service.decision_alpha_forecast(
+            symbol=symbol,
+            portfolio_slug=portfolio_slug,
+            horizon_days=horizon_days,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return DecisionForecastResponse.model_validate(payload)
+
+
+@router.get("/decisions/trajectory", response_model=DecisionBacktestTrajectoryResponse)
+def decision_alpha_backtest_trajectory(
+    symbol: str = Query(..., min_length=3),
+    portfolio_slug: str | None = Query(default=None),
+    lookback_days: int = Query(default=90, ge=7, le=365),
+    service: DeskApiService = Depends(get_service),
+) -> DecisionBacktestTrajectoryResponse:
+    try:
+        payload = service.decision_alpha_backtest_trajectory(
+            symbol=symbol,
+            portfolio_slug=portfolio_slug,
+            lookback_days=lookback_days,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return DecisionBacktestTrajectoryResponse.model_validate(payload)
+
+
+@router.get("/decisions/portfolio-forecast", response_model=DecisionPortfolioForecastResponse)
+def decision_alpha_portfolio_forecast(
+    portfolio_slug: str | None = Query(default=None),
+    horizon_days: int = Query(default=150, ge=30, le=180),
+    symbols: list[str] | None = Query(default=None),
+    service: DeskApiService = Depends(get_service),
+) -> DecisionPortfolioForecastResponse:
+    try:
+        payload = service.decision_alpha_portfolio_forecast(
+            portfolio_slug=portfolio_slug,
+            horizon_days=horizon_days,
+            symbols=symbols,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return DecisionPortfolioForecastResponse.model_validate(payload)
 
 
 @router.post("/execution/preview", response_model=ExecutionPreviewResponse)

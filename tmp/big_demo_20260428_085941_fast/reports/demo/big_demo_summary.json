@@ -1,0 +1,393 @@
+{
+  "run_root": "D:\\Finance prog\\VaR-project-assets\\tmp\\big_demo_20260428_085941_fast",
+  "generated_at": "2026-04-28T09:08:02.566232+00:00",
+  "total_checks": 44,
+  "ok_checks": 43,
+  "failed_checks": 1,
+  "failed_labels": [
+    "desk_overview"
+  ],
+  "coherence": {
+    "table_counts": {
+      "risk_snapshots": 8,
+      "risk_decisions": 0,
+      "execution_results": 3,
+      "capital_snapshots": 9,
+      "market_data_sync_runs": 3,
+      "market_bars": 18300,
+      "mt5_order_history": 25,
+      "mt5_deal_history": 25,
+      "alerts": 18,
+      "audit_events": 19
+    },
+    "execution_status_counts": {
+      "EXECUTED": 2,
+      "PREVIEW": 1
+    },
+    "executed_fill_ratio_anomalies": 1,
+    "decision_arithmetic_deltas": [
+      {
+        "label": "decision_open",
+        "delta": 0.0
+      },
+      {
+        "label": "decision_close",
+        "delta": 0.0
+      }
+    ]
+  },
+  "checks": [
+    {
+      "label": "health",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 72095.14,
+      "attempts": 1,
+      "path": "/health"
+    },
+    {
+      "label": "health_dependencies",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 147478.69,
+      "attempts": 1,
+      "path": "/health/dependencies"
+    },
+    {
+      "label": "health_readiness",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 1568.31,
+      "attempts": 1,
+      "path": "/health/readiness"
+    },
+    {
+      "label": "jobs_status",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 296.64,
+      "attempts": 1,
+      "path": "/jobs/status"
+    },
+    {
+      "label": "desks",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 7.2,
+      "attempts": 1,
+      "path": "/desks"
+    },
+    {
+      "label": "desk_overview",
+      "status": 404,
+      "ok": false,
+      "elapsed_ms": 7.29,
+      "attempts": 1,
+      "path": "/desks/default/overview"
+    },
+    {
+      "label": "market_sync",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 45388.79,
+      "attempts": 1,
+      "path": "/market-data/sync"
+    },
+    {
+      "label": "market_status",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 330.17,
+      "attempts": 1,
+      "path": "/market-data/status"
+    },
+    {
+      "label": "market_sync_runs",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 195.77,
+      "attempts": 1,
+      "path": "/market-data/sync/runs"
+    },
+    {
+      "label": "mt5_live_state",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 5595.13,
+      "attempts": 1,
+      "path": "/mt5/live/state"
+    },
+    {
+      "label": "history_orders",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 115.86,
+      "attempts": 1,
+      "path": "/mt5/history/orders"
+    },
+    {
+      "label": "history_deals",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 112.73,
+      "attempts": 1,
+      "path": "/mt5/history/deals"
+    },
+    {
+      "label": "history_transactions_manual",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 212.3,
+      "attempts": 1,
+      "path": "/mt5/history/transactions"
+    },
+    {
+      "label": "snapshot_run",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 5761.17,
+      "attempts": 1,
+      "path": "/snapshots/run"
+    },
+    {
+      "label": "snapshot_latest",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 24.0,
+      "attempts": 1,
+      "path": "/snapshots/latest"
+    },
+    {
+      "label": "backtest_run",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 39686.28,
+      "attempts": 1,
+      "path": "/backtests/run"
+    },
+    {
+      "label": "backtest_latest",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 16.33,
+      "attempts": 1,
+      "path": "/backtests/latest"
+    },
+    {
+      "label": "validation_latest",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 19.4,
+      "attempts": 1,
+      "path": "/validations/latest"
+    },
+    {
+      "label": "model_compare_latest",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 29.37,
+      "attempts": 1,
+      "path": "/models/compare/latest"
+    },
+    {
+      "label": "stress_run",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 5872.6,
+      "attempts": 1,
+      "path": "/snapshots/stress"
+    },
+    {
+      "label": "risk_summary",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 121.96,
+      "attempts": 1,
+      "path": "/risk/summary"
+    },
+    {
+      "label": "risk_diagnostics",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 39.05,
+      "attempts": 1,
+      "path": "/risk/diagnostics"
+    },
+    {
+      "label": "risk_contributions",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 36.59,
+      "attempts": 1,
+      "path": "/risk/contributions"
+    },
+    {
+      "label": "capital_latest",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 33.82,
+      "attempts": 1,
+      "path": "/capital/latest"
+    },
+    {
+      "label": "capital_history",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 31.55,
+      "attempts": 1,
+      "path": "/capital/history"
+    },
+    {
+      "label": "capital_rebalance",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 4345.33,
+      "attempts": 1,
+      "path": "/capital/rebalance"
+    },
+    {
+      "label": "decision_open",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 31749.4,
+      "attempts": 1,
+      "path": "/decisions/evaluate"
+    },
+    {
+      "label": "decision_close",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 22163.11,
+      "attempts": 1,
+      "path": "/decisions/evaluate"
+    },
+    {
+      "label": "execution_preview_open",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 42811.28,
+      "attempts": 1,
+      "path": "/execution/preview"
+    },
+    {
+      "label": "execution_submit_open",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 32315.65,
+      "attempts": 1,
+      "path": "/execution/submit"
+    },
+    {
+      "label": "execution_submit_close",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 28045.6,
+      "attempts": 1,
+      "path": "/execution/submit"
+    },
+    {
+      "label": "execution_recent",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 20.22,
+      "attempts": 1,
+      "path": "/execution/recent"
+    },
+    {
+      "label": "execution_fills_recent",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 14.78,
+      "attempts": 1,
+      "path": "/execution/fills/recent"
+    },
+    {
+      "label": "report_run",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 2189.61,
+      "attempts": 1,
+      "path": "/reports/run"
+    },
+    {
+      "label": "report_latest",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 79.19,
+      "attempts": 1,
+      "path": "/reports/latest"
+    },
+    {
+      "label": "report_chart_fetch",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 197.44,
+      "attempts": 1,
+      "path": "/reports/charts/compare_H1_365d_alpha95_pffx_eur_20k_mcnormal_garch_t_ewma_fhs_20260428_090500_321357_exceptions.png"
+    },
+    {
+      "label": "report_decision_history",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 20.17,
+      "attempts": 1,
+      "path": "/reports/decision-history"
+    },
+    {
+      "label": "report_capital_history",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 16.32,
+      "attempts": 1,
+      "path": "/reports/capital-history"
+    },
+    {
+      "label": "alerts",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 15.33,
+      "attempts": 1,
+      "path": "/alerts"
+    },
+    {
+      "label": "alerts_active",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 52.29,
+      "attempts": 1,
+      "path": "/alerts/active"
+    },
+    {
+      "label": "reconciliation_summary",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 10305.55,
+      "attempts": 1,
+      "path": "/reconciliation/summary"
+    },
+    {
+      "label": "reconciliation_history",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 25.68,
+      "attempts": 1,
+      "path": "/reconciliation/history"
+    },
+    {
+      "label": "reconciliation_ack",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 381.27,
+      "attempts": 1,
+      "path": "/reconciliation/acknowledge"
+    },
+    {
+      "label": "reconciliation_incidents",
+      "status": 200,
+      "ok": true,
+      "elapsed_ms": 45.55,
+      "attempts": 1,
+      "path": "/reconciliation/incidents"
+    }
+  ]
+}

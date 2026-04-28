@@ -14,6 +14,8 @@ from var_project.validation.model_validation import (
     BacktestModelValidation,
     ValidationSummary,
     build_champion_challenger_summary,
+    rank_validation_models,
+    recommended_backtest_history_days,
     validate_compare_frame,
     validate_compare_surface,
 )
@@ -49,11 +51,216 @@ def _surface_frame_with_observations(*, n: int, alpha_token: str, horizon_days: 
     )
 
 
+def test_validate_compare_surface_uses_non_overlapping_multi_day_exceptions():
+    observations = 100
+    clustered = [0] * observations
+    for start in (10, 40, 70):
+        for index in range(start, min(start + 5, observations)):
+            clustered[index] = 1
+
+    frame = pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=observations, freq="D", tz="UTC"),
+            "pnl": [-10.0 if value else 4.0 for value in clustered],
+            "var_hist_a95_h5": [10.0] * observations,
+            "es_hist_a95_h5": [12.0] * observations,
+            "exc_hist_a95_h5": clustered,
+        }
+    )
+
+    surface = validate_compare_surface(frame, alphas=[0.95], horizons=[5])
+    assert len(surface["points"]) == 1
+    point = surface["points"][0]
+    assert point["horizon_days"] == 5
+    assert point["n"] == 20
+
+
 def test_validation_summary_picks_best_model():
     summary = validate_compare_frame(_compare_frame(), alpha=0.95)
 
     assert set(summary.model_results) == {"hist", "param"}
     assert summary.best_model == "param"
+
+
+def test_recommended_backtest_history_days_respects_surface_sample_floors():
+    assert recommended_backtest_history_days(
+        alphas=[0.95, 0.975, 0.99],
+        horizons=[1, 5, 10],
+        window=20,
+    ) == 529
+
+
+def test_rank_validation_models_preserves_statistical_ties_and_distinct_challenger():
+    shared = {
+        "n": 120,
+        "exceptions": 6,
+        "expected_rate": 0.05,
+        "actual_rate": 0.05,
+        "lr_uc": 0.1,
+        "p_uc": 0.8,
+        "lr_ind": 0.2,
+        "p_ind": 0.7,
+        "lr_cc": 0.3,
+        "p_cc": 0.6,
+        "exceptions_last_250": 6,
+        "traffic_light": "GREEN",
+        "score": 80.0,
+        "es_tail_observations": 70,
+        "es_shortfall_ratio": 0.95,
+        "es_breach_rate": 0.03,
+        "es_acerbi_stat": 0.1,
+        "es_acerbi_p_value": 0.7,
+        "es_acerbi_observations": 70,
+    }
+    summary = ValidationSummary(
+        alpha=0.95,
+        expected_rate=0.05,
+        model_results={
+            "hist": BacktestModelValidation(model="hist", **shared),
+            "param": BacktestModelValidation(model="param", **shared),
+            "mc": BacktestModelValidation(
+                model="mc",
+                n=120,
+                exceptions=9,
+                expected_rate=0.05,
+                actual_rate=9 / 120,
+                lr_uc=0.7,
+                p_uc=0.3,
+                lr_ind=0.5,
+                p_ind=0.35,
+                lr_cc=0.9,
+                p_cc=0.2,
+                exceptions_last_250=9,
+                traffic_light="AMBER",
+                score=45.0,
+                es_tail_observations=70,
+                es_shortfall_ratio=1.15,
+                es_breach_rate=0.07,
+                es_acerbi_stat=1.2,
+                es_acerbi_p_value=0.18,
+                es_acerbi_observations=70,
+            ),
+        },
+        best_model="hist",
+    )
+
+    ranking = rank_validation_models(summary)
+
+    assert [row.rank for row in ranking] == [1, 1, 3]
+    assert {row.model for row in ranking if row.rank == 1} == {"hist", "param"}
+
+    comparison = build_champion_challenger_summary(summary)
+    assert comparison.champion_model == "hist"
+    assert comparison.challenger_model == "mc"
+
+
+def test_rank_validation_models_exposes_primary_signal_and_reason():
+    summary = ValidationSummary(
+        alpha=0.95,
+        expected_rate=0.05,
+        model_results={
+            "ind": BacktestModelValidation(
+                model="ind",
+                n=200,
+                exceptions=12,
+                expected_rate=0.05,
+                actual_rate=0.06,
+                lr_uc=0.2,
+                p_uc=0.40,
+                lr_ind=4.2,
+                p_ind=0.040,
+                lr_cc=6.8,
+                p_cc=0.033,
+                exceptions_last_250=12,
+                traffic_light=None,
+                score=55.0,
+                es_tail_observations=90,
+                es_shortfall_ratio=1.05,
+                es_breach_rate=0.24,
+                es_acerbi_stat=0.5,
+                es_acerbi_p_value=0.62,
+                es_acerbi_observations=180,
+            ),
+            "uc": BacktestModelValidation(
+                model="uc",
+                n=200,
+                exceptions=20,
+                expected_rate=0.05,
+                actual_rate=0.10,
+                lr_uc=7.0,
+                p_uc=0.008,
+                lr_ind=0.4,
+                p_ind=0.53,
+                lr_cc=7.4,
+                p_cc=0.024,
+                exceptions_last_250=20,
+                traffic_light=None,
+                score=35.0,
+                es_tail_observations=90,
+                es_shortfall_ratio=1.02,
+                es_breach_rate=0.19,
+                es_acerbi_stat=0.7,
+                es_acerbi_p_value=0.49,
+                es_acerbi_observations=180,
+            ),
+            "es": BacktestModelValidation(
+                model="es",
+                n=220,
+                exceptions=11,
+                expected_rate=0.05,
+                actual_rate=0.05,
+                lr_uc=0.1,
+                p_uc=0.80,
+                lr_ind=0.2,
+                p_ind=0.74,
+                lr_cc=0.3,
+                p_cc=0.67,
+                exceptions_last_250=11,
+                traffic_light=None,
+                score=70.0,
+                es_tail_observations=100,
+                es_shortfall_ratio=1.28,
+                es_breach_rate=0.55,
+                es_acerbi_stat=2.9,
+                es_acerbi_p_value=0.0037,
+                es_acerbi_observations=200,
+            ),
+            "basel": BacktestModelValidation(
+                model="basel",
+                n=250,
+                exceptions=4,
+                expected_rate=0.01,
+                actual_rate=0.016,
+                lr_uc=0.1,
+                p_uc=0.80,
+                lr_ind=0.1,
+                p_ind=0.80,
+                lr_cc=0.1,
+                p_cc=0.80,
+                exceptions_last_250=4,
+                traffic_light="GREEN",
+                score=91.0,
+                es_tail_observations=75,
+                es_shortfall_ratio=1.0,
+                es_breach_rate=0.10,
+                es_acerbi_stat=0.1,
+                es_acerbi_p_value=0.90,
+                es_acerbi_observations=180,
+            ),
+        },
+        best_model="basel",
+    )
+
+    ranking = {row.model: row for row in rank_validation_models(summary)}
+
+    assert ranking["ind"].signal == "IND FAIL"
+    assert "conditional coverage" in str(ranking["ind"].signal_reason).lower()
+    assert ranking["uc"].signal == "UC FAIL"
+    assert "kupiec uc rejected coverage" in str(ranking["uc"].signal_reason).lower()
+    assert ranking["es"].signal == "ES FAIL"
+    assert "es acerbi status is fail" in str(ranking["es"].signal_reason).lower()
+    assert ranking["basel"].signal == "BASEL GREEN"
+    assert "basel traffic light is green" in str(ranking["basel"].signal_reason).lower()
 
 
 def test_validation_summary_exposes_es_tail_diagnostics():
@@ -1117,3 +1324,71 @@ def test_live_operator_alerts_skip_window_expired_when_only_history_window_expir
 
     codes = {alert.code for alert in alerts}
     assert "MT5_RECONCILIATION_WINDOW_EXPIRED" not in codes
+
+
+def test_live_operator_alerts_skip_window_expired_when_only_manual_events_present():
+    alerts = alerts_from_live_operator_state(
+        {
+            "connected": True,
+            "status": "ok",
+            "generated_at": "2026-04-04T12:00:00+00:00",
+            "reconciliation": {
+                "bridge_connected": True,
+                "live_base_ready": True,
+                "history_window_minutes": 180,
+                "history_window_expired_execution_count": 1,
+                "manual_event_count": 10,
+                "active_incident_count": 0,
+                "unmatched_execution_count": 0,
+                "status_counts": {"history_window_expired": 1},
+                "suppressed_status_counts": {},
+            },
+        }
+    )
+
+    codes = {alert.code for alert in alerts}
+    assert "MT5_RECONCILIATION_WINDOW_EXPIRED" not in codes
+
+
+def test_live_operator_alerts_skip_manual_events_without_active_incidents():
+    alerts = alerts_from_live_operator_state(
+        {
+            "connected": True,
+            "status": "ok",
+            "generated_at": "2026-04-04T12:00:00+00:00",
+            "reconciliation": {
+                "bridge_connected": True,
+                "live_base_ready": True,
+                "manual_event_count": 6,
+                "active_incident_count": 0,
+                "unmatched_execution_count": 0,
+                "status_counts": {},
+                "suppressed_status_counts": {},
+            },
+        }
+    )
+
+    codes = {alert.code for alert in alerts}
+    assert "MT5_MANUAL_EVENTS" not in codes
+
+
+def test_live_operator_alerts_keep_manual_events_with_active_incidents():
+    alerts = alerts_from_live_operator_state(
+        {
+            "connected": True,
+            "status": "ok",
+            "generated_at": "2026-04-04T12:00:00+00:00",
+            "reconciliation": {
+                "bridge_connected": True,
+                "live_base_ready": True,
+                "manual_event_count": 4,
+                "active_incident_count": 2,
+                "unmatched_execution_count": 0,
+                "status_counts": {},
+                "suppressed_status_counts": {},
+            },
+        }
+    )
+
+    codes = {alert.code for alert in alerts}
+    assert "MT5_MANUAL_EVENTS" in codes

@@ -30,9 +30,9 @@ class AppStorage:
         }
         if not is_sqlite:
             engine_kwargs["pool_recycle"] = int(os.getenv("VAR_PROJECT_DB_POOL_RECYCLE_SECONDS", "300"))
-            engine_kwargs["pool_size"] = int(os.getenv("VAR_PROJECT_DB_POOL_SIZE", "8"))
-            engine_kwargs["max_overflow"] = int(os.getenv("VAR_PROJECT_DB_MAX_OVERFLOW", "8"))
-            engine_kwargs["pool_timeout"] = int(os.getenv("VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS", "15"))
+            engine_kwargs["pool_size"] = int(os.getenv("VAR_PROJECT_DB_POOL_SIZE", "4"))
+            engine_kwargs["max_overflow"] = int(os.getenv("VAR_PROJECT_DB_MAX_OVERFLOW", "2"))
+            engine_kwargs["pool_timeout"] = int(os.getenv("VAR_PROJECT_DB_POOL_TIMEOUT_SECONDS", "10"))
         self.engine = create_engine(settings.database_url, **engine_kwargs)
         self.session_factory = sessionmaker(bind=self.engine, expire_on_commit=False)
         self.reads = StorageReadRepository(self.session_factory)
@@ -371,6 +371,17 @@ class AppStorage:
 
     def latest_validation_run(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
         return self.reads.latest_validation_run(portfolio_slug=portfolio_slug)
+
+    def latest_validation_run_for_artifact(
+        self,
+        *,
+        source_artifact_id: int,
+        portfolio_slug: str | None = None,
+    ) -> dict[str, Any] | None:
+        return self.reads.latest_validation_run_for_artifact(
+            source_artifact_id=source_artifact_id,
+            portfolio_slug=portfolio_slug,
+        )
 
     def recent_alerts(self, *, limit: int = 25) -> list[dict[str, Any]]:
         return self.reads.recent_alerts(limit=limit)

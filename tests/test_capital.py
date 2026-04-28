@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from var_project.alerts.engine import alerts_from_capital_snapshot
 from var_project.risk.capital import build_capital_usage_snapshot
 
 
@@ -72,3 +73,26 @@ def test_capital_snapshot_honours_explicit_total_budget_override():
 
     assert snapshot.total_capital_budget_eur == 420.0
     assert snapshot.total_capital_consumed_eur == 560.0
+
+
+def test_capital_snapshot_observational_mode_suppresses_budget_pressure_alerts():
+    limits_cfg = {
+        "capital_management": {
+            "enforce_limits": False,
+            "reserve_ratio": 0.10,
+            "preferred_model": "hist",
+        },
+        "risk_budget": {"utilisation_warn": 0.85, "utilisation_breach": 1.0},
+    }
+    snapshot = build_capital_usage_snapshot(
+        _risk_budget_payload(),
+        limits_cfg,
+        portfolio_slug="mt5_live_portfolio",
+        base_currency="EUR",
+    )
+
+    assert snapshot.status == "OK"
+    assert snapshot.allocations["EURUSD"].status == "OK"
+    assert snapshot.allocations["EURUSD"].action == "HOLD"
+    assert snapshot.recommendations == []
+    assert alerts_from_capital_snapshot(snapshot.to_dict()) == []

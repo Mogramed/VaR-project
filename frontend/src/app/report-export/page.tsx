@@ -1,8 +1,18 @@
-import { ChartSurface } from "@/components/charts/chart-surface";
+import { AutoPrintReport } from "@/components/reports/auto-print-report";
+import {
+  ReportBacktestChart,
+  ReportCapitalChart,
+  ReportDecisionContinuityChart,
+} from "@/components/reports/report-export-charts";
 import { ReportDocument } from "@/components/reports/report-document";
 import { MetricBlock } from "@/components/ui/metric-block";
 import { StatusBadge } from "@/components/ui/primitives";
-import { CHART_PALETTE, makeBacktestOption, makeGroupedBarOption, makeLineOption } from "@/lib/chart-options";
+import {
+  formatReportStatusLabel,
+  getReportExportSection,
+  REPORT_EXPORT_SECTIONS,
+  reportStatusTone,
+} from "@/lib/report-export";
 import { loadDeskReportViewModel } from "@/lib/report-view-model";
 import { formatCurrency, formatSourceLabel, formatTimestamp } from "@/lib/utils";
 
@@ -25,21 +35,31 @@ export default async function ReportExportPage({
     typeof query.portfolio === "string" ? query.portfolio : undefined;
   const accountId =
     typeof query.account === "string" ? query.account : undefined;
+  const autoPrint = query.print === "1";
   const report = await loadDeskReportViewModel(portfolioSlug, {
     liveState: null,
     accountId,
+    freezeToReportScope: true,
   });
+
   const snapshotSourceLabel = formatSourceLabel(report.meta.preferredSnapshotSource);
   const isLiveSnapshot = String(report.meta.preferredSnapshotSource ?? "").startsWith("mt5_live");
   const reportDate = REPORT_DATE_FORMATTER.format(new Date());
+  const executiveSection = getReportExportSection("executive");
+  const analyticsSection = getReportExportSection("analytics");
+  const capitalSection = getReportExportSection("capital");
+  const governanceSection = getReportExportSection("governance");
+  const narrativeSection = getReportExportSection("narrative");
+  const auditSection = getReportExportSection("audit");
+  const selectedCapitalModel = report.capital?.reference_model?.toUpperCase() ?? report.selectedModel.toUpperCase();
 
   return (
     <main
       data-report-export-root="true"
       className="pdf-report min-h-screen bg-[#090a0d] px-8 py-8 text-[var(--color-text)]"
     >
+      <AutoPrintReport enabled={autoPrint} />
       <div className="mx-auto flex max-w-[1120px] flex-col gap-8">
-        {/* ─── Cover Page ─── */}
         <section className="pdf-page-break-after surface-strong rounded-[2rem] border border-white/10 px-10 py-12">
           <div className="flex flex-wrap items-start justify-between gap-6">
             <div className="max-w-3xl">
@@ -64,7 +84,10 @@ export default async function ReportExportPage({
                   label={snapshotSourceLabel}
                   tone={isLiveSnapshot ? "success" : "neutral"}
                 />
-                <StatusBadge label={report.capital?.status ?? "pending"} tone="success" />
+                <StatusBadge
+                  label={formatReportStatusLabel(report.capital?.status)}
+                  tone={reportStatusTone(report.capital?.status)}
+                />
                 <StatusBadge label={report.meta.reportTimestamp} />
               </div>
             </div>
@@ -81,7 +104,6 @@ export default async function ReportExportPage({
             </div>
           </div>
 
-          {/* Confidential notice */}
           <div className="mt-10 flex items-center gap-3 border-t border-white/8 pt-5">
             <span className="mono text-[9px] uppercase tracking-[0.25em] text-[var(--color-text-muted)]">
               Confidential
@@ -93,23 +115,15 @@ export default async function ReportExportPage({
           </div>
         </section>
 
-        {/* ─── Table of Contents ─── */}
         <section className="pdf-avoid-break surface rounded-[1.8rem] p-6">
           <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
             Contents
           </div>
           <div className="mt-4 grid gap-1.5 text-sm">
-            {[
-              { num: "01", title: "Executive Summary" },
-              { num: "02", title: "Analytics" },
-              { num: "03", title: "Capital" },
-              { num: "04", title: "Governance" },
-              { num: "05", title: "Desk Narrative" },
-              { num: "06", title: "Audit Trail" },
-            ].map((s) => (
-              <div key={s.num} className="flex items-center gap-3 py-1.5">
-                <span className="mono w-6 text-[12px] font-bold text-[var(--color-accent)]">{s.num}</span>
-                <span className="text-[var(--color-text-soft)]">{s.title}</span>
+            {REPORT_EXPORT_SECTIONS.map((section) => (
+              <div key={section.number} className="flex items-center gap-3 py-1.5">
+                <span className="mono w-6 text-[12px] font-bold text-[var(--color-accent)]">{section.number}</span>
+                <span className="text-[var(--color-text-soft)]">{section.title}</span>
                 <span className="h-px flex-1 border-b border-dotted border-white/10" />
               </div>
             ))}
@@ -122,8 +136,7 @@ export default async function ReportExportPage({
           </div>
         </section>
 
-        {/* ─── 01 Executive Summary ─── */}
-        <SectionDivider number="01" title="Executive Summary" />
+        <SectionDivider number={executiveSection.number} title={executiveSection.title} />
         <section className="pdf-avoid-break grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
           <div className="surface rounded-[1.8rem] p-6">
             <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
@@ -155,63 +168,127 @@ export default async function ReportExportPage({
           </div>
         </section>
 
-        {/* ─── 02 Analytics ─── */}
-        <SectionDivider number="02" title="Analytics" />
+        <SectionDivider number={analyticsSection.number} title={analyticsSection.title} />
         <section className="pdf-avoid-break grid gap-6 lg:grid-cols-2">
-          <ChartSurface
-            option={makeBacktestOption(report.derived.backtestSeries)}
+          <ReportBacktestChart
+            points={report.derived.backtestSeries}
             height={420}
-            mode="trace"
-            dataCount={report.derived.backtestSeries.length}
-            eyebrow="Analytics"
             title="Backtest trace"
             description="Portfolio PnL against the current VaR stack."
-            showDescription
             meta={`${report.derived.backtestSeries.length} rows`}
           />
-          <ChartSurface
-            option={makeLineOption(report.capitalSeries, CHART_PALETTE.green, { mode: "standard" })}
-            height={420}
-            mode="standard"
-            dataCount={report.capitalSeries.length}
-            eyebrow="Capital"
-            title="Capital usage trajectory"
-            description="Consumed capital over the latest persisted snapshots."
-            showDescription
-            meta={report.capital?.reference_model.toUpperCase() ?? "n/a"}
-          />
+          <section className="surface rounded-[1.8rem] p-6">
+            <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
+              Risk analytics snapshot
+            </div>
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <MetricBlock
+                label="Selected model"
+                value={report.selectedModel.toUpperCase()}
+                hint="Model frozen into the versioned report contract."
+                tone="accent"
+              />
+              <MetricBlock
+                label="Validation champion"
+                value={(report.comparison?.champion_model ?? report.selectedModel).toUpperCase()}
+                hint="Champion/challenger state captured at report generation time."
+                tone="neutral"
+              />
+              <MetricBlock
+                label="VaR"
+                value={report.varDisplay}
+                hint={report.report?.report_contract?.metrics?.var?.as_of_utc
+                  ? `As of ${formatTimestamp(report.report.report_contract.metrics.var.as_of_utc)}.`
+                  : "Latest report-scoped VaR value."}
+                tone="accent"
+              />
+              <MetricBlock
+                label="Expected shortfall"
+                value={report.esDisplay}
+                hint={report.report?.report_contract?.metrics?.es?.as_of_utc
+                  ? `As of ${formatTimestamp(report.report.report_contract.metrics.es.as_of_utc)}.`
+                  : "Latest report-scoped ES value."}
+                tone="warning"
+              />
+              <MetricBlock
+                label="Last PnL"
+                value={report.pnlDisplay}
+                hint={report.pnlTimestamp
+                  ? `Frozen at ${formatTimestamp(report.pnlTimestamp)} for this report export.`
+                  : "No report-scoped PnL timestamp available."}
+                tone="neutral"
+              />
+              <MetricBlock
+                label="Contract version"
+                value={report.meta.reportContractVersion ?? "report.v1"}
+                hint="Versioned report contract used by the export surface."
+                tone="success"
+              />
+            </div>
+          </section>
         </section>
 
-        {/* ─── 03 Capital ─── */}
-        <SectionDivider number="03" title="Governance" />
-        <ChartSurface
-          option={makeGroupedBarOption(
-            report.decisionSizeSeries.labels,
-            [
-              {
-                name: "Requested",
-                data: report.decisionSizeSeries.requested,
-                color: CHART_PALETTE.gold,
-              },
-              {
-                name: "Approved",
-                data: report.decisionSizeSeries.approved,
-                color: CHART_PALETTE.green,
-              },
-            ],
-            { mode: "comparison" },
-          )}
+        <SectionDivider number={capitalSection.number} title={capitalSection.title} />
+        <section className="pdf-avoid-break grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
+          <ReportCapitalChart
+            points={report.capitalSeries}
+            height={420}
+            title="Capital usage trajectory"
+            description="Consumed capital over the latest persisted snapshots."
+            meta={selectedCapitalModel}
+          />
+          <section className="surface rounded-[1.8rem] p-6">
+            <div className="mono text-[11px] uppercase tracking-[0.28em] text-[var(--color-text-muted)]">
+              Capital posture
+            </div>
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <MetricBlock
+                label="Budget"
+                value={report.capital ? formatCurrency(report.capital.total_capital_budget_eur, report.meta.moneyDecimals) : "n/a"}
+                hint="Total capital envelope persisted with the report snapshot."
+                tone="accent"
+              />
+              <MetricBlock
+                label="Consumed"
+                value={report.capital ? formatCurrency(report.capital.total_capital_consumed_eur, report.meta.moneyDecimals) : "n/a"}
+                hint="Capital currently consumed by active exposures."
+                tone="warning"
+              />
+              <MetricBlock
+                label="Reserved"
+                value={report.capital ? formatCurrency(report.capital.total_capital_reserved_eur, report.meta.moneyDecimals) : "n/a"}
+                hint="Capital reserve carved out by current desk policy."
+                tone="neutral"
+              />
+              <MetricBlock
+                label="Headroom"
+                value={report.capital ? `${Math.round((report.capital.headroom_ratio ?? 0) * 100)}%` : "n/a"}
+                hint={report.capital
+                  ? `${formatCurrency(report.capital.total_capital_remaining_eur, report.meta.moneyDecimals)} remaining before the configured boundary.`
+                  : "No report-scoped capital snapshot available."}
+                tone={reportStatusTone(report.capital?.status)}
+              />
+            </div>
+            <div className="mt-6 grid gap-4 text-sm text-[var(--color-text-soft)]">
+              <ReportMetaRow label="Status" value={formatReportStatusLabel(report.capital?.status)} />
+              <ReportMetaRow label="Reference model" value={selectedCapitalModel} />
+              <ReportMetaRow label="Base currency" value={report.meta.baseCurrency} />
+              <ReportMetaRow label="Snapshot source" value={snapshotSourceLabel} />
+            </div>
+          </section>
+        </section>
+
+        <SectionDivider number={governanceSection.number} title={governanceSection.title} />
+        <ReportDecisionContinuityChart
+          labels={report.decisionSizeSeries.labels}
+          requested={report.decisionSizeSeries.requested}
+          approved={report.decisionSizeSeries.approved}
           height={360}
-          mode="comparison"
-          dataCount={report.decisionSizeSeries.labels.length}
-          eyebrow="Decision continuity"
           title="Requested versus approved exposure"
           description="Advisory friction remains visible inside the downloadable report."
-          showDescription
         />
 
-        {/* ─── 04 Desk Narrative ─── */}
-        <SectionDivider number="04" title="Desk Narrative" />
+        <SectionDivider number={narrativeSection.number} title={narrativeSection.title} />
         {report.report ? (
           <ReportDocument
             content={report.normalizedReportContent}
@@ -227,8 +304,7 @@ export default async function ReportExportPage({
           </section>
         )}
 
-        {/* ─── 05 Audit Trail ─── */}
-        <SectionDivider number="05" title="Audit Trail" />
+        <SectionDivider number={auditSection.number} title={auditSection.title} />
         <section className="pdf-avoid-break grid gap-6 lg:grid-cols-2">
           <StaticTableCard
             title="Recent decisions"
@@ -255,8 +331,6 @@ export default async function ReportExportPage({
     </main>
   );
 }
-
-/* ─── Local components ─── */
 
 function SectionDivider({ number, title }: { number: string; title: string }) {
   return (
@@ -288,7 +362,7 @@ function ReportMetaRow({
 }
 
 function isNumericCell(cell: string): boolean {
-  return /^[\d€$£¥%,.\-+\s]+$/.test(cell.trim());
+  return /^[\dA-Za-z$%,.\-+\s]+$/.test(cell.trim());
 }
 
 function StaticTableCard({

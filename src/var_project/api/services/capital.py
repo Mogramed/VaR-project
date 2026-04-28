@@ -33,10 +33,11 @@ class DeskCapitalService:
             overrides["reference_model"] = str(reference_model)
         if symbol_weights:
             overrides["symbol_weights"] = {str(symbol): float(value) for symbol, value in symbol_weights.items()}
+        effective_limits_cfg = self.runtime.effective_limits_config(portfolio)
 
         capital = build_capital_usage_snapshot(
             bundle["risk_budget"].to_dict(),
-            self.runtime.limits_config,
+            effective_limits_cfg,
             portfolio_slug=portfolio["slug"],
             base_currency=portfolio["base_currency"],
             reference_model=reference_model,

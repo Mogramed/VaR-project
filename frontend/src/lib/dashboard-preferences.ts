@@ -33,6 +33,8 @@ export const PAGE_IDS = [
   "attribution",
   "capital",
   "decisions",
+  "alpha-features",
+  "alpha-performance",
   "execution",
   "stress",
   "blotter",
@@ -40,6 +42,22 @@ export const PAGE_IDS = [
 ] as const;
 
 export type PageId = (typeof PAGE_IDS)[number];
+
+// Legacy full sidebar before Alpha pages were introduced.
+const LEGACY_PAGE_IDS_BEFORE_ALPHA: readonly PageId[] = [
+  "overview",
+  "live",
+  "incidents",
+  "universe",
+  "models",
+  "attribution",
+  "capital",
+  "decisions",
+  "execution",
+  "stress",
+  "blotter",
+  "reports",
+];
 
 export const PAGE_LABELS: Record<PageId, string> = {
   overview: "Overview",
@@ -50,6 +68,8 @@ export const PAGE_LABELS: Record<PageId, string> = {
   attribution: "Attribution",
   capital: "Capital",
   decisions: "Decisions",
+  "alpha-features": "Alpha Features",
+  "alpha-performance": "Alpha Performance",
   execution: "Execution",
   stress: "Stress",
   blotter: "Blotter",
@@ -132,6 +152,7 @@ const PRESET_BASE: Record<PresetName, DashboardPreferencesWithoutPreset> = {
       "models",
       "attribution",
       "capital",
+      "alpha-performance",
       "stress",
       "reports",
     ],
@@ -206,7 +227,16 @@ function normalizePageIds(values: unknown): PageId[] {
       .map((item) => String(item))
       .filter((item): item is PageId => PAGE_IDS.includes(item as PageId))
     : [];
-  const ordered = orderedUnique(requested, PAGE_IDS);
+  let ordered = orderedUnique(requested, PAGE_IDS);
+  const hasCompleteLegacySidebar = LEGACY_PAGE_IDS_BEFORE_ALPHA.every((id) =>
+    ordered.includes(id),
+  );
+  if (hasCompleteLegacySidebar) {
+    ordered = orderedUnique(
+      [...ordered, "alpha-features", "alpha-performance"],
+      PAGE_IDS,
+    );
+  }
   const withOverview: PageId[] = ordered.includes("overview")
     ? ordered
     : ["overview", ...ordered];

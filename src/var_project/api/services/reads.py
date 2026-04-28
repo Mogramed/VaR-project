@@ -174,21 +174,32 @@ class DeskReadService:
         if validation is None:
             return None
 
-        summary = ValidationSummary.from_dict(dict(validation.get("summary") or validation))
         snapshot = None
         for source in self._preferred_snapshot_sources(portfolio_slug=portfolio_slug, source="auto"):
             snapshot = self.latest_snapshot(source=source, portfolio_slug=portfolio_slug)
             if snapshot is not None:
                 break
-        snapshot_payload = {} if snapshot is None else dict(snapshot.get("payload") or snapshot)
+        return self._build_model_comparison_payload(validation=validation, snapshot=snapshot)
 
+    def _build_model_comparison_payload(
+        self,
+        *,
+        validation: Mapping[str, Any],
+        snapshot: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        summary = ValidationSummary.from_dict(dict(validation.get("summary") or validation))
+        snapshot_payload = {} if snapshot is None else dict(snapshot.get("payload") or snapshot)
         comparison = build_champion_challenger_summary(
             summary,
             current_var=dict(snapshot_payload.get("var") or {}),
             current_es=dict(snapshot_payload.get("es") or {}),
         ).to_dict()
-        comparison["snapshot_source"] = None if snapshot is None else str(snapshot.get("source") or snapshot_payload.get("source") or "")
-        comparison["snapshot_timestamp"] = None if snapshot is None else str(snapshot.get("created_at") or snapshot_payload.get("time_utc") or "")
+        comparison["snapshot_source"] = None if snapshot is None else str(
+            snapshot.get("source") or snapshot_payload.get("source") or ""
+        )
+        comparison["snapshot_timestamp"] = None if snapshot is None else str(
+            snapshot.get("created_at") or snapshot_payload.get("time_utc") or ""
+        )
         return comparison
 
     @staticmethod
@@ -248,15 +259,91 @@ class DeskReadService:
             content = path.read_text(encoding="utf-8")
         except OSError:
             return None
-        match = re.search(
+        patterns = (
             r"^- Champion model:\s+\*\*(?P<model>[a-z0-9_]+)\*\*",
-            content,
-            flags=re.IGNORECASE | re.MULTILINE,
+            r"^- Best model by score:\s+\*\*(?P<model>[a-z0-9_]+)\*\*",
         )
-        if match is None:
+        for pattern in patterns:
+            match = re.search(
+                pattern,
+                content,
+                flags=re.IGNORECASE | re.MULTILINE,
+            )
+            if match is None:
+                continue
+            model = str(match.group("model")).strip().lower()
+            if model:
+                return model
+        return None
+
+    def _resolve_report_artifact(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        report_id: int | None = None,
+        account_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        if not self.runtime.storage_ready:
             return None
-        model = str(match.group("model")).strip().lower()
-        return model or None
+
+        requested_account_id = self._resolve_requested_account_id(account_id)
+        default_account_id = self.runtime.resolve_mt5_account_id(None)
+
+        artifact = None
+        if report_id is not None:
+            candidate = self.runtime.storage.artifact_by_id(int(report_id))
+            if candidate is not None and str(candidate.get("artifact_type") or "") == "daily_report":
+                details = dict(candidate.get("details") or {})
+                matches_portfolio = portfolio_slug is None or str(details.get("portfolio_slug") or "") == str(portfolio_slug)
+                matches_account = requested_account_id is None or (
+                    self._resolved_record_account_id(details, default_account_id=default_account_id) == requested_account_id
+                )
+                if matches_portfolio and matches_account:
+                    artifact = candidate
+        else:
+            if requested_account_id is None:
+                artifact = self.runtime.storage.latest_artifact("daily_report", portfolio_slug=portfolio_slug)
+            else:
+                candidates = self.runtime.storage.recent_artifacts(
+                    "daily_report",
+                    limit=200,
+                    portfolio_slug=portfolio_slug,
+                )
+                for candidate in candidates:
+                    details = dict(candidate.get("details") or {})
+                    if self._resolved_record_account_id(details, default_account_id=default_account_id) == requested_account_id:
+                        artifact = candidate
+                        break
+        return artifact
+
+    def _resolve_report_compare_csv_path(
+        self,
+        *,
+        artifact: Mapping[str, Any],
+        details: Mapping[str, Any],
+    ) -> tuple[Path | None, dict[str, Any] | None]:
+        source_artifact_id = None
+        try:
+            if details.get("source_artifact_id") not in {None, "", "null"}:
+                source_artifact_id = int(details.get("source_artifact_id"))
+        except (TypeError, ValueError):
+            source_artifact_id = None
+
+        compare_artifact = None
+        if source_artifact_id is not None:
+            candidate = self.runtime.storage.artifact_by_id(int(source_artifact_id))
+            if candidate is not None and str(candidate.get("artifact_type") or "") == "backtest_compare":
+                compare_artifact = dict(candidate)
+                compare_path = Path(str(compare_artifact.get("path") or "")).expanduser()
+                if compare_path.exists():
+                    return compare_path, compare_artifact
+
+        compare_csv_raw = details.get("compare_csv")
+        if compare_csv_raw not in {None, "", "null"}:
+            compare_path = Path(str(compare_csv_raw)).expanduser()
+            if compare_path.exists():
+                return compare_path, compare_artifact
+        return None, compare_artifact
 
     def _resolve_report_snapshot_record(
         self,
@@ -295,6 +382,55 @@ class DeskReadService:
         latest_any = self.runtime.storage.latest_snapshot(portfolio_slug=portfolio_slug)
         return None if latest_any is None else dict(latest_any)
 
+    @classmethod
+    def _derive_report_snapshot_pnl(
+        cls,
+        snapshot: Mapping[str, Any] | None,
+    ) -> tuple[float | None, str | None]:
+        if snapshot is None:
+            return None, None
+
+        snapshot_payload = dict(snapshot.get("payload") or snapshot)
+        snapshot_timestamp = (
+            cls._coerce_utc_iso(snapshot.get("created_at"))
+            or cls._coerce_utc_iso(snapshot_payload.get("snapshot_timestamp"))
+            or cls._coerce_utc_iso(snapshot_payload.get("time_utc"))
+        )
+
+        def _pnl_from_mapping(payload: Mapping[str, Any] | None) -> float | None:
+            if not isinstance(payload, Mapping):
+                return None
+            pnl_explain = dict(payload.get("pnl_explain") or {})
+            for field in ("net_total", "unrealized", "realized"):
+                value = cls._safe_optional_float(pnl_explain.get(field))
+                if value is not None:
+                    return value
+            live_pnl = cls._safe_optional_float(payload.get("live_pnl"))
+            if live_pnl is not None:
+                return live_pnl
+            return None
+
+        snapshot_pnl_value = _pnl_from_mapping(snapshot_payload)
+        if snapshot_pnl_value is None:
+            snapshot_pnl_value = _pnl_from_mapping(snapshot)
+
+        if snapshot_pnl_value is None:
+            holdings = list(snapshot_payload.get("holdings") or [])
+            holdings_pnl_values: list[float] = []
+            for item in holdings:
+                if not isinstance(item, Mapping):
+                    continue
+                candidate = cls._safe_optional_float(item.get("unrealized_pnl_base_ccy"))
+                if candidate is None:
+                    candidate = cls._safe_optional_float(item.get("profit"))
+                if candidate is None:
+                    continue
+                holdings_pnl_values.append(candidate)
+            if holdings_pnl_values:
+                snapshot_pnl_value = float(sum(holdings_pnl_values))
+
+        return snapshot_pnl_value, snapshot_timestamp
+
     def _build_report_contract(
         self,
         *,
@@ -310,6 +446,9 @@ class DeskReadService:
         latest_pnl_timestamp: str | None = None
         compare_var_value: float | None = None
         compare_es_value: float | None = None
+        compare_var_timestamp: str | None = None
+        compare_es_timestamp: str | None = None
+        compare_models: list[str] = []
 
         selected_model_raw = details.get("selected_model")
         if selected_model_raw not in {None, "", "null"}:
@@ -317,30 +456,46 @@ class DeskReadService:
         if selected_model is None:
             selected_model = self._extract_selected_model_from_report_markdown(artifact.get("path"))
 
-        compare_csv_raw = details.get("compare_csv")
-        compare_csv_path = Path(str(compare_csv_raw)).expanduser() if compare_csv_raw not in {None, "", "null"} else None
+        compare_csv_path, _ = self._resolve_report_compare_csv_path(artifact=artifact, details=details)
         if compare_csv_path is not None and compare_csv_path.exists():
             try:
                 compare_frame = pd.read_csv(compare_csv_path)
             except Exception:
                 compare_frame = pd.DataFrame()
             if not compare_frame.empty:
-                models = infer_model_names_from_columns(compare_frame.columns)
-                if selected_model not in models:
-                    selected_model = models[0] if models else selected_model
+                compare_models = infer_model_names_from_columns(compare_frame.columns)
+                if selected_model not in compare_models:
+                    selected_model = compare_models[0] if compare_models else selected_model
 
-                latest_row = compare_frame.iloc[-1]
-                latest_pnl_value = self._safe_optional_float(latest_row.get("pnl"))
-                for timeline_column in ("date", "time", "time_utc", "timestamp"):
-                    if timeline_column not in compare_frame.columns:
-                        continue
-                    latest_pnl_timestamp = self._coerce_utc_iso(latest_row.get(timeline_column))
-                    if latest_pnl_timestamp is not None:
-                        break
+                timeline_columns = [
+                    column
+                    for column in ("date", "time", "time_utc", "timestamp")
+                    if column in compare_frame.columns
+                ]
+
+                def _last_valid_compare_value(column: str) -> tuple[float | None, str | None]:
+                    for row_index in range(len(compare_frame) - 1, -1, -1):
+                        row = compare_frame.iloc[row_index]
+                        candidate = self._safe_optional_float(row.get(column))
+                        if candidate is None:
+                            continue
+                        candidate_timestamp: str | None = None
+                        for timeline_column in timeline_columns:
+                            candidate_timestamp = self._coerce_utc_iso(row.get(timeline_column))
+                            if candidate_timestamp is not None:
+                                break
+                        return candidate, candidate_timestamp
+                    return None, None
+
+                latest_pnl_value, latest_pnl_timestamp = _last_valid_compare_value("pnl")
 
                 if selected_model:
-                    compare_var_value = self._safe_optional_float(latest_row.get(f"var_{selected_model}"))
-                    compare_es_value = self._safe_optional_float(latest_row.get(f"es_{selected_model}"))
+                    compare_var_value, compare_var_timestamp = _last_valid_compare_value(
+                        f"var_{selected_model}"
+                    )
+                    compare_es_value, compare_es_timestamp = _last_valid_compare_value(
+                        f"es_{selected_model}"
+                    )
 
         snapshot = self._resolve_report_snapshot_record(details=details, portfolio_slug=portfolio_slug)
         snapshot_payload = {} if snapshot is None else dict(snapshot.get("payload") or snapshot)
@@ -350,22 +505,28 @@ class DeskReadService:
             or (snapshot or {}).get("source")
             or "unknown"
         ).strip() or "unknown"
-        snapshot_timestamp = (
-            self._coerce_utc_iso((snapshot or {}).get("created_at"))
-            or self._coerce_utc_iso(snapshot_payload.get("snapshot_timestamp"))
-            or self._coerce_utc_iso(snapshot_payload.get("time_utc"))
-        )
+        snapshot_pnl_value, snapshot_timestamp = self._derive_report_snapshot_pnl(snapshot)
+        if snapshot_pnl_value is not None:
+            latest_pnl_value = snapshot_pnl_value
+            latest_pnl_timestamp = snapshot_timestamp
 
         var_map_raw = snapshot_payload.get("var")
         es_map_raw = snapshot_payload.get("es")
         var_map = dict(var_map_raw) if isinstance(var_map_raw, Mapping) else {}
         es_map = dict(es_map_raw) if isinstance(es_map_raw, Mapping) else {}
         available_models = ordered_model_names(set(var_map.keys()) | set(es_map.keys()))
-        if selected_model not in available_models and available_models:
+        if selected_model not in available_models and available_models and not compare_models:
             selected_model = available_models[0]
 
-        var_value = None if selected_model is None else self._safe_optional_float(var_map.get(selected_model))
-        es_value = None if selected_model is None else self._safe_optional_float(es_map.get(selected_model))
+        # Prefer report-scoped compare outputs when available.
+        var_from_compare = compare_var_value is not None
+        es_from_compare = compare_es_value is not None
+        var_value = compare_var_value
+        es_value = compare_es_value
+        if var_value is None:
+            var_value = None if selected_model is None else self._safe_optional_float(var_map.get(selected_model))
+        if es_value is None:
+            es_value = None if selected_model is None else self._safe_optional_float(es_map.get(selected_model))
         if var_value is None:
             for model_name in available_models:
                 candidate = self._safe_optional_float(var_map.get(model_name))
@@ -380,16 +541,14 @@ class DeskReadService:
                     es_value = candidate
                     selected_model = selected_model or model_name
                     break
-        if var_value is None:
-            var_value = compare_var_value
-        if es_value is None:
-            es_value = compare_es_value
 
         generated_at = (
             self._coerce_utc_iso(artifact.get("updated_at"))
             or self._coerce_utc_iso(artifact.get("created_at"))
             or datetime.now(timezone.utc).isoformat()
         )
+        var_as_of_utc = compare_var_timestamp if var_from_compare and compare_var_timestamp else snapshot_timestamp
+        es_as_of_utc = compare_es_timestamp if es_from_compare and compare_es_timestamp else snapshot_timestamp
 
         return {
             "version": "report.v1",
@@ -408,12 +567,12 @@ class DeskReadService:
                 "var": {
                     "value": var_value,
                     "display": self._format_money_display(var_value, decimals=money_decimals),
-                    "as_of_utc": snapshot_timestamp,
+                    "as_of_utc": var_as_of_utc,
                 },
                 "es": {
                     "value": es_value,
                     "display": self._format_money_display(es_value, decimals=money_decimals),
-                    "as_of_utc": snapshot_timestamp,
+                    "as_of_utc": es_as_of_utc,
                 },
                 "pnl": {
                     "value": latest_pnl_value,
@@ -700,15 +859,64 @@ class DeskReadService:
             return None
         return self.runtime.storage.latest_backtest_run(portfolio_slug=portfolio_slug)
 
-    def latest_validation(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
+    def latest_validation(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        report_id: int | None = None,
+    ) -> dict[str, Any] | None:
         if not self.runtime.storage_ready:
             return None
+        if report_id is not None:
+            artifact = self._resolve_report_artifact(portfolio_slug=portfolio_slug, report_id=report_id)
+            if artifact is None:
+                return None
+            details = dict(artifact.get("details") or {})
+            source_artifact_id = None
+            try:
+                if details.get("source_artifact_id") not in {None, "", "null"}:
+                    source_artifact_id = int(details.get("source_artifact_id"))
+            except (TypeError, ValueError):
+                source_artifact_id = None
+            if source_artifact_id is None:
+                return None
+            resolved_portfolio_slug = str(details.get("portfolio_slug") or portfolio_slug or "")
+            return self.runtime.storage.latest_validation_run_for_artifact(
+                source_artifact_id=source_artifact_id,
+                portfolio_slug=resolved_portfolio_slug or portfolio_slug,
+            )
         return self.runtime.storage.latest_validation_run(portfolio_slug=portfolio_slug)
 
     def recent_alerts(self, *, limit: int = 25) -> list[dict[str, Any]]:
         if not self.runtime.storage_ready:
             return []
         return self.runtime.storage.recent_alerts(limit=limit)
+
+    def _enrich_decisions_with_alpha(
+        self,
+        records: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        enriched: list[dict[str, Any]] = []
+        for record in records:
+            payload = dict(record)
+            intelligence = payload.get("decision_intelligence")
+            if isinstance(intelligence, Mapping) and len(intelligence) > 0:
+                enriched.append(payload)
+                continue
+            symbol = str(payload.get("symbol") or "").strip().upper()
+            if not symbol:
+                enriched.append(payload)
+                continue
+            try:
+                payload = self.runtime.decisions.attach_decision_intelligence(
+                    decision_payload=payload,
+                    symbol=symbol,
+                )
+            except Exception:
+                # Best effort enrichment for legacy rows; never fail recent-decisions API.
+                pass
+            enriched.append(payload)
+        return enriched
 
     def recent_decisions(
         self,
@@ -732,13 +940,14 @@ class DeskReadService:
                 )
             )
             if requested_account_id is None:
-                return records
-            return self._filter_records_by_account(
+                return self._enrich_decisions_with_alpha(records)
+            filtered_records = self._filter_records_by_account(
                 records,
                 requested_account_id=requested_account_id,
                 default_account_id=default_account_id,
                 limit=limit,
             )
+            return self._enrich_decisions_with_alpha(filtered_records)
 
         candidate_limit = self._account_filter_candidate_limit(limit)
         records = self._recent_decisions_from_audit(limit=limit, portfolio_slug=portfolio_slug)
@@ -770,13 +979,14 @@ class DeskReadService:
                 if len(records) >= candidate_limit:
                     break
         if requested_account_id is None:
-            return records[: max(int(limit), 1)]
-        return self._filter_records_by_account(
+            return self._enrich_decisions_with_alpha(records[: max(int(limit), 1)])
+        filtered_records = self._filter_records_by_account(
             records,
             requested_account_id=requested_account_id,
             default_account_id=default_account_id,
             limit=limit,
         )
+        return self._enrich_decisions_with_alpha(filtered_records)
 
     def latest_capital(
         self,
@@ -945,7 +1155,38 @@ class DeskReadService:
             strict_schema_revision=not self.runtime.bootstrap_storage,
         )
 
-    def latest_model_comparison(self, *, portfolio_slug: str | None = None) -> dict[str, Any] | None:
+    def latest_model_comparison(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        report_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        if report_id is not None:
+            artifact = self._resolve_report_artifact(portfolio_slug=portfolio_slug, report_id=report_id)
+            if artifact is None:
+                return None
+            details = dict(artifact.get("details") or {})
+            source_artifact_id = None
+            try:
+                if details.get("source_artifact_id") not in {None, "", "null"}:
+                    source_artifact_id = int(details.get("source_artifact_id"))
+            except (TypeError, ValueError):
+                source_artifact_id = None
+            if source_artifact_id is None:
+                return None
+            resolved_portfolio_slug = str(details.get("portfolio_slug") or portfolio_slug or "")
+            validation = self.runtime.storage.latest_validation_run_for_artifact(
+                source_artifact_id=source_artifact_id,
+                portfolio_slug=resolved_portfolio_slug or portfolio_slug,
+            )
+            if validation is None:
+                return None
+            snapshot = self._resolve_report_snapshot_record(
+                details=details,
+                portfolio_slug=resolved_portfolio_slug or portfolio_slug or "",
+            )
+            return self._build_model_comparison_payload(validation=validation, snapshot=snapshot)
+
         cache_key = self._model_comparison_cache_key(portfolio_slug=portfolio_slug)
         cached, expired = self._cached_model_comparison(cache_key=cache_key)
         if cached is not None and not expired:
@@ -1016,21 +1257,43 @@ class DeskReadService:
             return budget
         return None
 
-    def latest_backtest_frame(self, *, limit: int = 400, portfolio_slug: str | None = None) -> dict[str, Any] | None:
+    def latest_backtest_frame(
+        self,
+        *,
+        limit: int = 400,
+        portfolio_slug: str | None = None,
+        report_id: int | None = None,
+    ) -> dict[str, Any] | None:
         if not self.runtime.storage_ready:
             return None
 
-        artifact = None
-        backtest = self.runtime.storage.latest_backtest_run(portfolio_slug=portfolio_slug)
-        artifact_id = None if backtest is None else backtest.get("artifact_id")
-        if artifact_id:
-            artifact = self.runtime.storage.artifact_by_id(int(artifact_id))
-        if artifact is None:
-            artifact = self.runtime.storage.latest_artifact("backtest_compare", portfolio_slug=portfolio_slug)
-        if artifact is None:
-            return None
+        artifact: dict[str, Any] | None = None
+        compare_csv: Path | None = None
+        if report_id is not None:
+            report_artifact = self._resolve_report_artifact(portfolio_slug=portfolio_slug, report_id=report_id)
+            if report_artifact is None:
+                return None
+            report_details = dict(report_artifact.get("details") or {})
+            compare_csv, artifact = self._resolve_report_compare_csv_path(
+                artifact=report_artifact,
+                details=report_details,
+            )
+            if artifact is None:
+                artifact = report_artifact
+            portfolio_slug = str(report_details.get("portfolio_slug") or portfolio_slug or "")
+        else:
+            backtest = self.runtime.storage.latest_backtest_run(portfolio_slug=portfolio_slug)
+            artifact_id = None if backtest is None else backtest.get("artifact_id")
+            if artifact_id:
+                artifact = self.runtime.storage.artifact_by_id(int(artifact_id))
+            if artifact is None:
+                artifact = self.runtime.storage.latest_artifact("backtest_compare", portfolio_slug=portfolio_slug)
+            if artifact is None:
+                return None
+            compare_csv = Path(artifact["path"])
 
-        compare_csv = Path(artifact["path"])
+        if compare_csv is None:
+            return None
         if not compare_csv.exists():
             return None
 
@@ -1052,42 +1315,19 @@ class DeskReadService:
         report_id: int | None = None,
         account_id: str | None = None,
     ) -> dict[str, Any] | None:
-        if not self.runtime.storage_ready:
-            return None
-
-        requested_account_id = self._resolve_requested_account_id(account_id)
-        default_account_id = self.runtime.resolve_mt5_account_id(None)
-
-        artifact = None
-        if report_id is not None:
-            candidate = self.runtime.storage.artifact_by_id(int(report_id))
-            if candidate is not None and str(candidate.get("artifact_type") or "") == "daily_report":
-                details = dict(candidate.get("details") or {})
-                matches_portfolio = portfolio_slug is None or str(details.get("portfolio_slug") or "") == str(portfolio_slug)
-                matches_account = requested_account_id is None or (
-                    self._resolved_record_account_id(details, default_account_id=default_account_id) == requested_account_id
-                )
-                if matches_portfolio and matches_account:
-                    artifact = candidate
-        else:
-            if requested_account_id is None:
-                artifact = self.runtime.storage.latest_artifact("daily_report", portfolio_slug=portfolio_slug)
-            else:
-                candidates = self.runtime.storage.recent_artifacts(
-                    "daily_report",
-                    limit=200,
-                    portfolio_slug=portfolio_slug,
-                )
-                for candidate in candidates:
-                    details = dict(candidate.get("details") or {})
-                    if self._resolved_record_account_id(details, default_account_id=default_account_id) == requested_account_id:
-                        artifact = candidate
-                        break
+        artifact = self._resolve_report_artifact(
+            portfolio_slug=portfolio_slug,
+            report_id=report_id,
+            account_id=account_id,
+        )
         if artifact is None:
             return None
 
         details = dict(artifact.get("details") or {})
-        resolved_account_id = self._resolved_record_account_id(details, default_account_id=default_account_id)
+        resolved_account_id = self._resolved_record_account_id(
+            details,
+            default_account_id=self.runtime.resolve_mt5_account_id(None),
+        )
 
         report_path = Path(artifact["path"])
         if not report_path.exists():

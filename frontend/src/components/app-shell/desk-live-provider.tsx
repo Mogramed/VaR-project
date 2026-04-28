@@ -9,6 +9,14 @@ import { useMt5LiveState } from "@/lib/use-mt5-live-state";
 
 type DeskLiveTransport = "stream" | "polling" | "connecting";
 
+const DESK_ARTIFACT_INVALIDATE_MIN_MS = (() => {
+  const parsed = Number(process.env.NEXT_PUBLIC_DESK_ARTIFACT_INVALIDATE_MIN_MS ?? "2000");
+  if (!Number.isFinite(parsed)) {
+    return 2_000;
+  }
+  return Math.max(parsed, 500);
+})();
+
 interface DeskLiveContextValue {
   portfolioSlug?: string;
   accountId?: string;
@@ -76,7 +84,7 @@ export function DeskLiveProvider({
       return;
     }
     const nowMs = Date.now();
-    if (nowMs - lastHeartbeatAtMsRef.current < 800) {
+    if (nowMs - lastHeartbeatAtMsRef.current < DESK_ARTIFACT_INVALIDATE_MIN_MS) {
       return;
     }
     lastHeartbeatAtMsRef.current = nowMs;

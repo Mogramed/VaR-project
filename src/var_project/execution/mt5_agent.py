@@ -20,6 +20,9 @@ class MT5AgentRequest(BaseModel):
     request: dict[str, Any] = Field(default_factory=dict)
 
 
+MT5_LIVE_EVENTS_MAX_LIMIT = 2000
+
+
 class MT5AgentRuntime:
     def __init__(self, *, config, connector_factory) -> None:
         self.config = config
@@ -342,7 +345,7 @@ def create_mt5_agent_app(repo_root: Path | None = None, connector_factory=None) 
     @app.get("/live/events")
     def live_events(
         after: int = Query(default=0, ge=0),
-        limit: int = Query(default=100, ge=1, le=500),
+        limit: int = Query(default=100, ge=1, le=MT5_LIVE_EVENTS_MAX_LIMIT),
         wait_seconds: float = Query(default=15.0, ge=0.0, le=60.0),
         _: None = Depends(authorize),
     ) -> list[dict[str, Any]]:

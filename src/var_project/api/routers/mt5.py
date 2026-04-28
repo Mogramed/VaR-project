@@ -39,6 +39,7 @@ from var_project.execution.mt5_bridge import build_empty_live_state
 router = APIRouter(tags=["mt5"])
 MT5_LIVE_STREAM_WAIT_SECONDS = 5.0
 MT5_LIVE_STREAM_RETRY_MS = 5000
+MT5_LIVE_EVENTS_MAX_LIMIT = 2000
 
 
 def _effective_detail_level(
@@ -455,7 +456,7 @@ def mt5_live_events(
     portfolio_slug: str | None = Query(default=None),
     account_id: str | None = Query(default=None),
     after: int = Query(default=0, ge=0),
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=MT5_LIVE_EVENTS_MAX_LIMIT),
     wait_seconds: float = Query(default=15.0, ge=0.0, le=60.0),
     detail_level: Literal["summary", "full", "inspector"] = Query(default="full"),
     service: DeskApiService = Depends(get_service),

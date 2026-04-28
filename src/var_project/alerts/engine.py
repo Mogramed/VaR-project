@@ -928,6 +928,7 @@ def alerts_from_live_operator_state(state: Mapping[str, Any]) -> List[AlertEvent
     bridge_connected = bool(reconciliation.get("bridge_connected", payload.get("connected")))
     market_closed = bool(reconciliation.get("market_closed", False))
     history_window_expired_execution_count = int(reconciliation.get("history_window_expired_execution_count") or 0)
+    mismatches = [dict(item) for item in list(reconciliation.get("mismatches") or [])]
     suppressed_status_counts = {
         str(key): int(value)
         for key, value in dict(reconciliation.get("suppressed_status_counts") or {}).items()
@@ -938,6 +939,24 @@ def alerts_from_live_operator_state(state: Mapping[str, Any]) -> List[AlertEvent
         for key, value in dict(reconciliation.get("status_counts") or {}).items()
         if int(value or 0) > 0
     }
+    drift_mismatches = [
+        item
+        for item in mismatches
+        if str(item.get("status") or "").strip().lower() == "desk_vs_broker_drift"
+    ]
+    stale_history_drift_noise = (
+        history_window_expired_execution_count > 0
+        and bool(drift_mismatches)
+        and all(
+            str(item.get("probable_cause") or "").strip().lower()
+            in {"desk_snapshot_stale_or_untracked_trade", "order_fill_pending_or_stale_history"}
+            and str(item.get("severity") or "").strip().lower() != "critical"
+            and abs(float(item.get("difference_eur") or 0.0)) < 250.0
+            for item in drift_mismatches
+        )
+    )
+    if stale_history_drift_noise:
+        status_counts.pop("desk_vs_broker_drift", None)
     non_actionable_statuses = {
         "ok",
         "match",
@@ -953,10 +972,10 @@ def alerts_from_live_operator_state(state: Mapping[str, Any]) -> List[AlertEvent
     )
     manual_event_count = int(reconciliation.get("manual_event_count") or 0)
     unmatched_execution_count = int(reconciliation.get("unmatched_execution_count") or 0)
+    active_incident_count = int(reconciliation.get("active_incident_count") or 0)
     actionable_reconciliation_signal_count = (
         active_status_signal_count
         + suppressed_status_signal_count
-        + manual_event_count
         + unmatched_execution_count
     )
     alerts: List[AlertEvent] = []
@@ -1070,7 +1089,7 @@ def alerts_from_live_operator_state(state: Mapping[str, Any]) -> List[AlertEvent
             )
         )
 
-    if live_base_ready and manual_event_count > 0:
+    if live_base_ready and manual_event_count > 0 and active_incident_count > 0:
         alerts.append(
             AlertEvent(
                 source="reconciliation",
@@ -1079,6 +1098,7 @@ def alerts_from_live_operator_state(state: Mapping[str, Any]) -> List[AlertEvent
                 message="Manual MT5 activity was detected outside the desk workflow.",
                 context={
                     "manual_event_count": manual_event_count,
+                    "active_incident_count": active_incident_count,
                     "portfolio_slug": reconciliation.get("portfolio_slug") or payload.get("portfolio_slug"),
                 },
             )

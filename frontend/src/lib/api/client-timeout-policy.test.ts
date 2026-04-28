@@ -26,4 +26,17 @@ describe("API client timeout policy", () => {
     expect(__apiClientTestables.resolveNetworkFailureHint("/execution/submit")).toContain("API/worker/MT5");
     expect(__apiClientTestables.resolveNetworkFailureHint("/snapshots/stress")).toContain("Stress endpoint");
   });
+
+  it("builds browser-facing export hrefs through the frontend proxy", () => {
+    expect(
+      __apiClientTestables.buildBrowserHref("/mt5/history/transactions/export", {
+        portfolio_slug: "mt5_live_portfolio",
+        account_id: "default",
+        symbol: "EURUSD",
+        max_rows: 5000,
+      }),
+    ).toBe(
+      "/api/proxy/mt5/history/transactions/export?portfolio_slug=mt5_live_portfolio&account_id=default&symbol=EURUSD&max_rows=5000",
+    );
+  });
 });

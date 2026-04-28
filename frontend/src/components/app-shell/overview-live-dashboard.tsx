@@ -27,6 +27,30 @@ import {
 import { buildDeskConsumptionSeries } from "@/lib/view-models";
 import { useDashboardPrefs } from "@/lib/dashboard-preferences-context";
 
+function normalizePortfolioMetrics(portfolio: {
+  total_capital_budget_eur: number;
+  total_capital_consumed_eur: number;
+  total_capital_remaining_eur: number;
+  utilization?: number | null;
+}) {
+  const budget = Number(portfolio.total_capital_budget_eur ?? 0);
+  const consumed = Number(portfolio.total_capital_consumed_eur ?? 0);
+  const remaining = Number(portfolio.total_capital_remaining_eur ?? 0);
+  const utilization = budget > 0
+    ? consumed / budget
+    : (portfolio.utilization ?? null);
+  const impliedReserved = budget > 0
+    ? Math.max(0, budget - consumed - remaining)
+    : null;
+  return {
+    budget,
+    consumed,
+    remaining,
+    utilization,
+    impliedReserved,
+  };
+}
+
 export function OverviewLiveDashboard({
   deskSlug,
   initialDesk,
@@ -307,37 +331,52 @@ export function OverviewLiveDashboard({
       {/* Portfolio slices */}
       {showPortfolioSlices && deskPortfolios.length > 0 ? (
         <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-          {deskPortfolios.map((p) => (
-            <div
-              key={p.portfolio_slug}
-              className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-[var(--color-text)]">
-                  {humanizeIdentifier(p.portfolio_name)}
-                </span>
-                <StatusBadge label={p.status} />
+          {deskPortfolios.map((p) => {
+            const metrics = normalizePortfolioMetrics(p);
+            return (
+              <div
+                key={p.portfolio_slug}
+                className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[var(--color-text)]">
+                    {humanizeIdentifier(p.portfolio_name)}
+                  </span>
+                  <StatusBadge label={p.status} />
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                  <div className="flex justify-between">
+                    <span className="text-[var(--color-text-muted)]">Budget</span>
+                    <span className="mono text-[var(--color-text)]">{formatCurrency(metrics.budget)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[var(--color-text-muted)]">Consumed</span>
+                    <span className="mono text-[var(--color-text)]">{formatCurrency(metrics.consumed)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[var(--color-text-muted)]">Reserved</span>
+                    <span className="mono text-[var(--color-text)]">
+                      {metrics.impliedReserved == null ? "n/a" : formatCurrency(metrics.impliedReserved)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[var(--color-text-muted)]">Remaining</span>
+                    <span className="mono text-[var(--color-text)]">{formatCurrency(metrics.remaining)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[var(--color-text-muted)]">Utilization</span>
+                    <span className="mono text-[var(--color-text)]">
+                      {metrics.utilization == null ? "n/a" : formatPercent(metrics.utilization)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[var(--color-text-muted)]">Alerts</span>
+                    <span className="mono text-[var(--color-text)]">{p.alert_count}</span>
+                  </div>
+                </div>
               </div>
-              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
-                <div className="flex justify-between">
-                  <span className="text-[var(--color-text-muted)]">Consumed</span>
-                  <span className="mono text-[var(--color-text)]">{formatCurrency(p.total_capital_consumed_eur)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[var(--color-text-muted)]">Remaining</span>
-                  <span className="mono text-[var(--color-text)]">{formatCurrency(p.total_capital_remaining_eur)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[var(--color-text-muted)]">Utilization</span>
-                  <span className="mono text-[var(--color-text)]">{formatPercent(p.utilization ?? 0)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[var(--color-text-muted)]">Alerts</span>
-                  <span className="mono text-[var(--color-text)]">{p.alert_count}</span>
-                </div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : null}
       {prefs.symbolFilter ? (

@@ -11,7 +11,8 @@ import {
   EXPOSURE_STEP_EUR,
   validateExposureMagnitude,
 } from "@/lib/forms/exposure-validation";
-import { formatCurrency, formatPercent } from "@/lib/utils";
+import { formatCurrency, formatPercent, formatSignedCurrency } from "@/lib/utils";
+import { DecisionAlphaIntelligencePanel } from "@/components/app-shell/decision-alpha-panels";
 import { ButtonLink, StatusBadge } from "@/components/ui/primitives";
 import {
   FieldInputWithIcon,
@@ -39,6 +40,7 @@ export function TradeDecisionPanel({
 }) {
   const router = useRouter();
   const [symbol, setSymbol] = useState("EURUSD");
+  const [tradeAction, setTradeAction] = useState<"open" | "close">("open");
   const [side, setSide] = useState("buy");
   const [exposureChange, setExposureChange] = useState("2500000");
   const [note, setNote] = useState("");
@@ -51,6 +53,10 @@ export function TradeDecisionPanel({
       setValidationError("Symbol is required");
       return false;
     }
+    if (tradeAction === "close") {
+      setValidationError(null);
+      return true;
+    }
     const exposureValidation = validateExposureMagnitude(exposureChange);
     if (!exposureValidation.ok) {
       setValidationError(exposureValidation.error);
@@ -58,7 +64,7 @@ export function TradeDecisionPanel({
     }
     setValidationError(null);
     return true;
-  }, [symbol, exposureChange]);
+  }, [symbol, exposureChange, tradeAction]);
 
   const mutation = useMutation({
     mutationFn: async () =>
@@ -66,7 +72,11 @@ export function TradeDecisionPanel({
         portfolio_slug: portfolioSlug,
         account_id: accountId,
         symbol,
-        exposure_change: (side === "buy" ? 1 : -1) * Number(exposureChange),
+        trade_action: tradeAction,
+        exposure_change:
+          tradeAction === "close"
+            ? undefined
+            : (side === "buy" ? 1 : -1) * Number(exposureChange),
         note,
       }),
     onSuccess: (result) => {
@@ -125,14 +135,21 @@ export function TradeDecisionPanel({
         </div>
 
         <FormSection title="Trade parameters">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div>
+              <FieldLabel htmlFor="dec-action">Action</FieldLabel>
+              <FieldSelect id="dec-action" value={tradeAction} onChange={(e) => setTradeAction(e.target.value as "open" | "close")}>
+                <option value="open">Open / Adjust</option>
+                <option value="close">Close position</option>
+              </FieldSelect>
+            </div>
             <div>
               <FieldLabel htmlFor="dec-symbol">Symbol</FieldLabel>
               <FieldInputWithIcon icon={TrendingUp} id="dec-symbol" value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())} />
             </div>
             <div>
               <FieldLabel htmlFor="dec-side">Side</FieldLabel>
-              <FieldSelect id="dec-side" value={side} onChange={(e) => setSide(e.target.value)}>
+              <FieldSelect id="dec-side" value={side} onChange={(e) => setSide(e.target.value)} disabled={tradeAction === "close"}>
                 <option value="buy">Buy</option>
                 <option value="sell">Sell</option>
               </FieldSelect>
@@ -150,15 +167,19 @@ export function TradeDecisionPanel({
             step={String(EXPOSURE_STEP_EUR)}
             value={exposureChange}
             onChange={(e) => setExposureChange(e.target.value)}
+            disabled={tradeAction === "close"}
           />
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {decisionPresets.map((p) => (
-              <PresetPill key={p} active={p === exposureChange} onClick={() => setExposureChange(p)}>{formatCurrency(Number(p))}</PresetPill>
-            ))}
-          </div>
+          {tradeAction === "open" ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {decisionPresets.map((p) => (
+                <PresetPill key={p} active={p === exposureChange} onClick={() => setExposureChange(p)}>{formatCurrency(Number(p))}</PresetPill>
+              ))}
+            </div>
+          ) : null}
           <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
-            Advisory mode works from the same exposure language as execution. The desk translates this target into
-            post-trade risk, budget usage and the likely broker order footprint.
+            {tradeAction === "close"
+              ? "Close mode ignores manual sizing and computes the exposure needed to flatten the symbol."
+              : "Advisory mode works from the same exposure language as execution. The desk translates this target into post-trade risk, budget usage and the likely broker order footprint."}
           </p>
         </FormSection>
 
@@ -226,6 +247,27 @@ function DecisionResult({ result, fillRatio }: { result: RiskDecisionResponse | 
         <StatePanel title="Pre-trade" state={result.pre_trade} />
         <StatePanel title="Post-trade" state={result.post_trade} />
       </div>
+
+      <div className="mt-3">
+        <DecisionAlphaIntelligencePanel intelligence={result.decision_intelligence ?? null} />
+      </div>
+      {result.close_recommendation ? (
+        <div
+          className={`mt-3 rounded-[var(--radius-md)] border p-3 text-[11px] text-[var(--color-text-soft)] ${
+            result.close_recommendation.recommended
+              ? "border-[var(--color-amber)]/20 bg-[var(--color-amber-soft)]"
+              : "border-[var(--color-border)] bg-[var(--color-bg)]"
+          }`}
+        >
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Close recommendation</div>
+          <div className="mt-1">
+            {result.close_recommendation.reason}
+          </div>
+          <div className="mt-1.5 mono text-[var(--color-text)]">
+            Target change {formatSignedCurrency(result.close_recommendation.target_exposure_change)} (urgency {result.close_recommendation.urgency}, confidence {formatPercent(result.close_recommendation.confidence, 0)})
+          </div>
+        </div>
+      ) : null}
 
       {result.reasons.length > 0 ? (
         <div className="mt-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg)] p-3">

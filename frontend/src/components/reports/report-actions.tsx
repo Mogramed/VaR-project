@@ -28,9 +28,9 @@ export function ReportActions({
 
   const pdfUrl = portfolioSlug
     ? accountId
-      ? `/api/reports/pdf?portfolio=${encodeURIComponent(portfolioSlug)}&account=${encodeURIComponent(accountId)}`
-      : `/api/reports/pdf?portfolio=${encodeURIComponent(portfolioSlug)}`
-    : "/api/reports/pdf";
+      ? `/report-export?portfolio=${encodeURIComponent(portfolioSlug)}&account=${encodeURIComponent(accountId)}&print=1`
+      : `/report-export?portfolio=${encodeURIComponent(portfolioSlug)}&print=1`
+    : "/report-export?print=1";
 
   return (
     <div className="flex items-center gap-2 print:hidden">
@@ -45,10 +45,12 @@ export function ReportActions({
       </button>
       <a
         href={pdfUrl}
+        target="_blank"
+        rel="noopener noreferrer"
         className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] bg-[var(--color-accent)] px-2.5 text-[11px] font-semibold text-[#1a1206] transition hover:brightness-110"
       >
         <FileDown className="size-3" />
-        PDF
+        Print / PDF
       </a>
       {operatorRun.error ? (
         <span className="text-[10px] text-[var(--color-red)]">

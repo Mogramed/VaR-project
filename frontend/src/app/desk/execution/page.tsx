@@ -15,6 +15,10 @@ export default async function DeskExecutionPage({
     typeof query.symbol === "string" && query.symbol.trim().length > 0
       ? query.symbol.toUpperCase()
       : undefined;
+  const initialTradeAction =
+    typeof query.action === "string" && (query.action === "open" || query.action === "close")
+      ? query.action
+      : undefined;
   const initialExposureRaw =
     typeof query.exposure === "string" ? Number(query.exposure) : undefined;
   const initialExposureChange =
@@ -36,12 +40,13 @@ export default async function DeskExecutionPage({
 
   return (
     <ExecutionLiveSurface
-      key={`${resolvedPortfolio}:${accountId ?? "default"}`}
+      key={`${resolvedPortfolio}:${accountId ?? "default"}:${initialSymbol ?? "nosymbol"}:${initialTradeAction ?? "open"}`}
       portfolioSlug={resolvedPortfolio}
       initialTerminalStatus={status}
       initialExecutions={recentExecutions}
       initialFills={recentFills}
       initialSymbol={initialSymbol}
+      initialTradeAction={initialTradeAction}
       initialExposureChange={initialExposureChange}
       initialSide={initialSide}
     />

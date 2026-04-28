@@ -40,7 +40,9 @@ export function formatPercent(value: number | null | undefined, digits = 1) {
     return "n/a";
   }
 
-  return `${(value * 100).toFixed(digits)}%`;
+  const scaled = Number((value * 100).toFixed(digits));
+  const normalized = Object.is(scaled, -0) ? 0 : scaled;
+  return `${normalized.toFixed(digits)}%`;
 }
 
 export function formatTimestamp(value: string | null | undefined) {

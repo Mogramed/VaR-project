@@ -1,0 +1,5879 @@
+{
+  "time_utc": "2026-04-28T09:10:23.078927+00:00",
+  "source": "mt5_live_bridge",
+  "alpha": 0.95,
+  "timeframe": "H1",
+  "days": 60,
+  "window": 20,
+  "holdings": [
+    {
+      "symbol": "EURUSD",
+      "asset_class": "cfd",
+      "side": "BUY",
+      "volume_lots": 0.1,
+      "contract_size": 100000.0,
+      "base_currency": "EUR",
+      "profit_currency": null,
+      "margin_currency": null,
+      "mark_price": 1.0898,
+      "signed_units": 10000.0,
+      "market_value_base_ccy": 10898.000000000002,
+      "exposure_base_ccy": 10000.0,
+      "signed_exposure_base_ccy": 10000.0,
+      "unrealized_pnl_base_ccy": 25.0,
+      "profit": 25.0,
+      "source": "mt5_live",
+      "raw": {
+        "ticket": 10000,
+        "symbol": "EURUSD",
+        "type": 0,
+        "volume": 0.1,
+        "price_open": 1.09,
+        "price_current": 1.0898,
+        "profit": 25.0,
+        "swap": 0.0,
+        "comment": "demo",
+        "time": 1711620000
+      }
+    },
+    {
+      "symbol": "USDJPY",
+      "asset_class": "indices_cfd",
+      "side": "BUY",
+      "volume_lots": 0.11,
+      "contract_size": 100000.0,
+      "base_currency": "USD",
+      "profit_currency": null,
+      "margin_currency": null,
+      "mark_price": 156.18,
+      "signed_units": 11000.0,
+      "market_value_base_ccy": 1717980.0,
+      "exposure_base_ccy": 10092.669052206624,
+      "signed_exposure_base_ccy": 10092.669052206624,
+      "unrealized_pnl_base_ccy": 25.0,
+      "profit": 25.0,
+      "source": "mt5_live",
+      "raw": {
+        "ticket": 10001,
+        "symbol": "USDJPY",
+        "type": 0,
+        "volume": 0.11,
+        "price_open": 156.22,
+        "price_current": 156.18,
+        "profit": 25.0,
+        "swap": 0.0,
+        "comment": "demo",
+        "time": 1711620000
+      }
+    }
+  ],
+  "exposure_by_symbol": {
+    "EURUSD": 10000.0,
+    "USDJPY": 10092.669052206624
+  },
+  "var": {
+    "hist": 16.76768937518936,
+    "param": 19.14905701927823,
+    "mc": 21.200441171016127,
+    "ewma": 26.789205134378328,
+    "garch": 22.063727693354107,
+    "fhs": 18.123701272473667
+  },
+  "es": {
+    "hist": 19.04690524058567,
+    "param": 25.189936399769934,
+    "mc": 25.661425290542752,
+    "ewma": 33.59474401138075,
+    "garch": 28.954956761557476,
+    "fhs": 21.951692012769467
+  },
+  "risk_surface": {
+    "reference_model": "param",
+    "alphas": [
+      0.95,
+      0.975,
+      0.99
+    ],
+    "horizons": [
+      1,
+      5,
+      10
+    ],
+    "points": [
+      {
+        "model": "hist",
+        "alpha": 0.95,
+        "horizon_days": 1,
+        "var": 16.76768937518936,
+        "es": 19.04690524058567,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "hist",
+        "alpha": 0.95,
+        "horizon_days": 5,
+        "var": -14.510125976678978,
+        "es": -12.783075084914024,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "hist",
+        "alpha": 0.95,
+        "horizon_days": 10,
+        "var": -30.966637321060972,
+        "es": -29.772706791544238,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "hist",
+        "alpha": 0.975,
+        "horizon_days": 1,
+        "var": 18.50185087351304,
+        "es": 20.1335229101745,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "hist",
+        "alpha": 0.975,
+        "horizon_days": 5,
+        "var": -12.896709743474169,
+        "es": -11.963508591868315,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "hist",
+        "alpha": 0.975,
+        "horizon_days": 10,
+        "var": -29.804888590629204,
+        "es": -29.196588509152733,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "hist",
+        "alpha": 0.99,
+        "horizon_days": 1,
+        "var": 20.104982844746825,
+        "es": 20.292078829217118,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "hist",
+        "alpha": 0.99,
+        "horizon_days": 5,
+        "var": -11.965298807377023,
+        "es": -11.945606436781224,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "hist",
+        "alpha": 0.99,
+        "horizon_days": 10,
+        "var": -29.196588509152733,
+        "es": -28.961640016242278,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "param",
+        "alpha": 0.95,
+        "horizon_days": 1,
+        "var": 19.14905701927823,
+        "es": 25.189936399769934,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "param",
+        "alpha": 0.95,
+        "horizon_days": 5,
+        "var": -13.36728383173905,
+        "es": -10.651228337039269,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "param",
+        "alpha": 0.95,
+        "horizon_days": 10,
+        "var": -29.5891584070975,
+        "es": -24.877612144144944,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "param",
+        "alpha": 0.975,
+        "horizon_days": 1,
+        "var": 23.70452390935251,
+        "es": 29.166839370064118,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "param",
+        "alpha": 0.975,
+        "horizon_days": 5,
+        "var": -11.319088511424267,
+        "es": -8.863162645935168,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "param",
+        "alpha": 0.975,
+        "horizon_days": 10,
+        "var": -26.036150368028434,
+        "es": -21.775851432231942,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "param",
+        "alpha": 0.99,
+        "horizon_days": 1,
+        "var": 29.001238655418177,
+        "es": 33.900139575610105,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "param",
+        "alpha": 0.99,
+        "horizon_days": 5,
+        "var": -8.93761881408725,
+        "es": -6.735011225985719,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "param",
+        "alpha": 0.99,
+        "horizon_days": 10,
+        "var": -21.9050106786079,
+        "es": -18.08414340593172,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "mc",
+        "alpha": 0.95,
+        "horizon_days": 1,
+        "var": 21.200441171016127,
+        "es": 25.661425290542752,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "mc",
+        "alpha": 0.95,
+        "horizon_days": 5,
+        "var": -12.74887463244686,
+        "es": -10.22315863958879,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "mc",
+        "alpha": 0.95,
+        "horizon_days": 10,
+        "var": -28.53566215530241,
+        "es": -24.31760952565016,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "mc",
+        "alpha": 0.975,
+        "horizon_days": 1,
+        "var": 24.448980984251342,
+        "es": 27.849889699873806,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "mc",
+        "alpha": 0.975,
+        "horizon_days": 5,
+        "var": -10.903878372459632,
+        "es": -8.788587978063124,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "mc",
+        "alpha": 0.975,
+        "horizon_days": 10,
+        "var": -25.165645145286575,
+        "es": -22.182910448435695,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "mc",
+        "alpha": 0.99,
+        "horizon_days": 1,
+        "var": 27.14118000929848,
+        "es": 30.909645509699782,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "mc",
+        "alpha": 0.99,
+        "horizon_days": 5,
+        "var": -8.730570403842242,
+        "es": -7.318663967513255,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "mc",
+        "alpha": 0.99,
+        "horizon_days": 10,
+        "var": -22.97687858676141,
+        "es": -19.814630828048934,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.95,
+        "horizon_days": 1,
+        "var": 26.789205134378328,
+        "es": 33.59474401138075,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.95,
+        "horizon_days": 5,
+        "var": 40.07593525821072,
+        "es": 50.25683962113944,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.95,
+        "horizon_days": 10,
+        "var": 79.06810619086784,
+        "es": 99.15459505508453,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.975,
+        "horizon_days": 1,
+        "var": 31.921306782263667,
+        "es": 38.07504664112814,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.975,
+        "horizon_days": 5,
+        "var": 47.75342222908281,
+        "es": 56.95925267245204,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.975,
+        "horizon_days": 10,
+        "var": 94.21545961333223,
+        "es": 112.37816933879805,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.99,
+        "horizon_days": 1,
+        "var": 37.888484051379756,
+        "es": 43.40749189229374,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.99,
+        "horizon_days": 5,
+        "var": 56.6801600218543,
+        "es": 64.93644832203194,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.99,
+        "horizon_days": 10,
+        "var": 111.82753147614125,
+        "es": 128.11683516561953,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "garch",
+        "alpha": 0.95,
+        "horizon_days": 1,
+        "var": 22.063727693354107,
+        "es": 28.954956761557476,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "garch",
+        "alpha": 0.95,
+        "horizon_days": 5,
+        "var": 0.0,
+        "es": 0.0,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "garch",
+        "alpha": 0.95,
+        "horizon_days": 10,
+        "var": 0.0,
+        "es": 0.0,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "garch",
+        "alpha": 0.975,
+        "horizon_days": 1,
+        "var": 27.244053911341275,
+        "es": 33.50074083154978,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "garch",
+        "alpha": 0.975,
+        "horizon_days": 5,
+        "var": 0.0,
+        "es": 0.0,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "garch",
+        "alpha": 0.975,
+        "horizon_days": 10,
+        "var": 0.0,
+        "es": 0.0,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "garch",
+        "alpha": 0.99,
+        "horizon_days": 1,
+        "var": 33.294661194254715,
+        "es": 38.937058151849214,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "garch",
+        "alpha": 0.99,
+        "horizon_days": 5,
+        "var": 0.0,
+        "es": 1.2340032871392914,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "garch",
+        "alpha": 0.99,
+        "horizon_days": 10,
+        "var": 0.0,
+        "es": 0.0,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.95,
+        "horizon_days": 1,
+        "var": 18.123701272473667,
+        "es": 21.951692012769467,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.95,
+        "horizon_days": 5,
+        "var": -14.498690296962083,
+        "es": -13.629799661592255,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.95,
+        "horizon_days": 10,
+        "var": -33.05953593358466,
+        "es": -31.05831718596418,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.975,
+        "horizon_days": 1,
+        "var": 21.292896638730188,
+        "es": 23.13993011227869,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.975,
+        "horizon_days": 5,
+        "var": -14.40501209177014,
+        "es": -13.23359545688566,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.975,
+        "horizon_days": 10,
+        "var": -31.762047281398143,
+        "es": -30.18953940410671,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.99,
+        "horizon_days": 1,
+        "var": 23.08720067853657,
+        "es": 23.43287141084604,
+        "observation_count": 60,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.99,
+        "horizon_days": 5,
+        "var": -13.349705361619982,
+        "es": -12.072496409542362,
+        "observation_count": 56,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.99,
+        "horizon_days": 10,
+        "var": -30.18953940410671,
+        "es": -28.961640016242278,
+        "observation_count": 51,
+        "status": "thin_history",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "is_stressed": false,
+        "scenario_name": null
+      }
+    ],
+    "headline": [
+      {
+        "key": "live_1d_95",
+        "label": "Live 1D 95%",
+        "model": "param",
+        "alpha": 0.95,
+        "horizon_days": 1,
+        "var": 19.14905701927823,
+        "es": 25.189936399769934,
+        "status": "thin_history",
+        "observation_count": 60,
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "key": "live_1d_99",
+        "label": "Live 1D 99%",
+        "model": "param",
+        "alpha": 0.99,
+        "horizon_days": 1,
+        "var": 29.001238655418177,
+        "es": 33.900139575610105,
+        "status": "thin_history",
+        "observation_count": 60,
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "key": "watch_5d_99",
+        "label": "Watch 5D 99%",
+        "model": "param",
+        "alpha": 0.99,
+        "horizon_days": 5,
+        "var": -8.93761881408725,
+        "es": -6.735011225985719,
+        "status": "thin_history",
+        "observation_count": 56,
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "key": "governance_10d_975",
+        "label": "Governance ES 10D 97.5%",
+        "model": "param",
+        "alpha": 0.975,
+        "horizon_days": 10,
+        "var": -26.036150368028434,
+        "es": -21.775851432231942,
+        "status": "thin_history",
+        "observation_count": 51,
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "key": "governance_10d_99",
+        "label": "Governance 10D 99%",
+        "model": "param",
+        "alpha": 0.99,
+        "horizon_days": 10,
+        "var": -21.9050106786079,
+        "es": -18.08414340593172,
+        "status": "thin_history",
+        "observation_count": 51,
+        "is_stressed": false,
+        "scenario_name": null
+      }
+    ],
+    "data_quality": {
+      "status": "thin_history",
+      "estimation_window_days": 500,
+      "minimum_valid_days": 250,
+      "available_observations": 60,
+      "oldest_observation": "2026-11-03T00:00:00+00:00",
+      "latest_observation": "2027-01-01T00:00:00+00:00",
+      "horizon_observations": {
+        "h1": 60,
+        "h5": 56,
+        "h10": 51
+      },
+      "symbol_count": 2,
+      "gross_exposure_base_ccy": 20092.669052206624,
+      "gross_exposure_epsilon_base_ccy": 2.0,
+      "no_exposure_epsilon_by_symbol": {
+        "EURUSD": 1.0,
+        "USDJPY": 1.0
+      }
+    },
+    "model_diagnostics": {
+      "hist": {
+        "role": "primary",
+        "surface_points": 9,
+        "avg_var": -8.218413983880428,
+        "avg_es": -7.238957605613949,
+        "max_var": 20.104982844746825,
+        "max_es": 20.292078829217118,
+        "min_var": -30.966637321060972,
+        "min_es": -29.772706791544238,
+        "stability_ratio": null
+      },
+      "param": {
+        "role": "challenger",
+        "surface_points": 9,
+        "avg_var": -4.366610114103943,
+        "avg_es": -0.30334376064717794,
+        "max_var": 29.001238655418177,
+        "max_es": 33.900139575610105,
+        "min_var": -29.5891584070975,
+        "min_es": -24.877612144144944,
+        "stability_ratio": null
+      },
+      "mc": {
+        "role": "challenger",
+        "surface_points": 9,
+        "avg_var": -4.030100792392576,
+        "avg_es": -0.9138445430204022,
+        "max_var": 27.14118000929848,
+        "max_es": 30.909645509699782,
+        "min_var": -28.53566215530241,
+        "min_es": -24.31760952565016,
+        "stability_ratio": null
+      },
+      "ewma": {
+        "role": "challenger",
+        "surface_points": 9,
+        "avg_var": 58.46884563972344,
+        "avg_es": 69.65326919110312,
+        "max_var": 111.82753147614125,
+        "max_es": 128.11683516561953,
+        "min_var": 26.789205134378328,
+        "min_es": 33.59474401138075,
+        "stability_ratio": 4.174350486145409
+      },
+      "garch": {
+        "role": "challenger",
+        "surface_points": 9,
+        "avg_var": 9.178049199883343,
+        "avg_es": 11.402973225788417,
+        "max_var": 33.294661194254715,
+        "max_es": 38.937058151849214,
+        "min_var": 0.0,
+        "min_es": 0.0,
+        "stability_ratio": null
+      },
+      "fhs": {
+        "role": "primary",
+        "surface_points": 9,
+        "avg_var": -8.306747975522367,
+        "avg_es": -6.735654955382139,
+        "max_var": 23.08720067853657,
+        "max_es": 23.43287141084604,
+        "min_var": -33.05953593358466,
+        "min_es": -31.05831718596418,
+        "stability_ratio": null
+      },
+      "input_trace": {
+        "shared": {
+          "sample_size": 60,
+          "symbol_count": 2,
+          "gross_exposure_base_ccy": 20092.669052206624,
+          "alphas": [
+            0.95,
+            0.975,
+            0.99
+          ],
+          "horizons": [
+            1,
+            5,
+            10
+          ],
+          "data_quality_status": "thin_history",
+          "no_exposure": false
+        },
+        "models": {
+          "hist": {
+            "model": "hist",
+            "role": "primary",
+            "alphas": [
+              0.95,
+              0.975,
+              0.99
+            ],
+            "horizons": [
+              1,
+              5,
+              10
+            ],
+            "sample_size": 60,
+            "surface_points": 9,
+            "parameters": {},
+            "assumptions": [
+              "empirical_quantile",
+              "historical_losses"
+            ]
+          },
+          "param": {
+            "model": "param",
+            "role": "challenger",
+            "alphas": [
+              0.95,
+              0.975,
+              0.99
+            ],
+            "horizons": [
+              1,
+              5,
+              10
+            ],
+            "sample_size": 60,
+            "surface_points": 9,
+            "parameters": {},
+            "assumptions": [
+              "normal_losses"
+            ]
+          },
+          "mc": {
+            "model": "mc",
+            "role": "challenger",
+            "alphas": [
+              0.95,
+              0.975,
+              0.99
+            ],
+            "horizons": [
+              1,
+              5,
+              10
+            ],
+            "sample_size": 60,
+            "surface_points": 9,
+            "parameters": {
+              "n_sims": 250,
+              "dist": "normal",
+              "df_t": 6,
+              "seed": 7
+            },
+            "assumptions": [
+              "simulation_based"
+            ]
+          },
+          "ewma": {
+            "model": "ewma",
+            "role": "challenger",
+            "alphas": [
+              0.95,
+              0.975,
+              0.99
+            ],
+            "horizons": [
+              1,
+              5,
+              10
+            ],
+            "sample_size": 60,
+            "surface_points": 9,
+            "parameters": {
+              "lambda": 0.94
+            },
+            "assumptions": [
+              "time_varying_volatility",
+              "normal_losses"
+            ]
+          },
+          "garch": {
+            "model": "garch",
+            "role": "challenger",
+            "alphas": [
+              0.95,
+              0.975,
+              0.99
+            ],
+            "horizons": [
+              1,
+              5,
+              10
+            ],
+            "sample_size": 60,
+            "surface_points": 9,
+            "parameters": {
+              "enabled": true,
+              "p": 1,
+              "q": 1,
+              "dist": "t",
+              "mean": "constant"
+            },
+            "assumptions": [
+              "conditional_volatility"
+            ]
+          },
+          "fhs": {
+            "model": "fhs",
+            "role": "primary",
+            "alphas": [
+              0.95,
+              0.975,
+              0.99
+            ],
+            "horizons": [
+              1,
+              5,
+              10
+            ],
+            "sample_size": 60,
+            "surface_points": 9,
+            "parameters": {
+              "lambda": 0.94,
+              "min_window": 20
+            },
+            "assumptions": [
+              "filtered_historical_simulation"
+            ]
+          }
+        }
+      },
+      "coherence_checks": {
+        "enabled": true,
+        "policy": "detect_non_zero_equal_var_es",
+        "suspicious_equalities_count": 0,
+        "suspicious_equalities": [],
+        "alert_active": false
+      },
+      "debug_rows": [
+        {
+          "model": "hist",
+          "alpha": 0.95,
+          "horizon_days": 1,
+          "var": 16.76768937518936,
+          "es": 19.04690524058567,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "hist",
+          "alpha": 0.95,
+          "horizon_days": 5,
+          "var": -14.510125976678978,
+          "es": -12.783075084914024,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "hist",
+          "alpha": 0.95,
+          "horizon_days": 10,
+          "var": -30.966637321060972,
+          "es": -29.772706791544238,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "hist",
+          "alpha": 0.975,
+          "horizon_days": 1,
+          "var": 18.50185087351304,
+          "es": 20.1335229101745,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "hist",
+          "alpha": 0.975,
+          "horizon_days": 5,
+          "var": -12.896709743474169,
+          "es": -11.963508591868315,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "hist",
+          "alpha": 0.975,
+          "horizon_days": 10,
+          "var": -29.804888590629204,
+          "es": -29.196588509152733,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "hist",
+          "alpha": 0.99,
+          "horizon_days": 1,
+          "var": 20.104982844746825,
+          "es": 20.292078829217118,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "hist",
+          "alpha": 0.99,
+          "horizon_days": 5,
+          "var": -11.965298807377023,
+          "es": -11.945606436781224,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "hist",
+          "alpha": 0.99,
+          "horizon_days": 10,
+          "var": -29.196588509152733,
+          "es": -28.961640016242278,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "param",
+          "alpha": 0.95,
+          "horizon_days": 1,
+          "var": 19.14905701927823,
+          "es": 25.189936399769934,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "param",
+          "alpha": 0.95,
+          "horizon_days": 5,
+          "var": -13.36728383173905,
+          "es": -10.651228337039269,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "param",
+          "alpha": 0.95,
+          "horizon_days": 10,
+          "var": -29.5891584070975,
+          "es": -24.877612144144944,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "param",
+          "alpha": 0.975,
+          "horizon_days": 1,
+          "var": 23.70452390935251,
+          "es": 29.166839370064118,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "param",
+          "alpha": 0.975,
+          "horizon_days": 5,
+          "var": -11.319088511424267,
+          "es": -8.863162645935168,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "param",
+          "alpha": 0.975,
+          "horizon_days": 10,
+          "var": -26.036150368028434,
+          "es": -21.775851432231942,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "param",
+          "alpha": 0.99,
+          "horizon_days": 1,
+          "var": 29.001238655418177,
+          "es": 33.900139575610105,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "param",
+          "alpha": 0.99,
+          "horizon_days": 5,
+          "var": -8.93761881408725,
+          "es": -6.735011225985719,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "param",
+          "alpha": 0.99,
+          "horizon_days": 10,
+          "var": -21.9050106786079,
+          "es": -18.08414340593172,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "mc",
+          "alpha": 0.95,
+          "horizon_days": 1,
+          "var": 21.200441171016127,
+          "es": 25.661425290542752,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "mc",
+          "alpha": 0.95,
+          "horizon_days": 5,
+          "var": -12.74887463244686,
+          "es": -10.22315863958879,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "mc",
+          "alpha": 0.95,
+          "horizon_days": 10,
+          "var": -28.53566215530241,
+          "es": -24.31760952565016,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "mc",
+          "alpha": 0.975,
+          "horizon_days": 1,
+          "var": 24.448980984251342,
+          "es": 27.849889699873806,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "mc",
+          "alpha": 0.975,
+          "horizon_days": 5,
+          "var": -10.903878372459632,
+          "es": -8.788587978063124,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "mc",
+          "alpha": 0.975,
+          "horizon_days": 10,
+          "var": -25.165645145286575,
+          "es": -22.182910448435695,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "mc",
+          "alpha": 0.99,
+          "horizon_days": 1,
+          "var": 27.14118000929848,
+          "es": 30.909645509699782,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "mc",
+          "alpha": 0.99,
+          "horizon_days": 5,
+          "var": -8.730570403842242,
+          "es": -7.318663967513255,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "mc",
+          "alpha": 0.99,
+          "horizon_days": 10,
+          "var": -22.97687858676141,
+          "es": -19.814630828048934,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "ewma",
+          "alpha": 0.95,
+          "horizon_days": 1,
+          "var": 26.789205134378328,
+          "es": 33.59474401138075,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "ewma",
+          "alpha": 0.95,
+          "horizon_days": 5,
+          "var": 40.07593525821072,
+          "es": 50.25683962113944,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "ewma",
+          "alpha": 0.95,
+          "horizon_days": 10,
+          "var": 79.06810619086784,
+          "es": 99.15459505508453,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "ewma",
+          "alpha": 0.975,
+          "horizon_days": 1,
+          "var": 31.921306782263667,
+          "es": 38.07504664112814,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "ewma",
+          "alpha": 0.975,
+          "horizon_days": 5,
+          "var": 47.75342222908281,
+          "es": 56.95925267245204,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "ewma",
+          "alpha": 0.975,
+          "horizon_days": 10,
+          "var": 94.21545961333223,
+          "es": 112.37816933879805,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "ewma",
+          "alpha": 0.99,
+          "horizon_days": 1,
+          "var": 37.888484051379756,
+          "es": 43.40749189229374,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "ewma",
+          "alpha": 0.99,
+          "horizon_days": 5,
+          "var": 56.6801600218543,
+          "es": 64.93644832203194,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "ewma",
+          "alpha": 0.99,
+          "horizon_days": 10,
+          "var": 111.82753147614125,
+          "es": 128.11683516561953,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "garch",
+          "alpha": 0.95,
+          "horizon_days": 1,
+          "var": 22.063727693354107,
+          "es": 28.954956761557476,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "garch",
+          "alpha": 0.95,
+          "horizon_days": 5,
+          "var": 0.0,
+          "es": 0.0,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "garch",
+          "alpha": 0.95,
+          "horizon_days": 10,
+          "var": 0.0,
+          "es": 0.0,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "garch",
+          "alpha": 0.975,
+          "horizon_days": 1,
+          "var": 27.244053911341275,
+          "es": 33.50074083154978,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "garch",
+          "alpha": 0.975,
+          "horizon_days": 5,
+          "var": 0.0,
+          "es": 0.0,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "garch",
+          "alpha": 0.975,
+          "horizon_days": 10,
+          "var": 0.0,
+          "es": 0.0,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "garch",
+          "alpha": 0.99,
+          "horizon_days": 1,
+          "var": 33.294661194254715,
+          "es": 38.937058151849214,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "garch",
+          "alpha": 0.99,
+          "horizon_days": 5,
+          "var": 0.0,
+          "es": 1.2340032871392914,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "garch",
+          "alpha": 0.99,
+          "horizon_days": 10,
+          "var": 0.0,
+          "es": 0.0,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "fhs",
+          "alpha": 0.95,
+          "horizon_days": 1,
+          "var": 18.123701272473667,
+          "es": 21.951692012769467,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "fhs",
+          "alpha": 0.95,
+          "horizon_days": 5,
+          "var": -14.498690296962083,
+          "es": -13.629799661592255,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "fhs",
+          "alpha": 0.95,
+          "horizon_days": 10,
+          "var": -33.05953593358466,
+          "es": -31.05831718596418,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "fhs",
+          "alpha": 0.975,
+          "horizon_days": 1,
+          "var": 21.292896638730188,
+          "es": 23.13993011227869,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "fhs",
+          "alpha": 0.975,
+          "horizon_days": 5,
+          "var": -14.40501209177014,
+          "es": -13.23359545688566,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "fhs",
+          "alpha": 0.975,
+          "horizon_days": 10,
+          "var": -31.762047281398143,
+          "es": -30.18953940410671,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "fhs",
+          "alpha": 0.99,
+          "horizon_days": 1,
+          "var": 23.08720067853657,
+          "es": 23.43287141084604,
+          "status": "thin_history",
+          "observation_count": 60,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "fhs",
+          "alpha": 0.99,
+          "horizon_days": 5,
+          "var": -13.349705361619982,
+          "es": -12.072496409542362,
+          "status": "thin_history",
+          "observation_count": 56,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        },
+        {
+          "model": "fhs",
+          "alpha": 0.99,
+          "horizon_days": 10,
+          "var": -30.18953940410671,
+          "es": -28.961640016242278,
+          "status": "thin_history",
+          "observation_count": 51,
+          "latest_observation": "2027-01-01T00:00:00+00:00"
+        }
+      ],
+      "no_exposure": false,
+      "data_quality_status": "thin_history",
+      "suspicious_equalities_count": 0,
+      "coherence_alert_active": false
+    },
+    "by_model": {
+      "hist": {
+        "a95": {
+          "h1": {
+            "var": 16.76768937518936,
+            "es": 19.04690524058567,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": -14.510125976678978,
+            "es": -12.783075084914024,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": -30.966637321060972,
+            "es": -29.772706791544238,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        },
+        "a97p5": {
+          "h1": {
+            "var": 18.50185087351304,
+            "es": 20.1335229101745,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": -12.896709743474169,
+            "es": -11.963508591868315,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": -29.804888590629204,
+            "es": -29.196588509152733,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        },
+        "a99": {
+          "h1": {
+            "var": 20.104982844746825,
+            "es": 20.292078829217118,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": -11.965298807377023,
+            "es": -11.945606436781224,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": -29.196588509152733,
+            "es": -28.961640016242278,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        }
+      },
+      "param": {
+        "a95": {
+          "h1": {
+            "var": 19.14905701927823,
+            "es": 25.189936399769934,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": -13.36728383173905,
+            "es": -10.651228337039269,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": -29.5891584070975,
+            "es": -24.877612144144944,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        },
+        "a97p5": {
+          "h1": {
+            "var": 23.70452390935251,
+            "es": 29.166839370064118,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": -11.319088511424267,
+            "es": -8.863162645935168,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": -26.036150368028434,
+            "es": -21.775851432231942,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        },
+        "a99": {
+          "h1": {
+            "var": 29.001238655418177,
+            "es": 33.900139575610105,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": -8.93761881408725,
+            "es": -6.735011225985719,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": -21.9050106786079,
+            "es": -18.08414340593172,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        }
+      },
+      "mc": {
+        "a95": {
+          "h1": {
+            "var": 21.200441171016127,
+            "es": 25.661425290542752,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": -12.74887463244686,
+            "es": -10.22315863958879,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": -28.53566215530241,
+            "es": -24.31760952565016,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        },
+        "a97p5": {
+          "h1": {
+            "var": 24.448980984251342,
+            "es": 27.849889699873806,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": -10.903878372459632,
+            "es": -8.788587978063124,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": -25.165645145286575,
+            "es": -22.182910448435695,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        },
+        "a99": {
+          "h1": {
+            "var": 27.14118000929848,
+            "es": 30.909645509699782,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": -8.730570403842242,
+            "es": -7.318663967513255,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": -22.97687858676141,
+            "es": -19.814630828048934,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        }
+      },
+      "ewma": {
+        "a95": {
+          "h1": {
+            "var": 26.789205134378328,
+            "es": 33.59474401138075,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": 40.07593525821072,
+            "es": 50.25683962113944,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": 79.06810619086784,
+            "es": 99.15459505508453,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        },
+        "a97p5": {
+          "h1": {
+            "var": 31.921306782263667,
+            "es": 38.07504664112814,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": 47.75342222908281,
+            "es": 56.95925267245204,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": 94.21545961333223,
+            "es": 112.37816933879805,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        },
+        "a99": {
+          "h1": {
+            "var": 37.888484051379756,
+            "es": 43.40749189229374,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": 56.6801600218543,
+            "es": 64.93644832203194,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": 111.82753147614125,
+            "es": 128.11683516561953,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        }
+      },
+      "garch": {
+        "a95": {
+          "h1": {
+            "var": 22.063727693354107,
+            "es": 28.954956761557476,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": 0.0,
+            "es": 0.0,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": 0.0,
+            "es": 0.0,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        },
+        "a97p5": {
+          "h1": {
+            "var": 27.244053911341275,
+            "es": 33.50074083154978,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": 0.0,
+            "es": 0.0,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": 0.0,
+            "es": 0.0,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        },
+        "a99": {
+          "h1": {
+            "var": 33.294661194254715,
+            "es": 38.937058151849214,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": 0.0,
+            "es": 1.2340032871392914,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": 0.0,
+            "es": 0.0,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        }
+      },
+      "fhs": {
+        "a95": {
+          "h1": {
+            "var": 18.123701272473667,
+            "es": 21.951692012769467,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": -14.498690296962083,
+            "es": -13.629799661592255,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": -33.05953593358466,
+            "es": -31.05831718596418,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        },
+        "a97p5": {
+          "h1": {
+            "var": 21.292896638730188,
+            "es": 23.13993011227869,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": -14.40501209177014,
+            "es": -13.23359545688566,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": -31.762047281398143,
+            "es": -30.18953940410671,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        },
+        "a99": {
+          "h1": {
+            "var": 23.08720067853657,
+            "es": 23.43287141084604,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h5": {
+            "var": -13.349705361619982,
+            "es": -12.072496409542362,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          },
+          "h10": {
+            "var": -30.18953940410671,
+            "es": -28.961640016242278,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "is_stressed": false,
+            "scenario_name": null
+          }
+        }
+      }
+    }
+  },
+  "headline_risk": [
+    {
+      "key": "live_1d_95",
+      "label": "Live 1D 95%",
+      "model": "param",
+      "alpha": 0.95,
+      "horizon_days": 1,
+      "var": 19.14905701927823,
+      "es": 25.189936399769934,
+      "status": "thin_history",
+      "observation_count": 60,
+      "is_stressed": false,
+      "scenario_name": null
+    },
+    {
+      "key": "live_1d_99",
+      "label": "Live 1D 99%",
+      "model": "param",
+      "alpha": 0.99,
+      "horizon_days": 1,
+      "var": 29.001238655418177,
+      "es": 33.900139575610105,
+      "status": "thin_history",
+      "observation_count": 60,
+      "is_stressed": false,
+      "scenario_name": null
+    },
+    {
+      "key": "watch_5d_99",
+      "label": "Watch 5D 99%",
+      "model": "param",
+      "alpha": 0.99,
+      "horizon_days": 5,
+      "var": -8.93761881408725,
+      "es": -6.735011225985719,
+      "status": "thin_history",
+      "observation_count": 56,
+      "is_stressed": false,
+      "scenario_name": null
+    },
+    {
+      "key": "governance_10d_975",
+      "label": "Governance ES 10D 97.5%",
+      "model": "param",
+      "alpha": 0.975,
+      "horizon_days": 10,
+      "var": -26.036150368028434,
+      "es": -21.775851432231942,
+      "status": "thin_history",
+      "observation_count": 51,
+      "is_stressed": false,
+      "scenario_name": null
+    },
+    {
+      "key": "governance_10d_99",
+      "label": "Governance 10D 99%",
+      "model": "param",
+      "alpha": 0.99,
+      "horizon_days": 10,
+      "var": -21.9050106786079,
+      "es": -18.08414340593172,
+      "status": "thin_history",
+      "observation_count": 51,
+      "is_stressed": false,
+      "scenario_name": null
+    },
+    {
+      "key": "stressed_10d_975",
+      "label": "Stressed ES 10D 97.5%",
+      "model": "hist",
+      "alpha": 0.975,
+      "horizon_days": 10,
+      "var": -21.556554172537687,
+      "es": -20.64410405032298,
+      "status": "thin_history",
+      "observation_count": 51,
+      "is_stressed": true,
+      "scenario_name": "Volatility regime shift"
+    },
+    {
+      "key": "stressed_10d_99",
+      "label": "Stressed ES 10D 99%",
+      "model": "hist",
+      "alpha": 0.99,
+      "horizon_days": 10,
+      "var": -20.64410405032298,
+      "es": -20.2916813109573,
+      "status": "thin_history",
+      "observation_count": 51,
+      "is_stressed": true,
+      "scenario_name": "Volatility regime shift"
+    }
+  ],
+  "stress_surface": {
+    "reference_model": "hist",
+    "baseline_var": 16.76768937518936,
+    "baseline_es": 19.04690524058567,
+    "risk_surface": {
+      "reference_model": "hist",
+      "alphas": [
+        0.95,
+        0.975,
+        0.99
+      ],
+      "horizons": [
+        1,
+        5,
+        10
+      ],
+      "points": [
+        {
+          "model": "hist",
+          "alpha": 0.95,
+          "horizon_days": 1,
+          "var": 16.76768937518936,
+          "es": 19.04690524058567,
+          "observation_count": 60,
+          "status": "thin_history",
+          "latest_observation": "2027-01-01T00:00:00+00:00",
+          "is_stressed": false,
+          "scenario_name": null
+        },
+        {
+          "model": "hist",
+          "alpha": 0.95,
+          "horizon_days": 5,
+          "var": -14.510125976678978,
+          "es": -12.783075084914024,
+          "observation_count": 56,
+          "status": "thin_history",
+          "latest_observation": "2027-01-01T00:00:00+00:00",
+          "is_stressed": false,
+          "scenario_name": null
+        },
+        {
+          "model": "hist",
+          "alpha": 0.95,
+          "horizon_days": 10,
+          "var": -30.966637321060972,
+          "es": -29.772706791544238,
+          "observation_count": 51,
+          "status": "thin_history",
+          "latest_observation": "2027-01-01T00:00:00+00:00",
+          "is_stressed": false,
+          "scenario_name": null
+        },
+        {
+          "model": "hist",
+          "alpha": 0.975,
+          "horizon_days": 1,
+          "var": 18.50185087351304,
+          "es": 20.1335229101745,
+          "observation_count": 60,
+          "status": "thin_history",
+          "latest_observation": "2027-01-01T00:00:00+00:00",
+          "is_stressed": false,
+          "scenario_name": null
+        },
+        {
+          "model": "hist",
+          "alpha": 0.975,
+          "horizon_days": 5,
+          "var": -12.896709743474169,
+          "es": -11.963508591868315,
+          "observation_count": 56,
+          "status": "thin_history",
+          "latest_observation": "2027-01-01T00:00:00+00:00",
+          "is_stressed": false,
+          "scenario_name": null
+        },
+        {
+          "model": "hist",
+          "alpha": 0.975,
+          "horizon_days": 10,
+          "var": -29.804888590629204,
+          "es": -29.196588509152733,
+          "observation_count": 51,
+          "status": "thin_history",
+          "latest_observation": "2027-01-01T00:00:00+00:00",
+          "is_stressed": false,
+          "scenario_name": null
+        },
+        {
+          "model": "hist",
+          "alpha": 0.99,
+          "horizon_days": 1,
+          "var": 20.104982844746825,
+          "es": 20.292078829217118,
+          "observation_count": 60,
+          "status": "thin_history",
+          "latest_observation": "2027-01-01T00:00:00+00:00",
+          "is_stressed": false,
+          "scenario_name": null
+        },
+        {
+          "model": "hist",
+          "alpha": 0.99,
+          "horizon_days": 5,
+          "var": -11.965298807377023,
+          "es": -11.945606436781224,
+          "observation_count": 56,
+          "status": "thin_history",
+          "latest_observation": "2027-01-01T00:00:00+00:00",
+          "is_stressed": false,
+          "scenario_name": null
+        },
+        {
+          "model": "hist",
+          "alpha": 0.99,
+          "horizon_days": 10,
+          "var": -29.196588509152733,
+          "es": -28.961640016242278,
+          "observation_count": 51,
+          "status": "thin_history",
+          "latest_observation": "2027-01-01T00:00:00+00:00",
+          "is_stressed": false,
+          "scenario_name": null
+        }
+      ],
+      "headline": [
+        {
+          "key": "live_1d_95",
+          "label": "Live 1D 95%",
+          "model": "hist",
+          "alpha": 0.95,
+          "horizon_days": 1,
+          "var": 16.76768937518936,
+          "es": 19.04690524058567,
+          "status": "thin_history",
+          "observation_count": 60,
+          "is_stressed": false,
+          "scenario_name": null
+        },
+        {
+          "key": "live_1d_99",
+          "label": "Live 1D 99%",
+          "model": "hist",
+          "alpha": 0.99,
+          "horizon_days": 1,
+          "var": 20.104982844746825,
+          "es": 20.292078829217118,
+          "status": "thin_history",
+          "observation_count": 60,
+          "is_stressed": false,
+          "scenario_name": null
+        },
+        {
+          "key": "watch_5d_99",
+          "label": "Watch 5D 99%",
+          "model": "hist",
+          "alpha": 0.99,
+          "horizon_days": 5,
+          "var": -11.965298807377023,
+          "es": -11.945606436781224,
+          "status": "thin_history",
+          "observation_count": 56,
+          "is_stressed": false,
+          "scenario_name": null
+        },
+        {
+          "key": "governance_10d_975",
+          "label": "Governance ES 10D 97.5%",
+          "model": "hist",
+          "alpha": 0.975,
+          "horizon_days": 10,
+          "var": -29.804888590629204,
+          "es": -29.196588509152733,
+          "status": "thin_history",
+          "observation_count": 51,
+          "is_stressed": false,
+          "scenario_name": null
+        },
+        {
+          "key": "governance_10d_99",
+          "label": "Governance 10D 99%",
+          "model": "hist",
+          "alpha": 0.99,
+          "horizon_days": 10,
+          "var": -29.196588509152733,
+          "es": -28.961640016242278,
+          "status": "thin_history",
+          "observation_count": 51,
+          "is_stressed": false,
+          "scenario_name": null
+        }
+      ],
+      "data_quality": {
+        "status": "thin_history",
+        "estimation_window_days": 500,
+        "minimum_valid_days": 250,
+        "available_observations": 60,
+        "oldest_observation": "2026-11-03T00:00:00+00:00",
+        "latest_observation": "2027-01-01T00:00:00+00:00",
+        "horizon_observations": {
+          "h1": 60,
+          "h5": 56,
+          "h10": 51
+        },
+        "symbol_count": 2,
+        "gross_exposure_base_ccy": 20092.669052206624,
+        "gross_exposure_epsilon_base_ccy": 2.0,
+        "no_exposure_epsilon_by_symbol": {
+          "EURUSD": 1.0,
+          "USDJPY": 1.0
+        }
+      },
+      "model_diagnostics": {
+        "hist": {
+          "role": "primary",
+          "surface_points": 9,
+          "avg_var": -8.218413983880428,
+          "avg_es": -7.238957605613949,
+          "max_var": 20.104982844746825,
+          "max_es": 20.292078829217118,
+          "min_var": -30.966637321060972,
+          "min_es": -29.772706791544238,
+          "stability_ratio": null
+        },
+        "input_trace": {
+          "shared": {
+            "sample_size": 60,
+            "symbol_count": 2,
+            "gross_exposure_base_ccy": 20092.669052206624,
+            "alphas": [
+              0.95,
+              0.975,
+              0.99
+            ],
+            "horizons": [
+              1,
+              5,
+              10
+            ],
+            "data_quality_status": "thin_history",
+            "no_exposure": false
+          },
+          "models": {
+            "hist": {
+              "model": "hist",
+              "role": "primary",
+              "alphas": [
+                0.95,
+                0.975,
+                0.99
+              ],
+              "horizons": [
+                1,
+                5,
+                10
+              ],
+              "sample_size": 60,
+              "surface_points": 9,
+              "parameters": {},
+              "assumptions": [
+                "empirical_quantile",
+                "historical_losses"
+              ]
+            }
+          }
+        },
+        "coherence_checks": {
+          "enabled": true,
+          "policy": "detect_non_zero_equal_var_es",
+          "suspicious_equalities_count": 0,
+          "suspicious_equalities": [],
+          "alert_active": false
+        },
+        "debug_rows": [
+          {
+            "model": "hist",
+            "alpha": 0.95,
+            "horizon_days": 1,
+            "var": 16.76768937518936,
+            "es": 19.04690524058567,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00"
+          },
+          {
+            "model": "hist",
+            "alpha": 0.95,
+            "horizon_days": 5,
+            "var": -14.510125976678978,
+            "es": -12.783075084914024,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00"
+          },
+          {
+            "model": "hist",
+            "alpha": 0.95,
+            "horizon_days": 10,
+            "var": -30.966637321060972,
+            "es": -29.772706791544238,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00"
+          },
+          {
+            "model": "hist",
+            "alpha": 0.975,
+            "horizon_days": 1,
+            "var": 18.50185087351304,
+            "es": 20.1335229101745,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00"
+          },
+          {
+            "model": "hist",
+            "alpha": 0.975,
+            "horizon_days": 5,
+            "var": -12.896709743474169,
+            "es": -11.963508591868315,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00"
+          },
+          {
+            "model": "hist",
+            "alpha": 0.975,
+            "horizon_days": 10,
+            "var": -29.804888590629204,
+            "es": -29.196588509152733,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00"
+          },
+          {
+            "model": "hist",
+            "alpha": 0.99,
+            "horizon_days": 1,
+            "var": 20.104982844746825,
+            "es": 20.292078829217118,
+            "status": "thin_history",
+            "observation_count": 60,
+            "latest_observation": "2027-01-01T00:00:00+00:00"
+          },
+          {
+            "model": "hist",
+            "alpha": 0.99,
+            "horizon_days": 5,
+            "var": -11.965298807377023,
+            "es": -11.945606436781224,
+            "status": "thin_history",
+            "observation_count": 56,
+            "latest_observation": "2027-01-01T00:00:00+00:00"
+          },
+          {
+            "model": "hist",
+            "alpha": 0.99,
+            "horizon_days": 10,
+            "var": -29.196588509152733,
+            "es": -28.961640016242278,
+            "status": "thin_history",
+            "observation_count": 51,
+            "latest_observation": "2027-01-01T00:00:00+00:00"
+          }
+        ],
+        "no_exposure": false,
+        "data_quality_status": "thin_history",
+        "suspicious_equalities_count": 0,
+        "coherence_alert_active": false
+      },
+      "by_model": {
+        "hist": {
+          "a95": {
+            "h1": {
+              "var": 16.76768937518936,
+              "es": 19.04690524058567,
+              "status": "thin_history",
+              "observation_count": 60,
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": false,
+              "scenario_name": null
+            },
+            "h5": {
+              "var": -14.510125976678978,
+              "es": -12.783075084914024,
+              "status": "thin_history",
+              "observation_count": 56,
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": false,
+              "scenario_name": null
+            },
+            "h10": {
+              "var": -30.966637321060972,
+              "es": -29.772706791544238,
+              "status": "thin_history",
+              "observation_count": 51,
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": false,
+              "scenario_name": null
+            }
+          },
+          "a97p5": {
+            "h1": {
+              "var": 18.50185087351304,
+              "es": 20.1335229101745,
+              "status": "thin_history",
+              "observation_count": 60,
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": false,
+              "scenario_name": null
+            },
+            "h5": {
+              "var": -12.896709743474169,
+              "es": -11.963508591868315,
+              "status": "thin_history",
+              "observation_count": 56,
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": false,
+              "scenario_name": null
+            },
+            "h10": {
+              "var": -29.804888590629204,
+              "es": -29.196588509152733,
+              "status": "thin_history",
+              "observation_count": 51,
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": false,
+              "scenario_name": null
+            }
+          },
+          "a99": {
+            "h1": {
+              "var": 20.104982844746825,
+              "es": 20.292078829217118,
+              "status": "thin_history",
+              "observation_count": 60,
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": false,
+              "scenario_name": null
+            },
+            "h5": {
+              "var": -11.965298807377023,
+              "es": -11.945606436781224,
+              "status": "thin_history",
+              "observation_count": 56,
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": false,
+              "scenario_name": null
+            },
+            "h10": {
+              "var": -29.196588509152733,
+              "es": -28.961640016242278,
+              "status": "thin_history",
+              "observation_count": 51,
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": false,
+              "scenario_name": null
+            }
+          }
+        }
+      }
+    },
+    "headline_risk": [
+      {
+        "key": "live_1d_95",
+        "label": "Live 1D 95%",
+        "model": "hist",
+        "alpha": 0.95,
+        "horizon_days": 1,
+        "var": 16.76768937518936,
+        "es": 19.04690524058567,
+        "status": "thin_history",
+        "observation_count": 60,
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "key": "live_1d_99",
+        "label": "Live 1D 99%",
+        "model": "hist",
+        "alpha": 0.99,
+        "horizon_days": 1,
+        "var": 20.104982844746825,
+        "es": 20.292078829217118,
+        "status": "thin_history",
+        "observation_count": 60,
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "key": "watch_5d_99",
+        "label": "Watch 5D 99%",
+        "model": "hist",
+        "alpha": 0.99,
+        "horizon_days": 5,
+        "var": -11.965298807377023,
+        "es": -11.945606436781224,
+        "status": "thin_history",
+        "observation_count": 56,
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "key": "governance_10d_975",
+        "label": "Governance ES 10D 97.5%",
+        "model": "hist",
+        "alpha": 0.975,
+        "horizon_days": 10,
+        "var": -29.804888590629204,
+        "es": -29.196588509152733,
+        "status": "thin_history",
+        "observation_count": 51,
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "key": "governance_10d_99",
+        "label": "Governance 10D 99%",
+        "model": "hist",
+        "alpha": 0.99,
+        "horizon_days": 10,
+        "var": -29.196588509152733,
+        "es": -28.961640016242278,
+        "status": "thin_history",
+        "observation_count": 51,
+        "is_stressed": false,
+        "scenario_name": null
+      },
+      {
+        "key": "stressed_10d_975",
+        "label": "Stressed ES 10D 97.5%",
+        "model": "hist",
+        "alpha": 0.975,
+        "horizon_days": 10,
+        "var": -21.556554172537687,
+        "es": -20.64410405032298,
+        "status": "thin_history",
+        "observation_count": 51,
+        "is_stressed": true,
+        "scenario_name": "Volatility regime shift"
+      },
+      {
+        "key": "stressed_10d_99",
+        "label": "Stressed ES 10D 99%",
+        "model": "hist",
+        "alpha": 0.99,
+        "horizon_days": 10,
+        "var": -20.64410405032298,
+        "es": -20.2916813109573,
+        "status": "thin_history",
+        "observation_count": 51,
+        "is_stressed": true,
+        "scenario_name": "Volatility regime shift"
+      }
+    ],
+    "attribution": {
+      "alpha": 0.95,
+      "sample_size": 60,
+      "models": {
+        "hist": {
+          "model": "hist",
+          "total_var": 16.76768937518936,
+          "total_es": 19.04690524058567,
+          "positions": {
+            "EURUSD": {
+              "symbol": "EURUSD",
+              "asset_class": "cfd",
+              "exposure_base_ccy": 10000.0,
+              "standalone_var": 4.736535389399934,
+              "standalone_es": 4.763721719619567,
+              "incremental_var": 1.2621410387545335,
+              "incremental_es": 3.3725383696153095,
+              "marginal_var": 9.49802048352133e-05,
+              "marginal_es": 0.0003562554319779565,
+              "component_var": 0.949802048352133,
+              "component_es": 3.5625543197795646,
+              "contribution_pct_var": 0.05664477836508149,
+              "contribution_pct_es": 0.18704111112961155
+            },
+            "USDJPY": {
+              "symbol": "USDJPY",
+              "asset_class": "indices_cfd",
+              "exposure_base_ccy": 10092.669052206624,
+              "standalone_var": 15.505548336434826,
+              "standalone_es": 15.67436687097036,
+              "incremental_var": 12.031153985789427,
+              "incremental_es": 14.283183520966102,
+              "marginal_var": 0.0015672650361381938,
+              "marginal_es": 0.0015342176425987713,
+              "component_var": 15.817887326837443,
+              "component_es": 15.484350920806023,
+              "contribution_pct_var": 0.9433552216349315,
+              "contribution_pct_es": 0.8129588888703841
+            }
+          },
+          "asset_classes": {
+            "cfd": {
+              "asset_class": "cfd",
+              "symbols": [
+                "EURUSD"
+              ],
+              "symbol_count": 1,
+              "exposure_base_ccy": 10000.0,
+              "standalone_var": 4.736535389399934,
+              "standalone_es": 4.763721719619567,
+              "incremental_var": 1.2621410387545335,
+              "incremental_es": 3.3725383696153095,
+              "marginal_var": 9.49802048352133e-05,
+              "marginal_es": 0.0003562554319779565,
+              "component_var": 0.949802048352133,
+              "component_es": 3.5625543197795646,
+              "contribution_pct_var": 0.05664477836508149,
+              "contribution_pct_es": 0.18704111112961155
+            },
+            "indices_cfd": {
+              "asset_class": "indices_cfd",
+              "symbols": [
+                "USDJPY"
+              ],
+              "symbol_count": 1,
+              "exposure_base_ccy": 10092.669052206624,
+              "standalone_var": 15.505548336434826,
+              "standalone_es": 15.67436687097036,
+              "incremental_var": 12.031153985789427,
+              "incremental_es": 14.283183520966102,
+              "marginal_var": 0.0015672650361381938,
+              "marginal_es": 0.0015342176425987713,
+              "component_var": 15.817887326837443,
+              "component_es": 15.484350920806023,
+              "contribution_pct_var": 0.9433552216349315,
+              "contribution_pct_es": 0.8129588888703841
+            }
+          }
+        }
+      }
+    },
+    "scenarios": [
+      {
+        "name": "Volatility regime shift",
+        "vol_multiplier": 1.5,
+        "shock_pnl": 0.0,
+        "risk_surface": {
+          "reference_model": "hist",
+          "alphas": [
+            0.95,
+            0.975,
+            0.99
+          ],
+          "horizons": [
+            1,
+            5,
+            10
+          ],
+          "points": [
+            {
+              "model": "hist",
+              "alpha": 0.95,
+              "horizon_days": 1,
+              "var": 27.46661193412465,
+              "es": 30.88543573221911,
+              "observation_count": 60,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Volatility regime shift"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.95,
+              "horizon_days": 5,
+              "var": -10.18979960831542,
+              "es": -7.599223270667982,
+              "observation_count": 56,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Volatility regime shift"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.95,
+              "horizon_days": 10,
+              "var": -23.29917726818534,
+              "es": -21.508281473910245,
+              "observation_count": 51,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Volatility regime shift"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.975,
+              "horizon_days": 1,
+              "var": 30.067854181610166,
+              "es": 32.51536223660236,
+              "observation_count": 60,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Volatility regime shift"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.975,
+              "horizon_days": 5,
+              "var": -7.769675258508197,
+              "es": -6.369873531099415,
+              "observation_count": 56,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Volatility regime shift"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.975,
+              "horizon_days": 10,
+              "var": -21.556554172537687,
+              "es": -20.64410405032298,
+              "observation_count": 51,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Volatility regime shift"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.99,
+              "horizon_days": 1,
+              "var": 32.47255213846085,
+              "es": 32.75319611516629,
+              "observation_count": 60,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Volatility regime shift"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.99,
+              "horizon_days": 5,
+              "var": -6.372558854362478,
+              "es": -6.343020298468787,
+              "observation_count": 56,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Volatility regime shift"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.99,
+              "horizon_days": 10,
+              "var": -20.64410405032298,
+              "es": -20.2916813109573,
+              "observation_count": 51,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Volatility regime shift"
+            }
+          ],
+          "headline": [
+            {
+              "key": "stressed_10d_975",
+              "label": "Stressed ES 10D 97.5%",
+              "model": "hist",
+              "alpha": 0.975,
+              "horizon_days": 10,
+              "var": -21.556554172537687,
+              "es": -20.64410405032298,
+              "status": "thin_history",
+              "observation_count": 51,
+              "is_stressed": true,
+              "scenario_name": "Volatility regime shift"
+            },
+            {
+              "key": "stressed_10d_99",
+              "label": "Stressed ES 10D 99%",
+              "model": "hist",
+              "alpha": 0.99,
+              "horizon_days": 10,
+              "var": -20.64410405032298,
+              "es": -20.2916813109573,
+              "status": "thin_history",
+              "observation_count": 51,
+              "is_stressed": true,
+              "scenario_name": "Volatility regime shift"
+            }
+          ],
+          "data_quality": {
+            "status": "thin_history",
+            "estimation_window_days": 500,
+            "minimum_valid_days": 250,
+            "available_observations": 60,
+            "oldest_observation": "2026-11-03T00:00:00+00:00",
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "horizon_observations": {
+              "h1": 60,
+              "h5": 56,
+              "h10": 51
+            },
+            "symbol_count": 2,
+            "gross_exposure_base_ccy": 20092.669052206624,
+            "gross_exposure_epsilon_base_ccy": 2.0,
+            "no_exposure_epsilon_by_symbol": {
+              "EURUSD": 1.0,
+              "USDJPY": 1.0
+            }
+          },
+          "model_diagnostics": {
+            "input_trace": {
+              "shared": {
+                "sample_size": 60,
+                "symbol_count": 2,
+                "gross_exposure_base_ccy": 20092.669052206624,
+                "alphas": [],
+                "horizons": [],
+                "data_quality_status": "thin_history",
+                "no_exposure": false
+              },
+              "models": {}
+            },
+            "coherence_checks": {
+              "enabled": true,
+              "policy": "detect_non_zero_equal_var_es",
+              "suspicious_equalities_count": 0,
+              "suspicious_equalities": [],
+              "alert_active": false
+            },
+            "debug_rows": [],
+            "no_exposure": false,
+            "data_quality_status": "thin_history",
+            "suspicious_equalities_count": 0,
+            "coherence_alert_active": false
+          },
+          "by_model": {
+            "hist": {
+              "a95": {
+                "h1": {
+                  "var": 27.46661193412465,
+                  "es": 30.88543573221911,
+                  "status": "thin_history",
+                  "observation_count": 60,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Volatility regime shift"
+                },
+                "h5": {
+                  "var": -10.18979960831542,
+                  "es": -7.599223270667982,
+                  "status": "thin_history",
+                  "observation_count": 56,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Volatility regime shift"
+                },
+                "h10": {
+                  "var": -23.29917726818534,
+                  "es": -21.508281473910245,
+                  "status": "thin_history",
+                  "observation_count": 51,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Volatility regime shift"
+                }
+              },
+              "a97p5": {
+                "h1": {
+                  "var": 30.067854181610166,
+                  "es": 32.51536223660236,
+                  "status": "thin_history",
+                  "observation_count": 60,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Volatility regime shift"
+                },
+                "h5": {
+                  "var": -7.769675258508197,
+                  "es": -6.369873531099415,
+                  "status": "thin_history",
+                  "observation_count": 56,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Volatility regime shift"
+                },
+                "h10": {
+                  "var": -21.556554172537687,
+                  "es": -20.64410405032298,
+                  "status": "thin_history",
+                  "observation_count": 51,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Volatility regime shift"
+                }
+              },
+              "a99": {
+                "h1": {
+                  "var": 32.47255213846085,
+                  "es": 32.75319611516629,
+                  "status": "thin_history",
+                  "observation_count": 60,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Volatility regime shift"
+                },
+                "h5": {
+                  "var": -6.372558854362478,
+                  "es": -6.343020298468787,
+                  "status": "thin_history",
+                  "observation_count": 56,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Volatility regime shift"
+                },
+                "h10": {
+                  "var": -20.64410405032298,
+                  "es": -20.2916813109573,
+                  "status": "thin_history",
+                  "observation_count": 51,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Volatility regime shift"
+                }
+              }
+            }
+          }
+        },
+        "headline_risk": [
+          {
+            "key": "stressed_10d_975",
+            "label": "Stressed ES 10D 97.5%",
+            "model": "hist",
+            "alpha": 0.975,
+            "horizon_days": 10,
+            "var": -21.556554172537687,
+            "es": -20.64410405032298,
+            "status": "thin_history",
+            "observation_count": 51,
+            "is_stressed": true,
+            "scenario_name": "Volatility regime shift"
+          },
+          {
+            "key": "stressed_10d_99",
+            "label": "Stressed ES 10D 99%",
+            "model": "hist",
+            "alpha": 0.99,
+            "horizon_days": 10,
+            "var": -20.64410405032298,
+            "es": -20.2916813109573,
+            "status": "thin_history",
+            "observation_count": 51,
+            "is_stressed": true,
+            "scenario_name": "Volatility regime shift"
+          }
+        ],
+        "attribution": {
+          "alpha": 0.95,
+          "sample_size": 60,
+          "models": {
+            "hist": {
+              "model": "hist",
+              "total_var": 27.46661193412465,
+              "total_es": 30.88543573221911,
+              "positions": {
+                "EURUSD": {
+                  "symbol": "EURUSD",
+                  "asset_class": "cfd",
+                  "exposure_base_ccy": 10000.0,
+                  "standalone_var": 8.120922816262002,
+                  "standalone_es": 8.161702311591453,
+                  "incremental_var": 2.9093312902939026,
+                  "incremental_es": 6.074927286585066,
+                  "marginal_var": 0.0002440822804690157,
+                  "marginal_es": 0.0006359951211831571,
+                  "component_var": 2.440822804690157,
+                  "component_es": 6.3599512118315715,
+                  "contribution_pct_var": 0.0888650850182824,
+                  "contribution_pct_es": 0.20592072156511584
+                },
+                "USDJPY": {
+                  "symbol": "USDJPY",
+                  "asset_class": "indices_cfd",
+                  "exposure_base_ccy": 10092.669052206624,
+                  "standalone_var": 24.557280643830747,
+                  "standalone_es": 24.810508445634046,
+                  "incremental_var": 19.345689117862648,
+                  "incremental_es": 22.72373342062766,
+                  "marginal_var": 0.0024796006883791464,
+                  "marginal_es": 0.002430029598070057,
+                  "component_var": 25.02578912943445,
+                  "component_es": 24.525484520387764,
+                  "contribution_pct_var": 0.9111349149817161,
+                  "contribution_pct_es": 0.7940792784348913
+                }
+              },
+              "asset_classes": {
+                "cfd": {
+                  "asset_class": "cfd",
+                  "symbols": [
+                    "EURUSD"
+                  ],
+                  "symbol_count": 1,
+                  "exposure_base_ccy": 10000.0,
+                  "standalone_var": 8.120922816262002,
+                  "standalone_es": 8.161702311591453,
+                  "incremental_var": 2.9093312902939026,
+                  "incremental_es": 6.074927286585066,
+                  "marginal_var": 0.0002440822804690157,
+                  "marginal_es": 0.0006359951211831571,
+                  "component_var": 2.440822804690157,
+                  "component_es": 6.3599512118315715,
+                  "contribution_pct_var": 0.0888650850182824,
+                  "contribution_pct_es": 0.20592072156511584
+                },
+                "indices_cfd": {
+                  "asset_class": "indices_cfd",
+                  "symbols": [
+                    "USDJPY"
+                  ],
+                  "symbol_count": 1,
+                  "exposure_base_ccy": 10092.669052206624,
+                  "standalone_var": 24.557280643830747,
+                  "standalone_es": 24.810508445634046,
+                  "incremental_var": 19.345689117862648,
+                  "incremental_es": 22.72373342062766,
+                  "marginal_var": 0.0024796006883791464,
+                  "marginal_es": 0.002430029598070057,
+                  "component_var": 25.02578912943445,
+                  "component_es": 24.525484520387764,
+                  "contribution_pct_var": 0.9111349149817161,
+                  "contribution_pct_es": 0.7940792784348913
+                }
+              }
+            }
+          }
+        },
+        "primary_metric": {
+          "key": "stressed_10d_975",
+          "label": "Stressed ES 10D 97.5%",
+          "model": "hist",
+          "alpha": 0.975,
+          "horizon_days": 10,
+          "var": -21.556554172537687,
+          "es": -20.64410405032298,
+          "status": "thin_history",
+          "observation_count": 51,
+          "is_stressed": true,
+          "scenario_name": "Volatility regime shift"
+        }
+      },
+      {
+        "name": "FX directional down shock",
+        "vol_multiplier": 1.1,
+        "shock_pnl": -200.92669052206625,
+        "risk_surface": {
+          "reference_model": "hist",
+          "alphas": [
+            0.95,
+            0.975,
+            0.99
+          ],
+          "horizons": [
+            1,
+            5,
+            10
+          ],
+          "points": [
+            {
+              "model": "hist",
+              "alpha": 0.95,
+              "horizon_days": 1,
+              "var": 219.8341644090427,
+              "es": 222.34130186097863,
+              "observation_count": 60,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "FX directional down shock"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.95,
+              "horizon_days": 5,
+              "var": 990.9873919073251,
+              "es": 992.8871478882666,
+              "observation_count": 56,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "FX directional down shock"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.95,
+              "horizon_days": 10,
+              "var": 1979.833759910177,
+              "es": 1981.1470834926452,
+              "observation_count": 51,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "FX directional down shock"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.975,
+              "horizon_days": 1,
+              "var": 221.7417420571987,
+              "es": 223.53658129752634,
+              "observation_count": 60,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "FX directional down shock"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.975,
+              "horizon_days": 5,
+              "var": 992.7621497638504,
+              "es": 993.7886710306169,
+              "observation_count": 56,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "FX directional down shock"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.975,
+              "horizon_days": 10,
+              "var": 1981.1116835136518,
+              "es": 1981.7808136032759,
+              "observation_count": 51,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "FX directional down shock"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.99,
+              "horizon_days": 1,
+              "var": 223.5051872255559,
+              "es": 223.71099280847324,
+              "observation_count": 60,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "FX directional down shock"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.99,
+              "horizon_days": 5,
+              "var": 993.7867017935573,
+              "es": 993.8083634012128,
+              "observation_count": 56,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "FX directional down shock"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.99,
+              "horizon_days": 10,
+              "var": 1981.7808136032759,
+              "es": 1982.0392569454775,
+              "observation_count": 51,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "FX directional down shock"
+            }
+          ],
+          "headline": [
+            {
+              "key": "stressed_10d_975",
+              "label": "Stressed ES 10D 97.5%",
+              "model": "hist",
+              "alpha": 0.975,
+              "horizon_days": 10,
+              "var": 1981.1116835136518,
+              "es": 1981.7808136032759,
+              "status": "thin_history",
+              "observation_count": 51,
+              "is_stressed": true,
+              "scenario_name": "FX directional down shock"
+            },
+            {
+              "key": "stressed_10d_99",
+              "label": "Stressed ES 10D 99%",
+              "model": "hist",
+              "alpha": 0.99,
+              "horizon_days": 10,
+              "var": 1981.7808136032759,
+              "es": 1982.0392569454775,
+              "status": "thin_history",
+              "observation_count": 51,
+              "is_stressed": true,
+              "scenario_name": "FX directional down shock"
+            }
+          ],
+          "data_quality": {
+            "status": "thin_history",
+            "estimation_window_days": 500,
+            "minimum_valid_days": 250,
+            "available_observations": 60,
+            "oldest_observation": "2026-11-03T00:00:00+00:00",
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "horizon_observations": {
+              "h1": 60,
+              "h5": 56,
+              "h10": 51
+            },
+            "symbol_count": 2,
+            "gross_exposure_base_ccy": 20092.669052206624,
+            "gross_exposure_epsilon_base_ccy": 2.0,
+            "no_exposure_epsilon_by_symbol": {
+              "EURUSD": 1.0,
+              "USDJPY": 1.0
+            }
+          },
+          "model_diagnostics": {
+            "input_trace": {
+              "shared": {
+                "sample_size": 60,
+                "symbol_count": 2,
+                "gross_exposure_base_ccy": 20092.669052206624,
+                "alphas": [],
+                "horizons": [],
+                "data_quality_status": "thin_history",
+                "no_exposure": false
+              },
+              "models": {}
+            },
+            "coherence_checks": {
+              "enabled": true,
+              "policy": "detect_non_zero_equal_var_es",
+              "suspicious_equalities_count": 0,
+              "suspicious_equalities": [],
+              "alert_active": false
+            },
+            "debug_rows": [],
+            "no_exposure": false,
+            "data_quality_status": "thin_history",
+            "suspicious_equalities_count": 0,
+            "coherence_alert_active": false
+          },
+          "by_model": {
+            "hist": {
+              "a95": {
+                "h1": {
+                  "var": 219.8341644090427,
+                  "es": 222.34130186097863,
+                  "status": "thin_history",
+                  "observation_count": 60,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "FX directional down shock"
+                },
+                "h5": {
+                  "var": 990.9873919073251,
+                  "es": 992.8871478882666,
+                  "status": "thin_history",
+                  "observation_count": 56,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "FX directional down shock"
+                },
+                "h10": {
+                  "var": 1979.833759910177,
+                  "es": 1981.1470834926452,
+                  "status": "thin_history",
+                  "observation_count": 51,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "FX directional down shock"
+                }
+              },
+              "a97p5": {
+                "h1": {
+                  "var": 221.7417420571987,
+                  "es": 223.53658129752634,
+                  "status": "thin_history",
+                  "observation_count": 60,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "FX directional down shock"
+                },
+                "h5": {
+                  "var": 992.7621497638504,
+                  "es": 993.7886710306169,
+                  "status": "thin_history",
+                  "observation_count": 56,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "FX directional down shock"
+                },
+                "h10": {
+                  "var": 1981.1116835136518,
+                  "es": 1981.7808136032759,
+                  "status": "thin_history",
+                  "observation_count": 51,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "FX directional down shock"
+                }
+              },
+              "a99": {
+                "h1": {
+                  "var": 223.5051872255559,
+                  "es": 223.71099280847324,
+                  "status": "thin_history",
+                  "observation_count": 60,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "FX directional down shock"
+                },
+                "h5": {
+                  "var": 993.7867017935573,
+                  "es": 993.8083634012128,
+                  "status": "thin_history",
+                  "observation_count": 56,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "FX directional down shock"
+                },
+                "h10": {
+                  "var": 1981.7808136032759,
+                  "es": 1982.0392569454775,
+                  "status": "thin_history",
+                  "observation_count": 51,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "FX directional down shock"
+                }
+              }
+            }
+          }
+        },
+        "headline_risk": [
+          {
+            "key": "stressed_10d_975",
+            "label": "Stressed ES 10D 97.5%",
+            "model": "hist",
+            "alpha": 0.975,
+            "horizon_days": 10,
+            "var": 1981.1116835136518,
+            "es": 1981.7808136032759,
+            "status": "thin_history",
+            "observation_count": 51,
+            "is_stressed": true,
+            "scenario_name": "FX directional down shock"
+          },
+          {
+            "key": "stressed_10d_99",
+            "label": "Stressed ES 10D 99%",
+            "model": "hist",
+            "alpha": 0.99,
+            "horizon_days": 10,
+            "var": 1981.7808136032759,
+            "es": 1982.0392569454775,
+            "status": "thin_history",
+            "observation_count": 51,
+            "is_stressed": true,
+            "scenario_name": "FX directional down shock"
+          }
+        ],
+        "attribution": {
+          "alpha": 0.95,
+          "sample_size": 60,
+          "models": {
+            "hist": {
+              "model": "hist",
+              "total_var": 219.8341644090427,
+              "total_es": 222.34130186097863,
+              "positions": {
+                "EURUSD": {
+                  "symbol": "EURUSD",
+                  "asset_class": "cfd",
+                  "exposure_base_ccy": 10000.0,
+                  "standalone_var": 105.41341287477238,
+                  "standalone_es": 105.44331783801397,
+                  "incremental_var": 101.59157908906242,
+                  "incremental_es": 103.91301615300928,
+                  "marginal_var": 0.010124800619962002,
+                  "marginal_es": 0.010412203369818797,
+                  "component_var": 101.24800619962002,
+                  "component_es": 104.12203369818798,
+                  "contribution_pct_var": 0.4605653833279031,
+                  "contribution_pct_es": 0.4682982101242325
+                },
+                "USDJPY": {
+                  "symbol": "USDJPY",
+                  "asset_class": "indices_cfd",
+                  "exposure_base_ccy": 10092.669052206624,
+                  "standalone_var": 118.24258531998028,
+                  "standalone_es": 118.42828570796935,
+                  "incremental_var": 114.42075153427032,
+                  "incremental_es": 116.89798402296466,
+                  "marginal_var": 0.011749732166586408,
+                  "marginal_es": 0.011713380033693127,
+                  "component_var": 118.58615820942333,
+                  "component_es": 118.2192681627896,
+                  "contribution_pct_var": 0.5394346166720999,
+                  "contribution_pct_es": 0.5317017898757628
+                }
+              },
+              "asset_classes": {
+                "cfd": {
+                  "asset_class": "cfd",
+                  "symbols": [
+                    "EURUSD"
+                  ],
+                  "symbol_count": 1,
+                  "exposure_base_ccy": 10000.0,
+                  "standalone_var": 105.41341287477238,
+                  "standalone_es": 105.44331783801397,
+                  "incremental_var": 101.59157908906242,
+                  "incremental_es": 103.91301615300928,
+                  "marginal_var": 0.010124800619962002,
+                  "marginal_es": 0.010412203369818797,
+                  "component_var": 101.24800619962002,
+                  "component_es": 104.12203369818798,
+                  "contribution_pct_var": 0.4605653833279031,
+                  "contribution_pct_es": 0.4682982101242325
+                },
+                "indices_cfd": {
+                  "asset_class": "indices_cfd",
+                  "symbols": [
+                    "USDJPY"
+                  ],
+                  "symbol_count": 1,
+                  "exposure_base_ccy": 10092.669052206624,
+                  "standalone_var": 118.24258531998028,
+                  "standalone_es": 118.42828570796935,
+                  "incremental_var": 114.42075153427032,
+                  "incremental_es": 116.89798402296466,
+                  "marginal_var": 0.011749732166586408,
+                  "marginal_es": 0.011713380033693127,
+                  "component_var": 118.58615820942333,
+                  "component_es": 118.2192681627896,
+                  "contribution_pct_var": 0.5394346166720999,
+                  "contribution_pct_es": 0.5317017898757628
+                }
+              }
+            }
+          }
+        },
+        "primary_metric": {
+          "key": "stressed_10d_975",
+          "label": "Stressed ES 10D 97.5%",
+          "model": "hist",
+          "alpha": 0.975,
+          "horizon_days": 10,
+          "var": 1981.1116835136518,
+          "es": 1981.7808136032759,
+          "status": "thin_history",
+          "observation_count": 51,
+          "is_stressed": true,
+          "scenario_name": "FX directional down shock"
+        }
+      },
+      {
+        "name": "Correlated multi-asset drawdown",
+        "vol_multiplier": 2.0,
+        "shock_pnl": -301.39003578309934,
+        "risk_surface": {
+          "reference_model": "hist",
+          "alphas": [
+            0.95,
+            0.975,
+            0.99
+          ],
+          "horizons": [
+            1,
+            5,
+            10
+          ],
+          "points": [
+            {
+              "model": "hist",
+              "alpha": 0.95,
+              "horizon_days": 1,
+              "var": 339.5555702761593,
+              "es": 344.1140020069519,
+              "observation_count": 60,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Correlated multi-asset drawdown"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.95,
+              "horizon_days": 5,
+              "var": 1501.080705675545,
+              "es": 1504.534807459075,
+              "observation_count": 56,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Correlated multi-asset drawdown"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.95,
+              "horizon_days": 10,
+              "var": 2998.2686406156836,
+              "es": 3000.6565016747177,
+              "observation_count": 51,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Correlated multi-asset drawdown"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.975,
+              "horizon_days": 1,
+              "var": 343.0238932728066,
+              "es": 346.2872373461296,
+              "observation_count": 60,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Correlated multi-asset drawdown"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.975,
+              "horizon_days": 5,
+              "var": 1504.3075381419546,
+              "es": 1506.1739404451664,
+              "observation_count": 56,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Correlated multi-asset drawdown"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.975,
+              "horizon_days": 10,
+              "var": 3000.5921380765476,
+              "es": 3001.8087382395006,
+              "observation_count": 51,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Correlated multi-asset drawdown"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.99,
+              "horizon_days": 1,
+              "var": 346.23015721527423,
+              "es": 346.6043491842148,
+              "observation_count": 60,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Correlated multi-asset drawdown"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.99,
+              "horizon_days": 5,
+              "var": 1506.1703600141489,
+              "es": 1506.2097447553404,
+              "observation_count": 56,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Correlated multi-asset drawdown"
+            },
+            {
+              "model": "hist",
+              "alpha": 0.99,
+              "horizon_days": 10,
+              "var": 3001.8087382395006,
+              "es": 3002.2786352253215,
+              "observation_count": 51,
+              "status": "thin_history",
+              "latest_observation": "2027-01-01T00:00:00+00:00",
+              "is_stressed": true,
+              "scenario_name": "Correlated multi-asset drawdown"
+            }
+          ],
+          "headline": [
+            {
+              "key": "stressed_10d_975",
+              "label": "Stressed ES 10D 97.5%",
+              "model": "hist",
+              "alpha": 0.975,
+              "horizon_days": 10,
+              "var": 3000.5921380765476,
+              "es": 3001.8087382395006,
+              "status": "thin_history",
+              "observation_count": 51,
+              "is_stressed": true,
+              "scenario_name": "Correlated multi-asset drawdown"
+            },
+            {
+              "key": "stressed_10d_99",
+              "label": "Stressed ES 10D 99%",
+              "model": "hist",
+              "alpha": 0.99,
+              "horizon_days": 10,
+              "var": 3001.8087382395006,
+              "es": 3002.2786352253215,
+              "status": "thin_history",
+              "observation_count": 51,
+              "is_stressed": true,
+              "scenario_name": "Correlated multi-asset drawdown"
+            }
+          ],
+          "data_quality": {
+            "status": "thin_history",
+            "estimation_window_days": 500,
+            "minimum_valid_days": 250,
+            "available_observations": 60,
+            "oldest_observation": "2026-11-03T00:00:00+00:00",
+            "latest_observation": "2027-01-01T00:00:00+00:00",
+            "horizon_observations": {
+              "h1": 60,
+              "h5": 56,
+              "h10": 51
+            },
+            "symbol_count": 2,
+            "gross_exposure_base_ccy": 20092.669052206624,
+            "gross_exposure_epsilon_base_ccy": 2.0,
+            "no_exposure_epsilon_by_symbol": {
+              "EURUSD": 1.0,
+              "USDJPY": 1.0
+            }
+          },
+          "model_diagnostics": {
+            "input_trace": {
+              "shared": {
+                "sample_size": 60,
+                "symbol_count": 2,
+                "gross_exposure_base_ccy": 20092.669052206624,
+                "alphas": [],
+                "horizons": [],
+                "data_quality_status": "thin_history",
+                "no_exposure": false
+              },
+              "models": {}
+            },
+            "coherence_checks": {
+              "enabled": true,
+              "policy": "detect_non_zero_equal_var_es",
+              "suspicious_equalities_count": 0,
+              "suspicious_equalities": [],
+              "alert_active": false
+            },
+            "debug_rows": [],
+            "no_exposure": false,
+            "data_quality_status": "thin_history",
+            "suspicious_equalities_count": 0,
+            "coherence_alert_active": false
+          },
+          "by_model": {
+            "hist": {
+              "a95": {
+                "h1": {
+                  "var": 339.5555702761593,
+                  "es": 344.1140020069519,
+                  "status": "thin_history",
+                  "observation_count": 60,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Correlated multi-asset drawdown"
+                },
+                "h5": {
+                  "var": 1501.080705675545,
+                  "es": 1504.534807459075,
+                  "status": "thin_history",
+                  "observation_count": 56,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Correlated multi-asset drawdown"
+                },
+                "h10": {
+                  "var": 2998.2686406156836,
+                  "es": 3000.6565016747177,
+                  "status": "thin_history",
+                  "observation_count": 51,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Correlated multi-asset drawdown"
+                }
+              },
+              "a97p5": {
+                "h1": {
+                  "var": 343.0238932728066,
+                  "es": 346.2872373461296,
+                  "status": "thin_history",
+                  "observation_count": 60,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Correlated multi-asset drawdown"
+                },
+                "h5": {
+                  "var": 1504.3075381419546,
+                  "es": 1506.1739404451664,
+                  "status": "thin_history",
+                  "observation_count": 56,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Correlated multi-asset drawdown"
+                },
+                "h10": {
+                  "var": 3000.5921380765476,
+                  "es": 3001.8087382395006,
+                  "status": "thin_history",
+                  "observation_count": 51,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Correlated multi-asset drawdown"
+                }
+              },
+              "a99": {
+                "h1": {
+                  "var": 346.23015721527423,
+                  "es": 346.6043491842148,
+                  "status": "thin_history",
+                  "observation_count": 60,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Correlated multi-asset drawdown"
+                },
+                "h5": {
+                  "var": 1506.1703600141489,
+                  "es": 1506.2097447553404,
+                  "status": "thin_history",
+                  "observation_count": 56,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Correlated multi-asset drawdown"
+                },
+                "h10": {
+                  "var": 3001.8087382395006,
+                  "es": 3002.2786352253215,
+                  "status": "thin_history",
+                  "observation_count": 51,
+                  "latest_observation": "2027-01-01T00:00:00+00:00",
+                  "is_stressed": true,
+                  "scenario_name": "Correlated multi-asset drawdown"
+                }
+              }
+            }
+          }
+        },
+        "headline_risk": [
+          {
+            "key": "stressed_10d_975",
+            "label": "Stressed ES 10D 97.5%",
+            "model": "hist",
+            "alpha": 0.975,
+            "horizon_days": 10,
+            "var": 3000.5921380765476,
+            "es": 3001.8087382395006,
+            "status": "thin_history",
+            "observation_count": 51,
+            "is_stressed": true,
+            "scenario_name": "Correlated multi-asset drawdown"
+          },
+          {
+            "key": "stressed_10d_99",
+            "label": "Stressed ES 10D 99%",
+            "model": "hist",
+            "alpha": 0.99,
+            "horizon_days": 10,
+            "var": 3001.8087382395006,
+            "es": 3002.2786352253215,
+            "status": "thin_history",
+            "observation_count": 51,
+            "is_stressed": true,
+            "scenario_name": "Correlated multi-asset drawdown"
+          }
+        ],
+        "attribution": {
+          "alpha": 0.95,
+          "sample_size": 60,
+          "models": {
+            "hist": {
+              "model": "hist",
+              "total_var": 339.5555702761593,
+              "total_es": 344.1140020069519,
+              "positions": {
+                "EURUSD": {
+                  "symbol": "EURUSD",
+                  "asset_class": "cfd",
+                  "exposure_base_ccy": 10000.0,
+                  "standalone_var": 161.50531024312406,
+                  "standalone_es": 161.55968290356336,
+                  "incremental_var": 154.55652154183326,
+                  "incremental_es": 158.77731620355482,
+                  "marginal_var": 0.015393184356102835,
+                  "marginal_es": 0.015915734810388073,
+                  "component_var": 153.93184356102836,
+                  "component_es": 159.15734810388074,
+                  "contribution_pct_var": 0.45333328926348093,
+                  "contribution_pct_es": 0.46251343210575135
+                },
+                "USDJPY": {
+                  "symbol": "USDJPY",
+                  "asset_class": "indices_cfd",
+                  "exposure_base_ccy": 10092.669052206624,
+                  "standalone_var": 184.99904873432604,
+                  "standalone_es": 185.3366858033971,
+                  "incremental_var": 178.05026003303524,
+                  "incremental_es": 182.55431910338856,
+                  "marginal_var": 0.018391936340620023,
+                  "marginal_es": 0.01832584155354107,
+                  "component_var": 185.62372671513003,
+                  "component_es": 184.9566539030661,
+                  "contribution_pct_var": 0.5466667107365164,
+                  "contribution_pct_es": 0.5374865678942339
+                }
+              },
+              "asset_classes": {
+                "cfd": {
+                  "asset_class": "cfd",
+                  "symbols": [
+                    "EURUSD"
+                  ],
+                  "symbol_count": 1,
+                  "exposure_base_ccy": 10000.0,
+                  "standalone_var": 161.50531024312406,
+                  "standalone_es": 161.55968290356336,
+                  "incremental_var": 154.55652154183326,
+                  "incremental_es": 158.77731620355482,
+                  "marginal_var": 0.015393184356102835,
+                  "marginal_es": 0.015915734810388073,
+                  "component_var": 153.93184356102836,
+                  "component_es": 159.15734810388074,
+                  "contribution_pct_var": 0.45333328926348093,
+                  "contribution_pct_es": 0.46251343210575135
+                },
+                "indices_cfd": {
+                  "asset_class": "indices_cfd",
+                  "symbols": [
+                    "USDJPY"
+                  ],
+                  "symbol_count": 1,
+                  "exposure_base_ccy": 10092.669052206624,
+                  "standalone_var": 184.99904873432604,
+                  "standalone_es": 185.3366858033971,
+                  "incremental_var": 178.05026003303524,
+                  "incremental_es": 182.55431910338856,
+                  "marginal_var": 0.018391936340620023,
+                  "marginal_es": 0.01832584155354107,
+                  "component_var": 185.62372671513003,
+                  "component_es": 184.9566539030661,
+                  "contribution_pct_var": 0.5466667107365164,
+                  "contribution_pct_es": 0.5374865678942339
+                }
+              }
+            }
+          }
+        },
+        "primary_metric": {
+          "key": "stressed_10d_975",
+          "label": "Stressed ES 10D 97.5%",
+          "model": "hist",
+          "alpha": 0.975,
+          "horizon_days": 10,
+          "var": 3000.5921380765476,
+          "es": 3001.8087382395006,
+          "status": "thin_history",
+          "observation_count": 51,
+          "is_stressed": true,
+          "scenario_name": "Correlated multi-asset drawdown"
+        }
+      }
+    ],
+    "historical_extremes": [
+      {
+        "horizon_days": 1,
+        "worst_loss": 20.292078829217118,
+        "worst_end_date": "2026-11-20T00:00:00+00:00",
+        "tail_mean_loss": 19.04690524058567
+      },
+      {
+        "horizon_days": 5,
+        "worst_loss": -11.94560643678123,
+        "worst_end_date": "2026-12-25T00:00:00+00:00",
+        "tail_mean_loss": -12.783075084914024
+      },
+      {
+        "horizon_days": 10,
+        "worst_loss": -28.961640016242274,
+        "worst_end_date": "2027-01-01T00:00:00+00:00",
+        "tail_mean_loss": -29.772706791544238
+      }
+    ]
+  },
+  "data_quality": {
+    "status": "thin_history",
+    "estimation_window_days": 500,
+    "minimum_valid_days": 250,
+    "available_observations": 60,
+    "oldest_observation": "2026-11-03T00:00:00+00:00",
+    "latest_observation": "2027-01-01T00:00:00+00:00",
+    "horizon_observations": {
+      "h1": 60,
+      "h5": 56,
+      "h10": 51
+    },
+    "symbol_count": 2,
+    "gross_exposure_base_ccy": 20092.669052206624,
+    "gross_exposure_epsilon_base_ccy": 2.0,
+    "no_exposure_epsilon_by_symbol": {
+      "EURUSD": 1.0,
+      "USDJPY": 1.0
+    }
+  },
+  "model_diagnostics": {
+    "hist": {
+      "role": "primary",
+      "surface_points": 9,
+      "avg_var": -8.218413983880428,
+      "avg_es": -7.238957605613949,
+      "max_var": 20.104982844746825,
+      "max_es": 20.292078829217118,
+      "min_var": -30.966637321060972,
+      "min_es": -29.772706791544238,
+      "stability_ratio": null
+    },
+    "param": {
+      "role": "challenger",
+      "surface_points": 9,
+      "avg_var": -4.366610114103943,
+      "avg_es": -0.30334376064717794,
+      "max_var": 29.001238655418177,
+      "max_es": 33.900139575610105,
+      "min_var": -29.5891584070975,
+      "min_es": -24.877612144144944,
+      "stability_ratio": null
+    },
+    "mc": {
+      "role": "challenger",
+      "surface_points": 9,
+      "avg_var": -4.030100792392576,
+      "avg_es": -0.9138445430204022,
+      "max_var": 27.14118000929848,
+      "max_es": 30.909645509699782,
+      "min_var": -28.53566215530241,
+      "min_es": -24.31760952565016,
+      "stability_ratio": null
+    },
+    "ewma": {
+      "role": "challenger",
+      "surface_points": 9,
+      "avg_var": 58.46884563972344,
+      "avg_es": 69.65326919110312,
+      "max_var": 111.82753147614125,
+      "max_es": 128.11683516561953,
+      "min_var": 26.789205134378328,
+      "min_es": 33.59474401138075,
+      "stability_ratio": 4.174350486145409
+    },
+    "garch": {
+      "role": "challenger",
+      "surface_points": 9,
+      "avg_var": 9.178049199883343,
+      "avg_es": 11.402973225788417,
+      "max_var": 33.294661194254715,
+      "max_es": 38.937058151849214,
+      "min_var": 0.0,
+      "min_es": 0.0,
+      "stability_ratio": null
+    },
+    "fhs": {
+      "role": "primary",
+      "surface_points": 9,
+      "avg_var": -8.306747975522367,
+      "avg_es": -6.735654955382139,
+      "max_var": 23.08720067853657,
+      "max_es": 23.43287141084604,
+      "min_var": -33.05953593358466,
+      "min_es": -31.05831718596418,
+      "stability_ratio": null
+    },
+    "input_trace": {
+      "shared": {
+        "sample_size": 60,
+        "symbol_count": 2,
+        "gross_exposure_base_ccy": 20092.669052206624,
+        "alphas": [
+          0.95,
+          0.975,
+          0.99
+        ],
+        "horizons": [
+          1,
+          5,
+          10
+        ],
+        "data_quality_status": "thin_history",
+        "no_exposure": false
+      },
+      "models": {
+        "hist": {
+          "model": "hist",
+          "role": "primary",
+          "alphas": [
+            0.95,
+            0.975,
+            0.99
+          ],
+          "horizons": [
+            1,
+            5,
+            10
+          ],
+          "sample_size": 60,
+          "surface_points": 9,
+          "parameters": {},
+          "assumptions": [
+            "empirical_quantile",
+            "historical_losses"
+          ]
+        },
+        "param": {
+          "model": "param",
+          "role": "challenger",
+          "alphas": [
+            0.95,
+            0.975,
+            0.99
+          ],
+          "horizons": [
+            1,
+            5,
+            10
+          ],
+          "sample_size": 60,
+          "surface_points": 9,
+          "parameters": {},
+          "assumptions": [
+            "normal_losses"
+          ]
+        },
+        "mc": {
+          "model": "mc",
+          "role": "challenger",
+          "alphas": [
+            0.95,
+            0.975,
+            0.99
+          ],
+          "horizons": [
+            1,
+            5,
+            10
+          ],
+          "sample_size": 60,
+          "surface_points": 9,
+          "parameters": {
+            "n_sims": 250,
+            "dist": "normal",
+            "df_t": 6,
+            "seed": 7
+          },
+          "assumptions": [
+            "simulation_based"
+          ]
+        },
+        "ewma": {
+          "model": "ewma",
+          "role": "challenger",
+          "alphas": [
+            0.95,
+            0.975,
+            0.99
+          ],
+          "horizons": [
+            1,
+            5,
+            10
+          ],
+          "sample_size": 60,
+          "surface_points": 9,
+          "parameters": {
+            "lambda": 0.94
+          },
+          "assumptions": [
+            "time_varying_volatility",
+            "normal_losses"
+          ]
+        },
+        "garch": {
+          "model": "garch",
+          "role": "challenger",
+          "alphas": [
+            0.95,
+            0.975,
+            0.99
+          ],
+          "horizons": [
+            1,
+            5,
+            10
+          ],
+          "sample_size": 60,
+          "surface_points": 9,
+          "parameters": {
+            "enabled": true,
+            "p": 1,
+            "q": 1,
+            "dist": "t",
+            "mean": "constant"
+          },
+          "assumptions": [
+            "conditional_volatility"
+          ]
+        },
+        "fhs": {
+          "model": "fhs",
+          "role": "primary",
+          "alphas": [
+            0.95,
+            0.975,
+            0.99
+          ],
+          "horizons": [
+            1,
+            5,
+            10
+          ],
+          "sample_size": 60,
+          "surface_points": 9,
+          "parameters": {
+            "lambda": 0.94,
+            "min_window": 20
+          },
+          "assumptions": [
+            "filtered_historical_simulation"
+          ]
+        }
+      }
+    },
+    "coherence_checks": {
+      "enabled": true,
+      "policy": "detect_non_zero_equal_var_es",
+      "suspicious_equalities_count": 0,
+      "suspicious_equalities": [],
+      "alert_active": false
+    },
+    "debug_rows": [
+      {
+        "model": "hist",
+        "alpha": 0.95,
+        "horizon_days": 1,
+        "var": 16.76768937518936,
+        "es": 19.04690524058567,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "hist",
+        "alpha": 0.95,
+        "horizon_days": 5,
+        "var": -14.510125976678978,
+        "es": -12.783075084914024,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "hist",
+        "alpha": 0.95,
+        "horizon_days": 10,
+        "var": -30.966637321060972,
+        "es": -29.772706791544238,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "hist",
+        "alpha": 0.975,
+        "horizon_days": 1,
+        "var": 18.50185087351304,
+        "es": 20.1335229101745,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "hist",
+        "alpha": 0.975,
+        "horizon_days": 5,
+        "var": -12.896709743474169,
+        "es": -11.963508591868315,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "hist",
+        "alpha": 0.975,
+        "horizon_days": 10,
+        "var": -29.804888590629204,
+        "es": -29.196588509152733,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "hist",
+        "alpha": 0.99,
+        "horizon_days": 1,
+        "var": 20.104982844746825,
+        "es": 20.292078829217118,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "hist",
+        "alpha": 0.99,
+        "horizon_days": 5,
+        "var": -11.965298807377023,
+        "es": -11.945606436781224,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "hist",
+        "alpha": 0.99,
+        "horizon_days": 10,
+        "var": -29.196588509152733,
+        "es": -28.961640016242278,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "param",
+        "alpha": 0.95,
+        "horizon_days": 1,
+        "var": 19.14905701927823,
+        "es": 25.189936399769934,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "param",
+        "alpha": 0.95,
+        "horizon_days": 5,
+        "var": -13.36728383173905,
+        "es": -10.651228337039269,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "param",
+        "alpha": 0.95,
+        "horizon_days": 10,
+        "var": -29.5891584070975,
+        "es": -24.877612144144944,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "param",
+        "alpha": 0.975,
+        "horizon_days": 1,
+        "var": 23.70452390935251,
+        "es": 29.166839370064118,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "param",
+        "alpha": 0.975,
+        "horizon_days": 5,
+        "var": -11.319088511424267,
+        "es": -8.863162645935168,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "param",
+        "alpha": 0.975,
+        "horizon_days": 10,
+        "var": -26.036150368028434,
+        "es": -21.775851432231942,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "param",
+        "alpha": 0.99,
+        "horizon_days": 1,
+        "var": 29.001238655418177,
+        "es": 33.900139575610105,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "param",
+        "alpha": 0.99,
+        "horizon_days": 5,
+        "var": -8.93761881408725,
+        "es": -6.735011225985719,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "param",
+        "alpha": 0.99,
+        "horizon_days": 10,
+        "var": -21.9050106786079,
+        "es": -18.08414340593172,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "mc",
+        "alpha": 0.95,
+        "horizon_days": 1,
+        "var": 21.200441171016127,
+        "es": 25.661425290542752,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "mc",
+        "alpha": 0.95,
+        "horizon_days": 5,
+        "var": -12.74887463244686,
+        "es": -10.22315863958879,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "mc",
+        "alpha": 0.95,
+        "horizon_days": 10,
+        "var": -28.53566215530241,
+        "es": -24.31760952565016,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "mc",
+        "alpha": 0.975,
+        "horizon_days": 1,
+        "var": 24.448980984251342,
+        "es": 27.849889699873806,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "mc",
+        "alpha": 0.975,
+        "horizon_days": 5,
+        "var": -10.903878372459632,
+        "es": -8.788587978063124,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "mc",
+        "alpha": 0.975,
+        "horizon_days": 10,
+        "var": -25.165645145286575,
+        "es": -22.182910448435695,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "mc",
+        "alpha": 0.99,
+        "horizon_days": 1,
+        "var": 27.14118000929848,
+        "es": 30.909645509699782,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "mc",
+        "alpha": 0.99,
+        "horizon_days": 5,
+        "var": -8.730570403842242,
+        "es": -7.318663967513255,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "mc",
+        "alpha": 0.99,
+        "horizon_days": 10,
+        "var": -22.97687858676141,
+        "es": -19.814630828048934,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.95,
+        "horizon_days": 1,
+        "var": 26.789205134378328,
+        "es": 33.59474401138075,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.95,
+        "horizon_days": 5,
+        "var": 40.07593525821072,
+        "es": 50.25683962113944,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.95,
+        "horizon_days": 10,
+        "var": 79.06810619086784,
+        "es": 99.15459505508453,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.975,
+        "horizon_days": 1,
+        "var": 31.921306782263667,
+        "es": 38.07504664112814,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.975,
+        "horizon_days": 5,
+        "var": 47.75342222908281,
+        "es": 56.95925267245204,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.975,
+        "horizon_days": 10,
+        "var": 94.21545961333223,
+        "es": 112.37816933879805,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.99,
+        "horizon_days": 1,
+        "var": 37.888484051379756,
+        "es": 43.40749189229374,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.99,
+        "horizon_days": 5,
+        "var": 56.6801600218543,
+        "es": 64.93644832203194,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "ewma",
+        "alpha": 0.99,
+        "horizon_days": 10,
+        "var": 111.82753147614125,
+        "es": 128.11683516561953,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "garch",
+        "alpha": 0.95,
+        "horizon_days": 1,
+        "var": 22.063727693354107,
+        "es": 28.954956761557476,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "garch",
+        "alpha": 0.95,
+        "horizon_days": 5,
+        "var": 0.0,
+        "es": 0.0,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "garch",
+        "alpha": 0.95,
+        "horizon_days": 10,
+        "var": 0.0,
+        "es": 0.0,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "garch",
+        "alpha": 0.975,
+        "horizon_days": 1,
+        "var": 27.244053911341275,
+        "es": 33.50074083154978,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "garch",
+        "alpha": 0.975,
+        "horizon_days": 5,
+        "var": 0.0,
+        "es": 0.0,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "garch",
+        "alpha": 0.975,
+        "horizon_days": 10,
+        "var": 0.0,
+        "es": 0.0,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "garch",
+        "alpha": 0.99,
+        "horizon_days": 1,
+        "var": 33.294661194254715,
+        "es": 38.937058151849214,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "garch",
+        "alpha": 0.99,
+        "horizon_days": 5,
+        "var": 0.0,
+        "es": 1.2340032871392914,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "garch",
+        "alpha": 0.99,
+        "horizon_days": 10,
+        "var": 0.0,
+        "es": 0.0,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.95,
+        "horizon_days": 1,
+        "var": 18.123701272473667,
+        "es": 21.951692012769467,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.95,
+        "horizon_days": 5,
+        "var": -14.498690296962083,
+        "es": -13.629799661592255,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.95,
+        "horizon_days": 10,
+        "var": -33.05953593358466,
+        "es": -31.05831718596418,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.975,
+        "horizon_days": 1,
+        "var": 21.292896638730188,
+        "es": 23.13993011227869,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.975,
+        "horizon_days": 5,
+        "var": -14.40501209177014,
+        "es": -13.23359545688566,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.975,
+        "horizon_days": 10,
+        "var": -31.762047281398143,
+        "es": -30.18953940410671,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.99,
+        "horizon_days": 1,
+        "var": 23.08720067853657,
+        "es": 23.43287141084604,
+        "status": "thin_history",
+        "observation_count": 60,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.99,
+        "horizon_days": 5,
+        "var": -13.349705361619982,
+        "es": -12.072496409542362,
+        "status": "thin_history",
+        "observation_count": 56,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      },
+      {
+        "model": "fhs",
+        "alpha": 0.99,
+        "horizon_days": 10,
+        "var": -30.18953940410671,
+        "es": -28.961640016242278,
+        "status": "thin_history",
+        "observation_count": 51,
+        "latest_observation": "2027-01-01T00:00:00+00:00"
+      }
+    ],
+    "no_exposure": false,
+    "data_quality_status": "thin_history",
+    "suspicious_equalities_count": 0,
+    "coherence_alert_active": false
+  },
+  "attribution": {
+    "alpha": 0.95,
+    "sample_size": 60,
+    "models": {
+      "hist": {
+        "model": "hist",
+        "total_var": 16.76768937518936,
+        "total_es": 19.04690524058567,
+        "positions": {
+          "EURUSD": {
+            "symbol": "EURUSD",
+            "asset_class": "cfd",
+            "exposure_base_ccy": 10000.0,
+            "standalone_var": 4.736535389399934,
+            "standalone_es": 4.763721719619567,
+            "incremental_var": 1.2621410387545335,
+            "incremental_es": 3.3725383696153095,
+            "marginal_var": 9.49802048352133e-05,
+            "marginal_es": 0.0003562554319779565,
+            "component_var": 0.949802048352133,
+            "component_es": 3.5625543197795646,
+            "contribution_pct_var": 0.05664477836508149,
+            "contribution_pct_es": 0.18704111112961155
+          },
+          "USDJPY": {
+            "symbol": "USDJPY",
+            "asset_class": "indices_cfd",
+            "exposure_base_ccy": 10092.669052206624,
+            "standalone_var": 15.505548336434826,
+            "standalone_es": 15.67436687097036,
+            "incremental_var": 12.031153985789427,
+            "incremental_es": 14.283183520966102,
+            "marginal_var": 0.0015672650361381938,
+            "marginal_es": 0.0015342176425987713,
+            "component_var": 15.817887326837443,
+            "component_es": 15.484350920806023,
+            "contribution_pct_var": 0.9433552216349315,
+            "contribution_pct_es": 0.8129588888703841
+          }
+        },
+        "asset_classes": {
+          "cfd": {
+            "asset_class": "cfd",
+            "symbols": [
+              "EURUSD"
+            ],
+            "symbol_count": 1,
+            "exposure_base_ccy": 10000.0,
+            "standalone_var": 4.736535389399934,
+            "standalone_es": 4.763721719619567,
+            "incremental_var": 1.2621410387545335,
+            "incremental_es": 3.3725383696153095,
+            "marginal_var": 9.49802048352133e-05,
+            "marginal_es": 0.0003562554319779565,
+            "component_var": 0.949802048352133,
+            "component_es": 3.5625543197795646,
+            "contribution_pct_var": 0.05664477836508149,
+            "contribution_pct_es": 0.18704111112961155
+          },
+          "indices_cfd": {
+            "asset_class": "indices_cfd",
+            "symbols": [
+              "USDJPY"
+            ],
+            "symbol_count": 1,
+            "exposure_base_ccy": 10092.669052206624,
+            "standalone_var": 15.505548336434826,
+            "standalone_es": 15.67436687097036,
+            "incremental_var": 12.031153985789427,
+            "incremental_es": 14.283183520966102,
+            "marginal_var": 0.0015672650361381938,
+            "marginal_es": 0.0015342176425987713,
+            "component_var": 15.817887326837443,
+            "component_es": 15.484350920806023,
+            "contribution_pct_var": 0.9433552216349315,
+            "contribution_pct_es": 0.8129588888703841
+          }
+        }
+      },
+      "param": {
+        "model": "param",
+        "total_var": 19.14905701927823,
+        "total_es": 25.189936399769934,
+        "positions": {
+          "EURUSD": {
+            "symbol": "EURUSD",
+            "asset_class": "cfd",
+            "exposure_base_ccy": 10000.0,
+            "standalone_var": 5.828665109579518,
+            "standalone_es": 7.825652008509763,
+            "incremental_var": 0.01415891491800636,
+            "incremental_es": 0.5340266623150889,
+            "marginal_var": 0.0001225413757671312,
+            "marginal_es": 0.00020529891015039326,
+            "component_var": 1.2254137576713118,
+            "component_es": 2.0529891015039325,
+            "contribution_pct_var": 0.0639934257043379,
+            "contribution_pct_es": 0.08150036859651154
+          },
+          "USDJPY": {
+            "symbol": "USDJPY",
+            "asset_class": "indices_cfd",
+            "exposure_base_ccy": 10092.669052206624,
+            "standalone_var": 19.134898104360225,
+            "standalone_es": 24.655909737454845,
+            "incremental_var": 13.320391909698714,
+            "incremental_es": 17.36428439126017,
+            "marginal_var": 0.001775896499200794,
+            "marginal_es": 0.0022924374329026166,
+            "component_var": 17.92353563740594,
+            "component_es": 23.136812333176238,
+            "contribution_pct_var": 0.9360009539561921,
+            "contribution_pct_es": 0.9184942735062861
+          }
+        },
+        "asset_classes": {
+          "cfd": {
+            "asset_class": "cfd",
+            "symbols": [
+              "EURUSD"
+            ],
+            "symbol_count": 1,
+            "exposure_base_ccy": 10000.0,
+            "standalone_var": 5.828665109579518,
+            "standalone_es": 7.825652008509763,
+            "incremental_var": 0.01415891491800636,
+            "incremental_es": 0.5340266623150889,
+            "marginal_var": 0.0001225413757671312,
+            "marginal_es": 0.00020529891015039326,
+            "component_var": 1.2254137576713118,
+            "component_es": 2.0529891015039325,
+            "contribution_pct_var": 0.0639934257043379,
+            "contribution_pct_es": 0.08150036859651154
+          },
+          "indices_cfd": {
+            "asset_class": "indices_cfd",
+            "symbols": [
+              "USDJPY"
+            ],
+            "symbol_count": 1,
+            "exposure_base_ccy": 10092.669052206624,
+            "standalone_var": 19.134898104360225,
+            "standalone_es": 24.655909737454845,
+            "incremental_var": 13.320391909698714,
+            "incremental_es": 17.36428439126017,
+            "marginal_var": 0.001775896499200794,
+            "marginal_es": 0.0022924374329026166,
+            "component_var": 17.92353563740594,
+            "component_es": 23.136812333176238,
+            "contribution_pct_var": 0.9360009539561921,
+            "contribution_pct_es": 0.9184942735062861
+          }
+        }
+      },
+      "mc": {
+        "model": "mc",
+        "total_var": 21.200441171016127,
+        "total_es": 25.661425290542752,
+        "positions": {
+          "EURUSD": {
+            "symbol": "EURUSD",
+            "asset_class": "cfd",
+            "exposure_base_ccy": 10000.0,
+            "standalone_var": 5.934858529621248,
+            "standalone_es": 7.461272293122023,
+            "incremental_var": 1.5181899994531172,
+            "incremental_es": 0.9883922573001911,
+            "marginal_var": 0.0008364782869277043,
+            "marginal_es": 0.00028022616898880413,
+            "component_var": 8.364782869277043,
+            "component_es": 2.8022616898880415,
+            "contribution_pct_var": 0.3945570189696257,
+            "contribution_pct_es": 0.10920132682266817
+          },
+          "USDJPY": {
+            "symbol": "USDJPY",
+            "asset_class": "indices_cfd",
+            "exposure_base_ccy": 10092.669052206624,
+            "standalone_var": 19.68225117156301,
+            "standalone_es": 24.67303303324256,
+            "incremental_var": 15.265582641394879,
+            "incremental_es": 18.20015299742073,
+            "marginal_var": 0.0012717803620968583,
+            "marginal_es": 0.0022649274916685205,
+            "component_var": 12.835658301739095,
+            "component_es": 22.859163600654853,
+            "contribution_pct_var": 0.6054429810303749,
+            "contribution_pct_es": 0.8907986731773374
+          }
+        },
+        "asset_classes": {
+          "cfd": {
+            "asset_class": "cfd",
+            "symbols": [
+              "EURUSD"
+            ],
+            "symbol_count": 1,
+            "exposure_base_ccy": 10000.0,
+            "standalone_var": 5.934858529621248,
+            "standalone_es": 7.461272293122023,
+            "incremental_var": 1.5181899994531172,
+            "incremental_es": 0.9883922573001911,
+            "marginal_var": 0.0008364782869277043,
+            "marginal_es": 0.00028022616898880413,
+            "component_var": 8.364782869277043,
+            "component_es": 2.8022616898880415,
+            "contribution_pct_var": 0.3945570189696257,
+            "contribution_pct_es": 0.10920132682266817
+          },
+          "indices_cfd": {
+            "asset_class": "indices_cfd",
+            "symbols": [
+              "USDJPY"
+            ],
+            "symbol_count": 1,
+            "exposure_base_ccy": 10092.669052206624,
+            "standalone_var": 19.68225117156301,
+            "standalone_es": 24.67303303324256,
+            "incremental_var": 15.265582641394879,
+            "incremental_es": 18.20015299742073,
+            "marginal_var": 0.0012717803620968583,
+            "marginal_es": 0.0022649274916685205,
+            "component_var": 12.835658301739095,
+            "component_es": 22.859163600654853,
+            "contribution_pct_var": 0.6054429810303749,
+            "contribution_pct_es": 0.8907986731773374
+          }
+        }
+      },
+      "ewma": {
+        "model": "ewma",
+        "total_var": 26.789205134378328,
+        "total_es": 33.59474401138075,
+        "positions": {
+          "EURUSD": {
+            "symbol": "EURUSD",
+            "asset_class": "cfd",
+            "exposure_base_ccy": 10000.0,
+            "standalone_var": 8.23526027469519,
+            "standalone_es": 10.32734862448162,
+            "incremental_var": 4.431517369723704,
+            "incremental_es": 5.557301564980158,
+            "marginal_var": 0.0005330767296824313,
+            "marginal_es": 0.0006684997252540015,
+            "component_var": 5.3307672968243125,
+            "component_es": 6.684997252540015,
+            "contribution_pct_var": 0.19898937912059922,
+            "contribution_pct_es": 0.19898937912059597
+          },
+          "USDJPY": {
+            "symbol": "USDJPY",
+            "asset_class": "indices_cfd",
+            "exposure_base_ccy": 10092.669052206624,
+            "standalone_var": 22.357687764654624,
+            "standalone_es": 28.03744244640059,
+            "incremental_var": 18.55394485968314,
+            "incremental_es": 23.267395386899125,
+            "marginal_var": 0.0021261337493273928,
+            "marginal_es": 0.0026662574975376695,
+            "component_var": 21.458364292688614,
+            "component_es": 26.909654530612315,
+            "contribution_pct_var": 0.8010078755622093,
+            "contribution_pct_es": 0.8010078755622084
+          }
+        },
+        "asset_classes": {
+          "cfd": {
+            "asset_class": "cfd",
+            "symbols": [
+              "EURUSD"
+            ],
+            "symbol_count": 1,
+            "exposure_base_ccy": 10000.0,
+            "standalone_var": 8.23526027469519,
+            "standalone_es": 10.32734862448162,
+            "incremental_var": 4.431517369723704,
+            "incremental_es": 5.557301564980158,
+            "marginal_var": 0.0005330767296824313,
+            "marginal_es": 0.0006684997252540015,
+            "component_var": 5.3307672968243125,
+            "component_es": 6.684997252540015,
+            "contribution_pct_var": 0.19898937912059922,
+            "contribution_pct_es": 0.19898937912059597
+          },
+          "indices_cfd": {
+            "asset_class": "indices_cfd",
+            "symbols": [
+              "USDJPY"
+            ],
+            "symbol_count": 1,
+            "exposure_base_ccy": 10092.669052206624,
+            "standalone_var": 22.357687764654624,
+            "standalone_es": 28.03744244640059,
+            "incremental_var": 18.55394485968314,
+            "incremental_es": 23.267395386899125,
+            "marginal_var": 0.0021261337493273928,
+            "marginal_es": 0.0026662574975376695,
+            "component_var": 21.458364292688614,
+            "component_es": 26.909654530612315,
+            "contribution_pct_var": 0.8010078755622093,
+            "contribution_pct_es": 0.8010078755622084
+          }
+        }
+      },
+      "garch": {
+        "model": "garch",
+        "total_var": 22.063727693354107,
+        "total_es": 28.954956761557476,
+        "positions": {
+          "EURUSD": {
+            "symbol": "EURUSD",
+            "asset_class": "cfd",
+            "exposure_base_ccy": 10000.0,
+            "standalone_var": 7.559972474865546,
+            "standalone_es": 10.011080673273606,
+            "incremental_var": 4.906265741659556,
+            "incremental_es": 6.717821116348354,
+            "marginal_var": 0.0006383483598271056,
+            "marginal_es": 0.0008547704072302409,
+            "component_var": 6.383483598271056,
+            "component_es": 8.547704072302409,
+            "contribution_pct_var": 0.28932026749921536,
+            "contribution_pct_es": 0.29520693616268523
+          },
+          "USDJPY": {
+            "symbol": "USDJPY",
+            "asset_class": "indices_cfd",
+            "exposure_base_ccy": 10092.669052206624,
+            "standalone_var": 17.15746195169455,
+            "standalone_es": 22.237135645209122,
+            "incremental_var": 14.50375521848856,
+            "incremental_es": 18.943876088283872,
+            "marginal_var": 0.0014592446853393863,
+            "marginal_es": 0.0018800100728696225,
+            "component_var": 14.727673675321817,
+            "component_es": 18.97431948028796,
+            "contribution_pct_var": 0.6675061385822846,
+            "contribution_pct_es": 0.6553047078101504
+          }
+        },
+        "asset_classes": {
+          "cfd": {
+            "asset_class": "cfd",
+            "symbols": [
+              "EURUSD"
+            ],
+            "symbol_count": 1,
+            "exposure_base_ccy": 10000.0,
+            "standalone_var": 7.559972474865546,
+            "standalone_es": 10.011080673273606,
+            "incremental_var": 4.906265741659556,
+            "incremental_es": 6.717821116348354,
+            "marginal_var": 0.0006383483598271056,
+            "marginal_es": 0.0008547704072302409,
+            "component_var": 6.383483598271056,
+            "component_es": 8.547704072302409,
+            "contribution_pct_var": 0.28932026749921536,
+            "contribution_pct_es": 0.29520693616268523
+          },
+          "indices_cfd": {
+            "asset_class": "indices_cfd",
+            "symbols": [
+              "USDJPY"
+            ],
+            "symbol_count": 1,
+            "exposure_base_ccy": 10092.669052206624,
+            "standalone_var": 17.15746195169455,
+            "standalone_es": 22.237135645209122,
+            "incremental_var": 14.50375521848856,
+            "incremental_es": 18.943876088283872,
+            "marginal_var": 0.0014592446853393863,
+            "marginal_es": 0.0018800100728696225,
+            "component_var": 14.727673675321817,
+            "component_es": 18.97431948028796,
+            "contribution_pct_var": 0.6675061385822846,
+            "contribution_pct_es": 0.6553047078101504
+          }
+        }
+      },
+      "fhs": {
+        "model": "fhs",
+        "total_var": 18.123701272473667,
+        "total_es": 21.951692012769467,
+        "positions": {
+          "EURUSD": {
+            "symbol": "EURUSD",
+            "asset_class": "cfd",
+            "exposure_base_ccy": 10000.0,
+            "standalone_var": 4.551415881311137,
+            "standalone_es": 4.715857438277961,
+            "incremental_var": 1.8410246060121835,
+            "incremental_es": 5.325708670455956,
+            "marginal_var": 0.00020522909401712752,
+            "marginal_es": 0.0004989318966258871,
+            "component_var": 2.0522909401712752,
+            "component_es": 4.989318966258871,
+            "contribution_pct_var": 0.11323795892003037,
+            "contribution_pct_es": 0.22728630500813085
+          },
+          "USDJPY": {
+            "symbol": "USDJPY",
+            "asset_class": "indices_cfd",
+            "exposure_base_ccy": 10092.669052206624,
+            "standalone_var": 16.282676666461484,
+            "standalone_es": 16.62598334231351,
+            "incremental_var": 13.57228539116253,
+            "incremental_es": 17.235834574491506,
+            "marginal_var": 0.0015923944311235856,
+            "marginal_es": 0.0016806696526565858,
+            "component_var": 16.071509993907185,
+            "component_es": 16.96244259034998,
+            "contribution_pct_var": 0.886767540045291,
+            "contribution_pct_es": 0.7727168630319156
+          }
+        },
+        "asset_classes": {
+          "cfd": {
+            "asset_class": "cfd",
+            "symbols": [
+              "EURUSD"
+            ],
+            "symbol_count": 1,
+            "exposure_base_ccy": 10000.0,
+            "standalone_var": 4.551415881311137,
+            "standalone_es": 4.715857438277961,
+            "incremental_var": 1.8410246060121835,
+            "incremental_es": 5.325708670455956,
+            "marginal_var": 0.00020522909401712752,
+            "marginal_es": 0.0004989318966258871,
+            "component_var": 2.0522909401712752,
+            "component_es": 4.989318966258871,
+            "contribution_pct_var": 0.11323795892003037,
+            "contribution_pct_es": 0.22728630500813085
+          },
+          "indices_cfd": {
+            "asset_class": "indices_cfd",
+            "symbols": [
+              "USDJPY"
+            ],
+            "symbol_count": 1,
+            "exposure_base_ccy": 10092.669052206624,
+            "standalone_var": 16.282676666461484,
+            "standalone_es": 16.62598334231351,
+            "incremental_var": 13.57228539116253,
+            "incremental_es": 17.235834574491506,
+            "marginal_var": 0.0015923944311235856,
+            "marginal_es": 0.0016806696526565858,
+            "component_var": 16.071509993907185,
+            "component_es": 16.96244259034998,
+            "contribution_pct_var": 0.886767540045291,
+            "contribution_pct_es": 0.7727168630319156
+          }
+        }
+      }
+    }
+  },
+  "risk_budget": {
+    "alpha": 0.95,
+    "sample_size": 60,
+    "preferred_model": "param",
+    "models": {
+      "hist": {
+        "model": "hist",
+        "total_var": 16.76768937518936,
+        "total_es": 19.04690524058567,
+        "total_var_budget": 16.76768937518936,
+        "total_es_budget": 19.04690524058567,
+        "utilization_var": null,
+        "utilization_es": null,
+        "headroom_var": 0.0,
+        "headroom_es": 0.0,
+        "scale_to_var_budget": null,
+        "scale_to_es_budget": null,
+        "recommended_scale": null,
+        "current_gross_exposure": 20092.669052206624,
+        "recommended_gross_exposure": null,
+        "status": "OK",
+        "positions": {
+          "EURUSD": {
+            "symbol": "EURUSD",
+            "current_exposure": 10000.0,
+            "exposure_base_ccy": 10000.0,
+            "weight": 0.4976939586282479,
+            "target_var_budget": 0.949802048352133,
+            "target_es_budget": 3.5625543197795646,
+            "component_var": 0.949802048352133,
+            "component_es": 3.5625543197795646,
+            "utilized_var": 0.949802048352133,
+            "utilized_es": 3.5625543197795646,
+            "utilization_var": null,
+            "utilization_es": null,
+            "headroom_var": 0.0,
+            "headroom_es": 0.0,
+            "max_exposure": null,
+            "recommended_exposure": null,
+            "action": "HOLD",
+            "status": "OK"
+          },
+          "USDJPY": {
+            "symbol": "USDJPY",
+            "current_exposure": 10092.669052206624,
+            "exposure_base_ccy": 10092.669052206624,
+            "weight": 0.5023060413717522,
+            "target_var_budget": 15.817887326837443,
+            "target_es_budget": 15.484350920806023,
+            "component_var": 15.817887326837443,
+            "component_es": 15.484350920806023,
+            "utilized_var": 15.817887326837443,
+            "utilized_es": 15.484350920806023,
+            "utilization_var": null,
+            "utilization_es": null,
+            "headroom_var": 0.0,
+            "headroom_es": 0.0,
+            "max_exposure": null,
+            "recommended_exposure": null,
+            "action": "HOLD",
+            "status": "OK"
+          }
+        }
+      },
+      "param": {
+        "model": "param",
+        "total_var": 19.14905701927823,
+        "total_es": 25.189936399769934,
+        "total_var_budget": 19.14905701927823,
+        "total_es_budget": 25.189936399769934,
+        "utilization_var": null,
+        "utilization_es": null,
+        "headroom_var": 0.0,
+        "headroom_es": 0.0,
+        "scale_to_var_budget": null,
+        "scale_to_es_budget": null,
+        "recommended_scale": null,
+        "current_gross_exposure": 20092.669052206624,
+        "recommended_gross_exposure": null,
+        "status": "OK",
+        "positions": {
+          "EURUSD": {
+            "symbol": "EURUSD",
+            "current_exposure": 10000.0,
+            "exposure_base_ccy": 10000.0,
+            "weight": 0.4976939586282479,
+            "target_var_budget": 1.2254137576713118,
+            "target_es_budget": 2.0529891015039325,
+            "component_var": 1.2254137576713118,
+            "component_es": 2.0529891015039325,
+            "utilized_var": 1.2254137576713118,
+            "utilized_es": 2.0529891015039325,
+            "utilization_var": null,
+            "utilization_es": null,
+            "headroom_var": 0.0,
+            "headroom_es": 0.0,
+            "max_exposure": null,
+            "recommended_exposure": null,
+            "action": "HOLD",
+            "status": "OK"
+          },
+          "USDJPY": {
+            "symbol": "USDJPY",
+            "current_exposure": 10092.669052206624,
+            "exposure_base_ccy": 10092.669052206624,
+            "weight": 0.5023060413717522,
+            "target_var_budget": 17.92353563740594,
+            "target_es_budget": 23.136812333176238,
+            "component_var": 17.92353563740594,
+            "component_es": 23.136812333176238,
+            "utilized_var": 17.92353563740594,
+            "utilized_es": 23.136812333176238,
+            "utilization_var": null,
+            "utilization_es": null,
+            "headroom_var": 0.0,
+            "headroom_es": 0.0,
+            "max_exposure": null,
+            "recommended_exposure": null,
+            "action": "HOLD",
+            "status": "OK"
+          }
+        }
+      },
+      "mc": {
+        "model": "mc",
+        "total_var": 21.200441171016127,
+        "total_es": 25.661425290542752,
+        "total_var_budget": 21.200441171016127,
+        "total_es_budget": 25.661425290542752,
+        "utilization_var": null,
+        "utilization_es": null,
+        "headroom_var": 0.0,
+        "headroom_es": 0.0,
+        "scale_to_var_budget": null,
+        "scale_to_es_budget": null,
+        "recommended_scale": null,
+        "current_gross_exposure": 20092.669052206624,
+        "recommended_gross_exposure": null,
+        "status": "OK",
+        "positions": {
+          "EURUSD": {
+            "symbol": "EURUSD",
+            "current_exposure": 10000.0,
+            "exposure_base_ccy": 10000.0,
+            "weight": 0.4976939586282479,
+            "target_var_budget": 8.364782869277043,
+            "target_es_budget": 2.8022616898880415,
+            "component_var": 8.364782869277043,
+            "component_es": 2.8022616898880415,
+            "utilized_var": 8.364782869277043,
+            "utilized_es": 2.8022616898880415,
+            "utilization_var": null,
+            "utilization_es": null,
+            "headroom_var": 0.0,
+            "headroom_es": 0.0,
+            "max_exposure": null,
+            "recommended_exposure": null,
+            "action": "HOLD",
+            "status": "OK"
+          },
+          "USDJPY": {
+            "symbol": "USDJPY",
+            "current_exposure": 10092.669052206624,
+            "exposure_base_ccy": 10092.669052206624,
+            "weight": 0.5023060413717522,
+            "target_var_budget": 12.835658301739095,
+            "target_es_budget": 22.859163600654853,
+            "component_var": 12.835658301739095,
+            "component_es": 22.859163600654853,
+            "utilized_var": 12.835658301739095,
+            "utilized_es": 22.859163600654853,
+            "utilization_var": null,
+            "utilization_es": null,
+            "headroom_var": 0.0,
+            "headroom_es": 0.0,
+            "max_exposure": null,
+            "recommended_exposure": null,
+            "action": "HOLD",
+            "status": "OK"
+          }
+        }
+      },
+      "ewma": {
+        "model": "ewma",
+        "total_var": 26.789205134378328,
+        "total_es": 33.59474401138075,
+        "total_var_budget": 26.789205134378328,
+        "total_es_budget": 33.59474401138075,
+        "utilization_var": null,
+        "utilization_es": null,
+        "headroom_var": 0.0,
+        "headroom_es": 0.0,
+        "scale_to_var_budget": null,
+        "scale_to_es_budget": null,
+        "recommended_scale": null,
+        "current_gross_exposure": 20092.669052206624,
+        "recommended_gross_exposure": null,
+        "status": "OK",
+        "positions": {
+          "EURUSD": {
+            "symbol": "EURUSD",
+            "current_exposure": 10000.0,
+            "exposure_base_ccy": 10000.0,
+            "weight": 0.4976939586282479,
+            "target_var_budget": 5.3307672968243125,
+            "target_es_budget": 6.684997252540015,
+            "component_var": 5.3307672968243125,
+            "component_es": 6.684997252540015,
+            "utilized_var": 5.3307672968243125,
+            "utilized_es": 6.684997252540015,
+            "utilization_var": null,
+            "utilization_es": null,
+            "headroom_var": 0.0,
+            "headroom_es": 0.0,
+            "max_exposure": null,
+            "recommended_exposure": null,
+            "action": "HOLD",
+            "status": "OK"
+          },
+          "USDJPY": {
+            "symbol": "USDJPY",
+            "current_exposure": 10092.669052206624,
+            "exposure_base_ccy": 10092.669052206624,
+            "weight": 0.5023060413717522,
+            "target_var_budget": 21.458364292688614,
+            "target_es_budget": 26.909654530612315,
+            "component_var": 21.458364292688614,
+            "component_es": 26.909654530612315,
+            "utilized_var": 21.458364292688614,
+            "utilized_es": 26.909654530612315,
+            "utilization_var": null,
+            "utilization_es": null,
+            "headroom_var": 0.0,
+            "headroom_es": 0.0,
+            "max_exposure": null,
+            "recommended_exposure": null,
+            "action": "HOLD",
+            "status": "OK"
+          }
+        }
+      },
+      "garch": {
+        "model": "garch",
+        "total_var": 22.063727693354107,
+        "total_es": 28.954956761557476,
+        "total_var_budget": 22.063727693354107,
+        "total_es_budget": 28.954956761557476,
+        "utilization_var": null,
+        "utilization_es": null,
+        "headroom_var": 0.0,
+        "headroom_es": 0.0,
+        "scale_to_var_budget": null,
+        "scale_to_es_budget": null,
+        "recommended_scale": null,
+        "current_gross_exposure": 20092.669052206624,
+        "recommended_gross_exposure": null,
+        "status": "OK",
+        "positions": {
+          "EURUSD": {
+            "symbol": "EURUSD",
+            "current_exposure": 10000.0,
+            "exposure_base_ccy": 10000.0,
+            "weight": 0.4976939586282479,
+            "target_var_budget": 6.383483598271056,
+            "target_es_budget": 8.547704072302409,
+            "component_var": 6.383483598271056,
+            "component_es": 8.547704072302409,
+            "utilized_var": 6.383483598271056,
+            "utilized_es": 8.547704072302409,
+            "utilization_var": null,
+            "utilization_es": null,
+            "headroom_var": 0.0,
+            "headroom_es": 0.0,
+            "max_exposure": null,
+            "recommended_exposure": null,
+            "action": "HOLD",
+            "status": "OK"
+          },
+          "USDJPY": {
+            "symbol": "USDJPY",
+            "current_exposure": 10092.669052206624,
+            "exposure_base_ccy": 10092.669052206624,
+            "weight": 0.5023060413717522,
+            "target_var_budget": 14.727673675321817,
+            "target_es_budget": 18.97431948028796,
+            "component_var": 14.727673675321817,
+            "component_es": 18.97431948028796,
+            "utilized_var": 14.727673675321817,
+            "utilized_es": 18.97431948028796,
+            "utilization_var": null,
+            "utilization_es": null,
+            "headroom_var": 0.0,
+            "headroom_es": 0.0,
+            "max_exposure": null,
+            "recommended_exposure": null,
+            "action": "HOLD",
+            "status": "OK"
+          }
+        }
+      },
+      "fhs": {
+        "model": "fhs",
+        "total_var": 18.123701272473667,
+        "total_es": 21.951692012769467,
+        "total_var_budget": 18.123701272473667,
+        "total_es_budget": 21.951692012769467,
+        "utilization_var": null,
+        "utilization_es": null,
+        "headroom_var": 0.0,
+        "headroom_es": 0.0,
+        "scale_to_var_budget": null,
+        "scale_to_es_budget": null,
+        "recommended_scale": null,
+        "current_gross_exposure": 20092.669052206624,
+        "recommended_gross_exposure": null,
+        "status": "OK",
+        "positions": {
+          "EURUSD": {
+            "symbol": "EURUSD",
+            "current_exposure": 10000.0,
+            "exposure_base_ccy": 10000.0,
+            "weight": 0.4976939586282479,
+            "target_var_budget": 2.0522909401712752,
+            "target_es_budget": 4.989318966258871,
+            "component_var": 2.0522909401712752,
+            "component_es": 4.989318966258871,
+            "utilized_var": 2.0522909401712752,
+            "utilized_es": 4.989318966258871,
+            "utilization_var": null,
+            "utilization_es": null,
+            "headroom_var": 0.0,
+            "headroom_es": 0.0,
+            "max_exposure": null,
+            "recommended_exposure": null,
+            "action": "HOLD",
+            "status": "OK"
+          },
+          "USDJPY": {
+            "symbol": "USDJPY",
+            "current_exposure": 10092.669052206624,
+            "exposure_base_ccy": 10092.669052206624,
+            "weight": 0.5023060413717522,
+            "target_var_budget": 16.071509993907185,
+            "target_es_budget": 16.96244259034998,
+            "component_var": 16.071509993907185,
+            "component_es": 16.96244259034998,
+            "utilized_var": 16.071509993907185,
+            "utilized_es": 16.96244259034998,
+            "utilization_var": null,
+            "utilization_es": null,
+            "headroom_var": 0.0,
+            "headroom_es": 0.0,
+            "max_exposure": null,
+            "recommended_exposure": null,
+            "action": "HOLD",
+            "status": "OK"
+          }
+        }
+      }
+    }
+  },
+  "capital_usage": {
+    "portfolio_slug": "fx_eur_20k",
+    "base_currency": "EUR",
+    "reference_model": "param",
+    "snapshot_source": "mt5_live_bridge",
+    "snapshot_timestamp": "2026-04-28T09:10:16.551391+00:00",
+    "total_capital_budget_eur": 27.988818221966593,
+    "total_capital_consumed_eur": 25.189936399769934,
+    "total_capital_reserved_eur": 2.7988818221966594,
+    "total_capital_remaining_eur": -4.440892098500626e-16,
+    "headroom_ratio": -1.586666526354178e-17,
+    "status": "OK",
+    "budget": {
+      "reference_model": "param",
+      "total_budget_eur": 27.988818221966593,
+      "reserve_ratio": 0.1,
+      "reserved_capital_eur": 2.7988818221966594,
+      "model_budgets": {
+        "hist": 19.04690524058567,
+        "param": 25.189936399769934,
+        "mc": 25.661425290542752,
+        "ewma": 33.59474401138075,
+        "garch": 28.954956761557476,
+        "fhs": 21.951692012769467
+      },
+      "symbol_budgets": {
+        "EURUSD": 12.536879164395293,
+        "USDJPY": 12.653057235374643
+      }
+    },
+    "models": {
+      "hist": {
+        "model": "hist",
+        "budget_eur": 19.04690524058567,
+        "consumed_eur": 19.04690524058567,
+        "remaining_eur": 0.0,
+        "utilization": 1.0,
+        "status": "OK"
+      },
+      "param": {
+        "model": "param",
+        "budget_eur": 25.189936399769934,
+        "consumed_eur": 25.189936399769934,
+        "remaining_eur": 0.0,
+        "utilization": 1.0,
+        "status": "OK"
+      },
+      "mc": {
+        "model": "mc",
+        "budget_eur": 25.661425290542752,
+        "consumed_eur": 25.661425290542752,
+        "remaining_eur": 0.0,
+        "utilization": 1.0,
+        "status": "OK"
+      },
+      "ewma": {
+        "model": "ewma",
+        "budget_eur": 33.59474401138075,
+        "consumed_eur": 33.59474401138075,
+        "remaining_eur": 0.0,
+        "utilization": 1.0,
+        "status": "OK"
+      },
+      "garch": {
+        "model": "garch",
+        "budget_eur": 28.954956761557476,
+        "consumed_eur": 28.954956761557476,
+        "remaining_eur": 0.0,
+        "utilization": 1.0,
+        "status": "OK"
+      },
+      "fhs": {
+        "model": "fhs",
+        "budget_eur": 21.951692012769467,
+        "consumed_eur": 21.951692012769467,
+        "remaining_eur": 0.0,
+        "utilization": 1.0,
+        "status": "OK"
+      }
+    },
+    "allocations": {
+      "EURUSD": {
+        "symbol": "EURUSD",
+        "weight": 0.4976939586282479,
+        "target_capital_eur": 12.536879164395293,
+        "consumed_capital_eur": 2.0529891015039325,
+        "reserved_capital_eur": 1.3929865738216993,
+        "remaining_capital_eur": 9.09090348906966,
+        "utilization": 0.163755993384256,
+        "action": "HOLD",
+        "status": "OK"
+      },
+      "USDJPY": {
+        "symbol": "USDJPY",
+        "weight": 0.5023060413717522,
+        "target_capital_eur": 12.653057235374643,
+        "consumed_capital_eur": 23.136812333176238,
+        "reserved_capital_eur": 1.4058952483749603,
+        "remaining_capital_eur": -11.889650346176555,
+        "utilization": 1.8285550995921962,
+        "action": "HOLD",
+        "status": "OK"
+      }
+    },
+    "recommendations": []
+  },
+  "sample_size": 60,
+  "latest_observation": "2027-01-01T00:00:00+00:00"
+}

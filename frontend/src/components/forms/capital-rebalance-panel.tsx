@@ -17,18 +17,36 @@ import { api } from "@/lib/api/client";
 import type { CapitalUsageSnapshotResponse } from "@/lib/api/types";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 
+function formatBudgetInput(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value) || value <= 0) {
+    return "12000000";
+  }
+  return String(Math.round(value));
+}
+
+function formatReserveRatioInput(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) {
+    return "0.18";
+  }
+  return String(value);
+}
+
 export function CapitalRebalancePanel({
   portfolioSlug,
   referenceModel,
+  initialBudgetEur,
+  initialReserveRatio,
   onRebalanced,
 }: {
   portfolioSlug: string;
   referenceModel: string;
+  initialBudgetEur?: number | null;
+  initialReserveRatio?: number | null;
   onRebalanced?: (result: CapitalUsageSnapshotResponse) => void;
 }) {
   const router = useRouter();
-  const [budget, setBudget] = useState("12000000");
-  const [reserveRatio, setReserveRatio] = useState("0.18");
+  const [budget, setBudget] = useState(() => formatBudgetInput(initialBudgetEur));
+  const [reserveRatio, setReserveRatio] = useState(() => formatReserveRatioInput(initialReserveRatio));
   const [validationError, setValidationError] = useState<string | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
   const successTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -89,7 +107,16 @@ export function CapitalRebalancePanel({
             </div>
             <div>
               <FieldLabel htmlFor="cap-reserve">Reserve ratio</FieldLabel>
-              <FieldInputWithIcon icon={Percent} id="cap-reserve" type="number" min="0" max="1" step="0.01" value={reserveRatio} onChange={(e) => setReserveRatio(e.target.value)} />
+              <FieldInputWithIcon
+                icon={Percent}
+                id="cap-reserve"
+                type="number"
+                min="0"
+                max="1"
+                step="0.01"
+                value={reserveRatio}
+                onChange={(e) => setReserveRatio(e.target.value)}
+              />
             </div>
           </div>
         </FormSection>

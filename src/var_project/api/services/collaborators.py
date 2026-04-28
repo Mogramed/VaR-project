@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import math
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 import httpx
 
@@ -27,6 +28,14 @@ from var_project.portfolio.holdings import aggregate_exposure_by_symbol, holding
 from var_project.reporting.render import render_daily_markdown
 from var_project.risk.budgeting import build_risk_budget_snapshot
 from var_project.risk.capital import build_capital_usage_snapshot
+from var_project.risk.decision_alpha import (
+    DecisionAlphaRuntime,
+    backtest_decision_alpha_trajectory,
+    compute_decision_alpha,
+    forecast_decision_alpha,
+    portfolio_decision_alpha_forecast,
+    replay_decision_alpha,
+)
 from var_project.risk.decisioning import TradeProposal, evaluate_trade_proposal
 from var_project.storage.serialization import coerce_datetime
 
@@ -97,6 +106,19 @@ class PortfolioRiskCalculator:
             epsilon_by_symbol[normalized] = float(epsilon)
         return epsilon_by_symbol
 
+    @staticmethod
+    def _is_empty_live_holdings_error(exc: Exception) -> bool:
+        message = str(exc).strip().lower()
+        if not message:
+            return False
+        known_markers = (
+            "no live holdings",
+            "returned no live holdings",
+            "live book/history is empty",
+            "broker live book/history is empty",
+        )
+        return any(marker in message for marker in known_markers)
+
     def compute_portfolio_state(
         self,
         *,
@@ -114,9 +136,12 @@ class PortfolioRiskCalculator:
             try:
                 live_holdings = self.runtime.market_data.live_holdings(portfolio_slug=portfolio["slug"])
             except Exception as exc:
-                if live_portfolio:
-                    raise self.runtime.strict_live_unavailable_error(portfolio=portfolio, reason=str(exc)) from exc
-                live_holdings = []
+                if live_portfolio and self._is_empty_live_holdings_error(exc):
+                    live_holdings = []
+                else:
+                    if live_portfolio:
+                        raise self.runtime.strict_live_unavailable_error(portfolio=portfolio, reason=str(exc)) from exc
+                    live_holdings = []
             if live_holdings:
                 return self.compute_portfolio_state_for_holdings(
                     portfolio=portfolio,
@@ -131,12 +156,19 @@ class PortfolioRiskCalculator:
                     snapshot_timestamp=datetime.now(timezone.utc).isoformat(),
                 )
             if live_portfolio:
-                raise self.runtime.strict_live_unavailable_error(
+                # A flat broker book is a valid strict-live state: keep MT5 as source of truth
+                # and compute an explicit no-exposure snapshot instead of failing over to config.
+                return self.compute_portfolio_state_for_holdings(
                     portfolio=portfolio,
-                    reason=(
-                        "MT5 returned no live holdings. Live portfolios are MT5-only and "
-                        "cannot compute risk/capital from configured fallback exposure."
-                    ),
+                    holdings=[],
+                    timeframe=timeframe,
+                    days=days,
+                    min_coverage=min_coverage,
+                    config=config,
+                    window=window,
+                    allow_auto_sync=allow_auto_sync,
+                    snapshot_source="mt5_live_bridge",
+                    snapshot_timestamp=datetime.now(timezone.utc).isoformat(),
                 )
         if live_portfolio:
             raise self.runtime.strict_live_unavailable_error(portfolio=portfolio)
@@ -297,15 +329,16 @@ class PortfolioRiskCalculator:
             headline_risk.append(item)
             seen_headline_keys.add(key)
         attribution = engine.attribute_from_returns(sample[sample_symbols], config=risk_config, base_snapshot=snapshot)
+        effective_limits_cfg = self.runtime.effective_limits_config(portfolio)
         risk_budget = build_risk_budget_snapshot(
             attribution,
-            self.runtime.limits_config,
+            effective_limits_cfg,
             exposure_by_symbol=exposure_by_symbol,
             preferred_model=self.runtime._preferred_model(portfolio["slug"]),
         )
         capital = build_capital_usage_snapshot(
             risk_budget.to_dict(),
-            self.runtime.limits_config,
+            effective_limits_cfg,
             portfolio_slug=portfolio["slug"],
             base_currency=portfolio["base_currency"],
             reference_model=reference_model,
@@ -400,6 +433,378 @@ class PortfolioRiskCalculator:
 class DecisionPolicyEngine:
     def __init__(self, runtime: "DeskServiceRuntime"):
         self.runtime = runtime
+        self.decision_alpha = DecisionAlphaRuntime()
+        if self.runtime.storage_ready:
+            try:
+                self.decision_alpha.warm_start(
+                    storage=self.runtime.storage,
+                    portfolio_slug=self.runtime.portfolio.get("slug"),
+                )
+            except Exception:
+                # Decision intelligence warm-start is best-effort and must not block API boot.
+                pass
+
+    def _augment_bundle_for_symbol(
+        self,
+        *,
+        bundle: Mapping[str, Any],
+        symbol: str,
+    ) -> Mapping[str, Any]:
+        portfolio = dict(bundle["portfolio"])
+        normalized_symbol = str(symbol).upper()
+        exposure_by_symbol = {str(name).upper(): float(value) for name, value in dict(bundle["exposure_by_symbol"]).items()}
+        if normalized_symbol in exposure_by_symbol:
+            return bundle
+
+        augmented_exposure = dict(exposure_by_symbol)
+        augmented_exposure[normalized_symbol] = 0.0
+
+        watchlist_symbols = [
+            str(item).upper()
+            for item in list(portfolio.get("watchlist_symbols") or portfolio.get("symbols") or [])
+            if str(item).strip()
+        ]
+        if normalized_symbol not in watchlist_symbols:
+            watchlist_symbols.append(normalized_symbol)
+        symbols = [
+            str(item).upper()
+            for item in list(portfolio.get("symbols") or [])
+            if str(item).strip()
+        ]
+        if normalized_symbol not in symbols:
+            symbols.append(normalized_symbol)
+
+        augmented_portfolio = {
+            **portfolio,
+            "watchlist_symbols": watchlist_symbols,
+            "symbols": symbols,
+        }
+        return self.runtime._compute_portfolio_state_for_exposure(
+            portfolio=augmented_portfolio,
+            exposure_by_symbol=augmented_exposure,
+            timeframe=bundle["timeframe"],
+            days=bundle["days"],
+            min_coverage=bundle["min_coverage"],
+            config=bundle["config"],
+            window=bundle["window"],
+            snapshot_source="decision_preview",
+            snapshot_timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+
+    def _latest_validation_summary(self, *, portfolio_slug: str | None) -> dict[str, Any] | None:
+        if not self.runtime.storage_ready:
+            return None
+        latest = self.runtime.storage.latest_validation_run(portfolio_slug=portfolio_slug)
+        if latest is None:
+            return None
+        payload = dict(latest.get("summary") or latest)
+        if latest.get("best_model") not in {None, "", "null"}:
+            payload.setdefault("best_model", latest.get("best_model"))
+        payload.setdefault("id", latest.get("id"))
+        return payload
+
+    def attach_decision_intelligence(
+        self,
+        *,
+        decision_payload: Mapping[str, Any],
+        symbol: str,
+        bundle: Mapping[str, Any] | None = None,
+        microstructure: Mapping[str, Any] | None = None,
+        spread_cost: float | None = None,
+        slippage_points: float | None = None,
+    ) -> dict[str, Any]:
+        enriched = dict(decision_payload)
+        portfolio_slug = str(enriched.get("portfolio_slug") or "")
+        if not portfolio_slug and bundle is not None:
+            portfolio_slug = str(dict(bundle.get("portfolio") or {}).get("slug") or "")
+        validation_summary = self._latest_validation_summary(portfolio_slug=portfolio_slug or None)
+        intelligence = compute_decision_alpha(
+            symbol=symbol,
+            risk_decision=enriched,
+            bundle=bundle,
+            validation_summary=validation_summary,
+            microstructure=microstructure,
+            spread_cost=spread_cost,
+            slippage_points=slippage_points,
+            model_state=self.decision_alpha.state,
+        )
+        enriched["decision_intelligence"] = intelligence
+        return enriched
+
+    def replay_decision_alpha(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        limit: int = 200,
+        lookback_days: int | None = None,
+    ) -> dict[str, Any]:
+        return replay_decision_alpha(
+            storage=self.runtime.storage if self.runtime.storage_ready else None,
+            portfolio_slug=portfolio_slug,
+            limit=limit,
+            lookback_days=lookback_days,
+            model_state=self.decision_alpha.state,
+        )
+
+    def forecast_decision_alpha(
+        self,
+        *,
+        symbol: str,
+        horizon_days: int = 5,
+        portfolio_slug: str | None = None,
+    ) -> dict[str, Any]:
+        return forecast_decision_alpha(
+            symbol=symbol,
+            horizon_days=horizon_days,
+            storage=self.runtime.storage if self.runtime.storage_ready else None,
+            portfolio_slug=portfolio_slug,
+            model_state=self.decision_alpha.state,
+        )
+
+    def backtest_trajectory_decision_alpha(
+        self,
+        *,
+        symbol: str,
+        lookback_days: int = 90,
+        portfolio_slug: str | None = None,
+    ) -> dict[str, Any]:
+        return backtest_decision_alpha_trajectory(
+            symbol=symbol,
+            lookback_days=lookback_days,
+            storage=self.runtime.storage if self.runtime.storage_ready else None,
+            portfolio_slug=portfolio_slug,
+            model_state=self.decision_alpha.state,
+        )
+
+    def portfolio_forecast_decision_alpha(
+        self,
+        *,
+        portfolio_slug: str | None = None,
+        horizon_days: int = 150,
+        symbols: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        exposure_by_symbol = {
+            str(key).upper(): float(value)
+            for key, value in dict(portfolio.get("configured_exposure") or portfolio.get("positions") or {}).items()
+            if key not in {None, ""}
+        }
+        selected_symbols = [
+            str(symbol).upper()
+            for symbol in list(symbols or [])
+            if str(symbol).strip()
+        ]
+        if not selected_symbols:
+            selected_symbols = [
+                str(symbol).upper()
+                for symbol in list(portfolio.get("watchlist_symbols") or portfolio.get("symbols") or [])
+                if str(symbol).strip()
+            ]
+        if not exposure_by_symbol and selected_symbols:
+            equal_notional = 1.0 / max(len(selected_symbols), 1)
+            exposure_by_symbol = {symbol: equal_notional for symbol in selected_symbols}
+        return portfolio_decision_alpha_forecast(
+            symbols=selected_symbols,
+            exposures=exposure_by_symbol,
+            horizon_days=horizon_days,
+            storage=self.runtime.storage if self.runtime.storage_ready else None,
+            portfolio_slug=portfolio.get("slug"),
+            model_state=self.decision_alpha.state,
+        )
+
+    @staticmethod
+    def _normalize_trade_action(trade_action: str | None = None) -> str:
+        normalized = str(trade_action or "open").strip().lower()
+        if normalized not in {"open", "close"}:
+            raise ValueError("trade_action must be one of: open, close.")
+        return normalized
+
+    @staticmethod
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return float(default)
+        if parsed != parsed or parsed in {float("inf"), float("-inf")}:
+            return float(default)
+        return float(parsed)
+
+    @staticmethod
+    def _append_reason_once(reasons: list[str], reason: str) -> list[str]:
+        normalized_existing = {str(item).strip().lower() for item in reasons}
+        if str(reason).strip().lower() in normalized_existing:
+            return reasons
+        return [*reasons, reason]
+
+    def _apply_decision_alpha_policy(
+        self,
+        *,
+        payload: Mapping[str, Any],
+        trade_action: str,
+    ) -> dict[str, Any]:
+        updated = dict(payload)
+        base_decision = str(updated.get("decision") or "REJECT").upper()
+        approved_change = self._safe_float(updated.get("approved_exposure_change"), 0.0)
+        requested_change = self._safe_float(updated.get("requested_exposure_change"), 0.0)
+        reasons = [str(item) for item in list(updated.get("reasons") or [])]
+        pre_trade = dict(updated.get("pre_trade") or {})
+        current_symbol_exposure = self._safe_float(pre_trade.get("symbol_exposure"), 0.0)
+        resulting_exposure = self._safe_float(updated.get("resulting_exposure"), current_symbol_exposure)
+        risk_reducing_trade = (
+            abs(current_symbol_exposure) > 1e-9
+            and abs(resulting_exposure) < (abs(current_symbol_exposure) - 1e-9)
+        )
+
+        if trade_action == "close":
+            if abs(approved_change) > 1e-9:
+                reasons = self._append_reason_once(
+                    reasons,
+                    "Close action prioritizes de-risking and flattening the symbol exposure.",
+                )
+                updated["reasons"] = reasons
+            return updated
+
+        if base_decision == "REJECT" or abs(approved_change) <= 1e-9:
+            return updated
+
+        intelligence = dict(updated.get("decision_intelligence") or {})
+        signal = str(intelligence.get("signal") or "HOLD").upper()
+        confidence = min(max(self._safe_float(intelligence.get("confidence"), 0.0), 0.0), 1.0)
+        requested_side = "BUY" if requested_change >= 0.0 else "SELL"
+        aligned = signal == requested_side
+
+        if signal == "HOLD":
+            if risk_reducing_trade:
+                updated["reasons"] = self._append_reason_once(
+                    reasons,
+                    "Decision Alpha is neutral (HOLD), but the request reduces current exposure; de-risking remains allowed.",
+                )
+                return updated
+            updated["decision"] = "REJECT"
+            updated["approved_exposure_change"] = 0.0
+            updated["suggested_exposure_change"] = None
+            updated["reasons"] = self._append_reason_once(
+                reasons,
+                "Decision Alpha is neutral (HOLD); pre-trade decision blocks new directional risk.",
+            )
+            return updated
+
+        if not aligned:
+            if confidence >= 0.55:
+                if risk_reducing_trade:
+                    updated["reasons"] = self._append_reason_once(
+                        reasons,
+                        (
+                            f"Decision Alpha signal ({signal}) opposes requested side ({requested_side}), "
+                            "but the request is risk-reducing so the VaR/ES de-risking override is preserved."
+                        ),
+                    )
+                    return updated
+                updated["decision"] = "REJECT"
+                updated["approved_exposure_change"] = 0.0
+                updated["suggested_exposure_change"] = None
+                updated["reasons"] = self._append_reason_once(
+                    reasons,
+                    f"Decision Alpha signal ({signal}) opposes requested side ({requested_side}) with high confidence.",
+                )
+                return updated
+
+            updated["reasons"] = self._append_reason_once(
+                reasons,
+                f"Decision Alpha signal ({signal}) opposes requested side ({requested_side}) with low confidence; soft warning only.",
+            )
+            return updated
+
+        updated["reasons"] = self._append_reason_once(
+            reasons,
+            f"Decision Alpha signal ({signal}) aligns with requested side ({requested_side}).",
+        )
+        return updated
+
+    def _close_recommendation_payload(
+        self,
+        *,
+        payload: Mapping[str, Any],
+        trade_action: str,
+        exposure_by_symbol: Mapping[str, Any],
+        symbol: str,
+    ) -> dict[str, Any]:
+        current_exposure = self._safe_float(exposure_by_symbol.get(symbol), 0.0)
+        intelligence = dict(payload.get("decision_intelligence") or {})
+        signal = str(intelligence.get("signal") or "HOLD").upper()
+        confidence = min(max(self._safe_float(intelligence.get("confidence"), 0.0), 0.0), 1.0)
+
+        if abs(current_exposure) <= 1e-9:
+            return {
+                "recommended": False,
+                "urgency": "low",
+                "confidence": confidence,
+                "reason": f"No open exposure on {symbol}; nothing to close right now.",
+                "current_exposure": 0.0,
+                "target_exposure_change": 0.0,
+                "target_resulting_exposure": 0.0,
+            }
+
+        position_side = "BUY" if current_exposure > 0.0 else "SELL"
+        signal_opposes_position = signal in {"BUY", "SELL"} and signal != position_side
+        pre_trade = dict(payload.get("pre_trade") or {})
+        budget_util_var = pre_trade.get("budget_utilization_var")
+        headroom_var = pre_trade.get("headroom_var")
+        risk_pressure = (
+            (budget_util_var is not None and self._safe_float(budget_util_var, 0.0) >= 0.9)
+            or self._safe_float(headroom_var, 0.0) <= 0.0
+        )
+        flatten_change = -current_exposure
+        flatten_abs = abs(flatten_change)
+        requested_close_change = self._safe_float(payload.get("requested_exposure_change"), 0.0)
+        requested_close_abs = abs(requested_close_change)
+        if trade_action == "close" and requested_close_abs > 1e-9 and flatten_abs > 1e-9:
+            target_close_abs = min(requested_close_abs, flatten_abs)
+        else:
+            target_close_abs = flatten_abs
+        close_target_change = 0.0 if flatten_abs <= 1e-9 else math.copysign(target_close_abs, flatten_change)
+
+        recommended = bool(signal_opposes_position and confidence >= 0.5)
+        if not recommended and risk_pressure and confidence >= 0.65 and signal != "HOLD":
+            recommended = True
+        if trade_action == "close" and abs(current_exposure) > 1e-9:
+            recommended = True
+
+        urgency = "low"
+        if recommended:
+            if (signal_opposes_position and confidence >= 0.75) or risk_pressure:
+                urgency = "high"
+            else:
+                urgency = "medium"
+
+        if trade_action == "close":
+            fully_flattening = abs(current_exposure + close_target_change) <= 1e-9
+            if fully_flattening:
+                reason = f"Close action selected: flattening {symbol} removes directional exposure."
+            else:
+                reason = (
+                    f"Close action selected: reducing {symbol} exposure by the requested close size "
+                    f"(capped to current open exposure)."
+                )
+        elif signal_opposes_position:
+            reason = (
+                f"Decision Alpha suggests {signal} while current {symbol} exposure is {position_side}; "
+                "a close is recommended to reduce directional mismatch."
+            )
+        elif risk_pressure:
+            reason = "Risk budget pressure is elevated; closing exposure is recommended to rebuild headroom."
+        else:
+            reason = "No urgent close recommendation from Decision Alpha at this time."
+
+        return {
+            "recommended": recommended,
+            "urgency": urgency,
+            "confidence": confidence,
+            "reason": reason,
+            "current_exposure": current_exposure,
+            "target_exposure_change": close_target_change if recommended else 0.0,
+            "target_resulting_exposure": (current_exposure + close_target_change) if recommended else current_exposure,
+        }
 
     def evaluate_trade_decision_from_bundle(
         self,
@@ -408,59 +813,122 @@ class DecisionPolicyEngine:
         symbol: str,
         exposure_change: float | None = None,
         delta_position_eur: float | None = None,
+        trade_action: str | None = None,
         note: str | None,
         account_id: str | None = None,
         persist: bool,
         audit_action: str = "decision.evaluate",
     ) -> dict[str, Any]:
-        portfolio = dict(bundle["portfolio"])
+        normalized_symbol = str(symbol).upper()
+        normalized_trade_action = self._normalize_trade_action(trade_action)
+        working_bundle = self._augment_bundle_for_symbol(bundle=bundle, symbol=normalized_symbol)
+        portfolio = dict(working_bundle["portfolio"])
         portfolio_context = self.runtime._resolve_portfolio_context(portfolio.get("slug"))
-        exposure_by_symbol = dict(bundle["exposure_by_symbol"])
-        sample = bundle["sample"]
-        sample_symbols = list(bundle.get("portfolio_symbols") or portfolio["symbols"])
+        exposure_by_symbol = {str(name).upper(): float(value) for name, value in dict(working_bundle["exposure_by_symbol"]).items()}
+        sample = working_bundle["sample"]
+        sample_symbols = list(working_bundle.get("portfolio_symbols") or portfolio["symbols"])
         selected_change = exposure_change if exposure_change is not None else delta_position_eur
+        current_symbol_exposure = float(exposure_by_symbol.get(normalized_symbol, 0.0))
+        if normalized_trade_action == "close":
+            flatten_change = -current_symbol_exposure
+            if abs(flatten_change) <= 1e-9:
+                selected_change = 0.0
+            else:
+                requested_close_abs = (
+                    abs(float(selected_change))
+                    if selected_change is not None
+                    else abs(flatten_change)
+                )
+                if requested_close_abs <= 1e-9:
+                    requested_close_abs = abs(flatten_change)
+                selected_change = math.copysign(
+                    min(requested_close_abs, abs(flatten_change)),
+                    flatten_change,
+                )
+        elif selected_change is None:
+            raise ValueError("Exposure change is required when trade_action is 'open'.")
+        effective_limits_cfg = self.runtime.effective_limits_config(portfolio_context)
         result = evaluate_trade_proposal(
             sample[sample_symbols],
             exposure_by_symbol=exposure_by_symbol,
-            proposal=TradeProposal(symbol=str(symbol).upper(), exposure_change=selected_change, note=note),
-            config=bundle["config"],
-            limits_cfg=self.runtime.limits_config,
+            proposal=TradeProposal(symbol=normalized_symbol, exposure_change=selected_change, note=note),
+            config=working_bundle["config"],
+            limits_cfg=effective_limits_cfg,
             reference_model=self.decision_reference_model(portfolio["slug"]),
         )
         now = datetime.now(timezone.utc)
         payload = {
             "time_utc": now.isoformat(),
-            "decision_mode": self.decision_settings()["decision_mode"],
+            "decision_mode": self.decision_settings(portfolio["slug"])["decision_mode"],
             "portfolio_slug": portfolio["slug"],
             "account_id": account_id,
-            "timeframe": bundle["timeframe"],
-            "days": bundle["days"],
-            "window": bundle["window"],
+            "timeframe": working_bundle["timeframe"],
+            "days": working_bundle["days"],
+            "window": working_bundle["window"],
+            "trade_action": normalized_trade_action,
             **result.to_dict(),
         }
-        payload["pre_trade"]["headline_risk"] = list(bundle.get("headline_risk") or [])
-        payload["pre_trade"]["data_quality"] = dict(bundle.get("data_quality") or {})
-
+        if normalized_trade_action == "close" and abs(current_symbol_exposure) <= 1e-9:
+            payload["decision"] = "REJECT"
+            payload["requested_exposure_change"] = 0.0
+            payload["approved_exposure_change"] = 0.0
+            payload["suggested_exposure_change"] = None
+            payload["resulting_exposure"] = 0.0
+            payload["reasons"] = [f"No open exposure on {normalized_symbol}; nothing to close."]
+        payload["pre_trade"]["headline_risk"] = list(working_bundle.get("headline_risk") or [])
+        payload["pre_trade"]["data_quality"] = dict(working_bundle.get("data_quality") or {})
+        payload = self.attach_decision_intelligence(
+            decision_payload=payload,
+            symbol=normalized_symbol,
+            bundle=working_bundle,
+        )
+        payload = self._apply_decision_alpha_policy(
+            payload=payload,
+            trade_action=normalized_trade_action,
+        )
         approved_change = float(payload.get("approved_exposure_change", 0.0))
-        if abs(approved_change) > 1e-9 and str(symbol).upper() in exposure_by_symbol:
+        if abs(approved_change) <= 1e-9:
+            payload["decision"] = "REJECT"
+            payload["approved_exposure_change"] = 0.0
+            payload["suggested_exposure_change"] = None
+        if abs(approved_change) > 1e-9 and normalized_symbol in exposure_by_symbol:
+            refreshed = evaluate_trade_proposal(
+                sample[sample_symbols],
+                exposure_by_symbol=exposure_by_symbol,
+                proposal=TradeProposal(symbol=normalized_symbol, exposure_change=approved_change, note=note),
+                config=working_bundle["config"],
+                limits_cfg=effective_limits_cfg,
+                reference_model=self.decision_reference_model(portfolio["slug"]),
+            )
+            payload["resulting_exposure"] = float(refreshed.resulting_exposure)
+            payload["post_trade"] = refreshed.post_trade.to_dict()
             post_exposure = dict(exposure_by_symbol)
-            post_exposure[str(symbol).upper()] = float(post_exposure.get(str(symbol).upper(), 0.0) + approved_change)
+            post_exposure[normalized_symbol] = float(post_exposure.get(normalized_symbol, 0.0) + approved_change)
             post_bundle = self.runtime._compute_portfolio_state_for_exposure(
                 portfolio=portfolio,
                 exposure_by_symbol=post_exposure,
-                timeframe=bundle["timeframe"],
-                days=bundle["days"],
-                min_coverage=bundle["min_coverage"],
-                config=bundle["config"],
-                window=bundle["window"],
+                timeframe=working_bundle["timeframe"],
+                days=working_bundle["days"],
+                min_coverage=working_bundle["min_coverage"],
+                config=working_bundle["config"],
+                window=working_bundle["window"],
                 snapshot_source="decision_preview",
                 snapshot_timestamp=now.isoformat(),
             )
             payload["post_trade"]["headline_risk"] = list(post_bundle.get("headline_risk") or [])
             payload["post_trade"]["data_quality"] = dict(post_bundle.get("data_quality") or {})
         else:
-            payload["post_trade"]["headline_risk"] = list(bundle.get("headline_risk") or [])
-            payload["post_trade"]["data_quality"] = dict(bundle.get("data_quality") or {})
+            payload["approved_exposure_change"] = 0.0
+            payload["resulting_exposure"] = current_symbol_exposure
+            payload["post_trade"] = dict(payload.get("pre_trade") or {})
+            payload["post_trade"]["headline_risk"] = list(working_bundle.get("headline_risk") or [])
+            payload["post_trade"]["data_quality"] = dict(working_bundle.get("data_quality") or {})
+        payload["close_recommendation"] = self._close_recommendation_payload(
+            payload=payload,
+            trade_action=normalized_trade_action,
+            exposure_by_symbol=exposure_by_symbol,
+            symbol=normalized_symbol,
+        )
         if not persist:
             return payload
 
@@ -499,11 +967,10 @@ class DecisionPolicyEngine:
         approved_delta_position_eur: float | None = None,
         snapshot_source: str,
     ) -> dict[str, Any]:
-        portfolio = dict(bundle["portfolio"])
-        post_exposure = dict(bundle["exposure_by_symbol"])
         symbol_key = str(symbol).upper()
-        if symbol_key not in post_exposure:
-            return dict(bundle["capital"])
+        working_bundle = self._augment_bundle_for_symbol(bundle=bundle, symbol=symbol_key)
+        portfolio = dict(working_bundle["portfolio"])
+        post_exposure = dict(working_bundle["exposure_by_symbol"])
         selected_change = (
             approved_exposure_change if approved_exposure_change is not None else approved_delta_position_eur
         )
@@ -511,19 +978,21 @@ class DecisionPolicyEngine:
         post_bundle = self.runtime._compute_portfolio_state_for_exposure(
             portfolio=portfolio,
             exposure_by_symbol=post_exposure,
-            timeframe=bundle["timeframe"],
-            days=bundle["days"],
-            min_coverage=bundle["min_coverage"],
-            config=bundle["config"],
-            window=bundle["window"],
+            timeframe=working_bundle["timeframe"],
+            days=working_bundle["days"],
+            min_coverage=working_bundle["min_coverage"],
+            config=working_bundle["config"],
+            window=working_bundle["window"],
             snapshot_source=snapshot_source,
             snapshot_timestamp=datetime.now(timezone.utc).isoformat(),
         )
         return dict(post_bundle["capital"])
 
-    def decision_settings(self) -> dict[str, Any]:
-        decision_cfg = dict(self.runtime.limits_config.get("risk_decision") or {})
-        budget_cfg = dict(self.runtime.limits_config.get("risk_budget") or {})
+    def decision_settings(self, portfolio_slug: str | None = None) -> dict[str, Any]:
+        portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+        limits_cfg = self.runtime.effective_limits_config(portfolio)
+        decision_cfg = dict(limits_cfg.get("risk_decision") or {})
+        budget_cfg = dict(limits_cfg.get("risk_budget") or {})
         return {
             "decision_mode": str(decision_cfg.get("decision_mode", "advisory")),
             "reference_model": str(decision_cfg.get("reference_model", "best_validation")),
@@ -543,12 +1012,14 @@ class DecisionPolicyEngine:
         return best_model or None
 
     def decision_reference_model(self, portfolio_slug: str | None = None) -> str:
-        reference = str(self.decision_settings()["reference_model"]).strip().lower()
+        reference = str(self.decision_settings(portfolio_slug)["reference_model"]).strip().lower()
         if reference in {"best_validation", "best", "best_model"}:
             best_model = self.preferred_model(portfolio_slug)
             if best_model:
                 return best_model
-            budget_pref = str((self.runtime.limits_config.get("risk_budget") or {}).get("preferred_model", "")).strip().lower()
+            portfolio = self.runtime._resolve_portfolio_context(portfolio_slug)
+            limits_cfg = self.runtime.effective_limits_config(portfolio)
+            budget_pref = str((limits_cfg.get("risk_budget") or {}).get("preferred_model", "")).strip().lower()
             if budget_pref and budget_pref not in {"best_validation", "best", "best_model", "auto"}:
                 return budget_pref
             return "hist"

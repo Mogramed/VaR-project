@@ -21,6 +21,11 @@ def slugify_label(value: str) -> str:
 def coerce_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
     if isinstance(value, datetime):
         return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
     ts = pd.to_datetime(value, utc=True, errors="coerce")

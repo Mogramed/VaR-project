@@ -11,6 +11,7 @@ from test_mt5_execution_api import FakeMT5Connector
 from var_project.api.service import DeskApiService
 from var_project.core.exceptions import MT5ConnectionError
 from var_project.jobs import JobRunner, build_worker_status
+from var_project.jobs.runner import load_worker_settings
 
 
 def _write_settings(
@@ -19,6 +20,7 @@ def _write_settings(
     portfolio_mode: str | None = None,
     live_refresh_enabled: bool | None = None,
     report_enabled: bool = True,
+    market_history_days: int | None = None,
 ) -> None:
     config_dir = root / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -35,6 +37,7 @@ def _write_settings(
         "data": {
             "timeframes": ["H1"],
             "history_days_list": [60],
+            **({} if market_history_days is None else {"market_history_days": int(market_history_days)}),
             "storage_format": "csv",
             "min_coverage": 0.90,
         },
@@ -135,6 +138,52 @@ def test_job_runner_live_refresh_auto_generates_report(tmp_path: Path):
     assert "live_refresh" in status["jobs"]
     assert status["jobs"]["live_refresh"]["enabled"] is True
     assert status["jobs"]["live_refresh"]["state"] in {"pending", "due", "ok"}
+
+
+def test_load_worker_settings_keeps_snapshot_days_but_leaves_backtest_auto_when_days_omitted(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, market_history_days=1095)
+
+    settings = load_worker_settings(root)
+
+    assert settings.snapshot.days == 60
+    assert settings.backtest.days is None
+    assert settings.backtest.window is None
+
+
+def test_job_runner_scheduled_backtest_auto_depth_uses_tracked_history_when_available(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, market_history_days=1095)
+
+    runner = JobRunner(root, bootstrap_storage=True)
+    service = DeskApiService(root, bootstrap_storage=True)
+
+    sync_days = runner._scheduled_backtest_sync_days(service, runner.settings.backtest)
+    kwargs = runner._scheduled_backtest_kwargs(service, runner.settings.backtest)
+
+    assert sync_days == 529
+    assert "days" not in kwargs
+
+
+def test_job_runner_uses_validation_window_floor_for_scheduled_backtests_when_configured(tmp_path: Path):
+    root = tmp_path
+    _write_settings(root, market_history_days=1095)
+
+    settings_path = root / "config" / "settings.yaml"
+    settings = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
+    settings["risk"]["validation_window_days"] = 40
+    settings_path.write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
+
+    runner = JobRunner(root, bootstrap_storage=True)
+    service = DeskApiService(root, bootstrap_storage=True)
+
+    assert service.analytics._default_backtest_window() == 250
+    sync_days = runner._scheduled_backtest_sync_days(service, runner.settings.backtest)
+    kwargs = runner._scheduled_backtest_kwargs(service, runner.settings.backtest)
+
+    assert sync_days == 759
+    assert "days" not in kwargs
+    assert "window" not in kwargs
 
 
 def test_build_worker_status_reports_stale_operator_run_metrics(tmp_path: Path):
